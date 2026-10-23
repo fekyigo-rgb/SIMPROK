@@ -215,6 +215,35 @@
   align-items: center;
 }
 
+/* AHSP list only: clearly disclose selections retained outside the current page. */
+.ahsp-room__selection-summary {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+.ahsp-room__selection-scope {
+  color: var(--simprok-authority-navy-800);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  max-width: 38rem;
+}
+
+/* Detail AHSP only: confirm one human-added classification before the existing writer. */
+.ahsp-classification-remove-confirm {
+  display: grid;
+  gap: var(--space-2);
+  max-width: 36rem;
+  margin: var(--space-3) 0;
+  padding: var(--space-3);
+  border: 1px solid var(--simprok-engineering-blue-200);
+  border-radius: 9px;
+  background: var(--simprok-white);
+  color: var(--simprok-authority-navy-800);
+  font-size: var(--text-sm);
+}
+.ahsp-classification-remove-confirm p { margin: 0; overflow-wrap: anywhere; }
+.ahsp-classification-remove-confirm .ahsp-action-row { margin-top: var(--space-1); }
+
 /* ---------------------------------------------------------------------------
  * The room's search row
  * ------------------------------------------------------------------------- */
@@ -626,14 +655,50 @@
   border-collapse: collapse;
   font-size: var(--text-sm);
 }
+/* Owner 21 Oct: AHSP list only, existing SIMPROK blue header with white labels and sort icons. */
 .ahsp-room__table th {
   text-align: left;
   padding: 0.7rem 0.65rem;
-  background: var(--simprok-surface-light);
-  border-bottom: 1px solid var(--simprok-engineering-blue-100);
-  color: var(--simprok-authority-navy-800);
+  background: var(--simprok-trust-blue-500);
+  border-bottom: 1px solid var(--simprok-trust-blue-500);
+  color: var(--simprok-white);
   font-weight: 600;
   white-space: nowrap;
+}
+/* Existing five AHSP list headers are now keyboard-accessible sort controls.
+   Preserve Owner-approved blue header with white labels/icons; never change other tables. */
+.ahsp-room__table th .ahsp-room__sort-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.ahsp-room__table th .ahsp-room__sort-button:hover,
+.ahsp-room__table th .ahsp-room__sort-button[data-active='true'] {
+  background: transparent;
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.ahsp-room__table th .ahsp-room__sort-button:active:not(:disabled) {
+  background: transparent;
+  color: inherit;
+}
+@media (pointer: coarse) {
+  .ahsp-room__table th .ahsp-room__sort-button { min-height: 44px; }
+}
+.ahsp-room__table th .ahsp-room__sort-button:focus-visible {
+  outline: 2px solid var(--simprok-authority-navy-800);
+  outline-offset: 3px;
+  border-radius: 2px;
 }
 .ahsp-room__table td {
   padding: 0.7rem 0.65rem;
@@ -641,8 +706,54 @@
   color: var(--simprok-authority-navy-800);
   vertical-align: middle;
 }
-.ahsp-room__table tbody tr:hover td {
-  background: rgba(29, 161, 242, 0.04);
+.ahsp-room__table tbody tr:hover td,
+.ahsp-room__table tbody tr:focus-within td {
+  background: var(--simprok-bright-sky-blue-50);
+}
+.ahsp-room__table tbody tr:hover td:first-child,
+.ahsp-room__table tbody tr:focus-within td:first-child {
+  box-shadow: inset 3px 0 0 var(--simprok-trust-blue-500);
+}
+.ahsp-room__table input[type='checkbox'] {
+  accent-color: var(--simprok-trust-blue-500);
+}
+.ahsp-room__table input[type='checkbox']:focus-visible {
+  outline: 2px solid var(--simprok-trust-blue-500);
+  outline-offset: 2px;
+}
+/* Owner 21 Oct: bright purple Lihat; WHITE eye interior, PURPLE outline, no outer badge. */
+.ahsp-room__table .ahsp-action--view {
+  background: #8b5cf6;
+  border-color: #8b5cf6;
+  color: var(--simprok-white);
+  font-weight: 700;
+}
+.ahsp-room__table .ahsp-action--view svg {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  fill: var(--simprok-white);
+  color: var(--simprok-glory-purple-500);
+  stroke: currentColor;
+  flex-shrink: 0;
+}
+@media (hover: hover) {
+  .ahsp-room__table .ahsp-action--view:hover:not(:disabled) {
+    background: #7c3aed;
+    border-color: #7c3aed;
+    color: var(--simprok-white);
+    box-shadow: 0 3px 9px rgba(124, 58, 237, 0.22);
+  }
+}
+.ahsp-room__table .ahsp-action--view:active:not(:disabled) {
+  background: #7c3aed;
+  border-color: #7c3aed;
+  color: var(--simprok-white);
+}
+.ahsp-room__table .ahsp-action--view:focus-visible {
+  outline-color: var(--simprok-trust-blue-500);
 }
 .ahsp-room__pagination {
   display: flex;
@@ -684,6 +795,20 @@
   width: 100%;
   min-height: 2.5rem;
   font: inherit;
+}
+/* Scope the cursor/focus color to the AHSP library filters, not other rooms. */
+.ahsp-room__filters .ahsp-search-row__input:focus,
+.ahsp-room__filters .ahsp-field__control:focus {
+  border-color: var(--simprok-trust-blue-500);
+  outline: 2px solid var(--simprok-trust-blue-500);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 3px rgba(29, 161, 242, 0.12);
+}
+.ahsp-room__filters .ahsp-search-row__input {
+  caret-color: var(--simprok-trust-blue-500);
+}
+.ahsp-room__filters .ahsp-search-row__field:focus-within .ahsp-search-row__icon {
+  color: var(--simprok-trust-blue-500);
 }
 
 /* Import file card — hide native Choose File as primary */

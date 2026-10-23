@@ -494,7 +494,148 @@ describe('AhspService', () => {
       before: ahsp,
       after: updatedAhsp,
       reason: 'correct method name',
+    }, expect.objectContaining({ aHSP: expect.any(Object) as unknown }));
+  });
+
+  it('allows correcting optional AHSP code on a private AHSP while auditing the author', async () => {
+    prisma.aHSP.findFirst
+      .mockResolvedValueOnce({ ...ahsp, proposedAt: null })
+      .mockResolvedValueOnce({ ...ahsp, code: 'B.13' });
+    prisma.aHSP.updateMany.mockResolvedValue({ count: 1 });
+    audit.logAction.mockResolvedValue({ id: 'audit-code' });
+
+    await service.update(
+      ahsp.id,
+      { code: '  B.13  ' },
+      ahsp.createdByUserId,
+      'koreksi kode pada dokumen sumber',
+      ahsp.workspaceId,
+    );
+
+    expect(prisma.aHSP.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: ahsp.id,
+        workspaceId: ahsp.workspaceId,
+        ownershipType: OwnershipType.USER_ASSET,
+        proposedAt: null,
+        deletedAt: null,
+        archivedAt: null,
+      },
+      data: { code: 'B.13' },
     });
+    expect(prisma.aHSP.update).not.toHaveBeenCalled();
+    expect(audit.logAction).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'AHSPUpdated',
+        reason: 'koreksi kode pada dokumen sumber',
+        who: ahsp.createdByUserId,
+      }),
+      expect.objectContaining({ aHSP: expect.any(Object) as unknown }),
+    );
+  });
+
+  it('clears an optional AHSP code using null without touching its UUID or formula', async () => {
+    prisma.aHSP.findFirst
+      .mockResolvedValueOnce({ ...ahsp, proposedAt: null })
+      .mockResolvedValueOnce({ ...ahsp, code: null });
+    prisma.aHSP.updateMany.mockResolvedValue({ count: 1 });
+    audit.logAction.mockResolvedValue({ id: 'audit-code-clear' });
+
+    await service.update(
+      ahsp.id,
+      { code: '   ' },
+      ahsp.createdByUserId,
+      'kode sumber tidak ada',
+      ahsp.workspaceId,
+    );
+    expect(prisma.aHSP.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { code: null },
+      }),
+    );
+  });
+
+  it('refuses invalid code type instead of writing an invented replacement', async () => {
+    prisma.aHSP.findFirst.mockResolvedValue({ ...ahsp, proposedAt: null });
+    await expect(
+      service.update(
+        ahsp.id,
+        { code: 123 as unknown as string },
+        ahsp.createdByUserId,
+        'bad payload',
+        ahsp.workspaceId,
+      ),
+    ).rejects.toThrow('AHSP_CODE_INVALID');
+    expect(prisma.aHSP.update).not.toHaveBeenCalled();
+  });
+
+  it('does not rewrite the code of an AHSP with an already frozen proposal', async () => {
+    prisma.aHSP.findFirst.mockResolvedValue({
+      ...ahsp,
+      proposedAt: new Date('2026-10-20T00:00:00Z'),
+    });
+    await expect(
+      service.update(
+        ahsp.id,
+        { code: 'B.99' },
+        ahsp.createdByUserId,
+        'recode',
+        ahsp.workspaceId,
+      ),
+    ).rejects.toThrow('AHSP_CODE_SUBMITTED_PROPOSAL_IMMUTABLE');
+    expect(prisma.aHSP.update).not.toHaveBeenCalled();
+  });
+
+  it('closes a concurrent proposal-submission race at the conditional code write', async () => {
+    prisma.aHSP.findFirst.mockResolvedValue({ ...ahsp, proposedAt: null });
+    prisma.aHSP.updateMany.mockResolvedValue({ count: 0 });
+    await expect(
+      service.update(
+        ahsp.id,
+        { code: 'B.77' },
+        ahsp.createdByUserId,
+        'koreksi',
+        ahsp.workspaceId,
+      ),
+    ).rejects.toThrow('AHSP_CODE_SUBMITTED_PROPOSAL_IMMUTABLE');
+    expect(prisma.aHSP.updateMany).toHaveBeenCalledTimes(1);
+    expect(audit.logAction).not.toHaveBeenCalled();
+  });
+
+  it('official SIMPROK AHSP cannot change its code through a workspace', async () => {
+    prisma.aHSP.findFirst.mockResolvedValue({
+      ...ahsp,
+      workspaceId: null,
+      ownershipType: OwnershipType.SIMPROK_ASSET,
+    });
+    await expect(
+      service.update(
+        ahsp.id,
+        { code: 'B.00' },
+        ahsp.createdByUserId,
+        'ubah kode resmi',
+        ahsp.workspaceId,
+      ),
+    ).rejects.toThrow('SIMPROK_ASSET cannot be updated');
+    expect(prisma.aHSP.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('blocks code mutation of NULL-workspace legacy USER_ASSET rows', async () => {
+    prisma.aHSP.findFirst.mockResolvedValue({
+      ...ahsp,
+      workspaceId: null,
+      ownershipType: OwnershipType.USER_ASSET,
+    });
+    await expect(
+      service.update(
+        ahsp.id,
+        { code: 'B.44' },
+        ahsp.createdByUserId,
+        'change',
+        ahsp.workspaceId,
+      ),
+    ).rejects.toThrow('AHSP not found');
+    expect(prisma.aHSP.updateMany).not.toHaveBeenCalled();
   });
 
   it('update cannot rewrite parent identity through methodType or locationType', async () => {

@@ -73,17 +73,28 @@ test("B3: the contract has every state — hover for pointers only, focus, press
   assert.doesNotMatch(active.slice(0, active.indexOf("}")), /margin|width|height|padding/u);
 });
 
-test("B4: the stylesheet adds no colour outside the Colour Lock", () => {
-  const locked = new Set(["#c0392b", "#98a2b3", "#c77a17"]);
-  const hexes = (css.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []).map((hex) => hex.toLowerCase());
-  for (const hex of hexes) {
-    // Alpha shadows of Biru, Merah and Navy are the locked hues, translucent.
-    const base = hex.length === 9 ? hex.slice(0, 7) : hex;
-    assert.ok(
-      locked.has(base) || base === "#1da1f2" || base === "#16294b",
-      `unlocked colour ${hex}`,
-    );
+test("B4: the Colour Lock preserves the Owner's bright purple exception ONLY for Lihat", () => {
+  // Prior muted purple and white eye badge are superseded by latest Owner direction.
+  const scopeStart = css.indexOf("/* Owner 21 Oct: bright purple Lihat; WHITE eye interior, PURPLE outline");
+  const scopeEnd = css.indexOf(".ahsp-room__pagination {", scopeStart);
+  assert.ok(scopeStart > 0 && scopeEnd > scopeStart, "Lihat style must be tightly scoped");
+  const viewCss = css.slice(scopeStart, scopeEnd);
+  const outsideView = css.slice(0, scopeStart) + css.slice(scopeEnd);
+  assert.match(viewCss, /\.ahsp-room__table \.ahsp-action--view\s*\{[^}]*background:\s*#8b5cf6;/);
+  assert.match(viewCss, /\.ahsp-room__table \.ahsp-action--view:hover:not\(:disabled\)\s*\{[^}]*background:\s*#7c3aed;/);
+  assert.match(viewCss, /\.ahsp-room__table \.ahsp-action--view svg\s*\{[^}]*background:\s*transparent;[^}]*fill:\s*var\(--simprok-white\);[^}]*color:\s*var\(--simprok-glory-purple-500\);/s);
+  assert.match(viewCss, /\.ahsp-room__table \.ahsp-action--view:active:not\(:disabled\)/);
+  const exceptionColors = new Set(["#8b5cf6", "#7c3aed"]);
+  for (const color of viewCss.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []) {
+    assert.ok(exceptionColors.has(color.toLowerCase()), `unexpected Lihat colour ${color}`);
   }
+  const locked = new Set(["#c0392b", "#98a2b3", "#c77a17"]);
+  const hexes = (outsideView.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []).map((hex) => hex.toLowerCase());
+  for (const hex of hexes) {
+    const base = hex.length === 9 ? hex.slice(0, 7) : hex;
+    assert.ok(locked.has(base) || base === "#1da1f2" || base === "#16294b", `unlocked colour ${hex}`);
+  }
+  assert.doesNotMatch(outsideView, /#8b5cf6|#7c3aed/i);
   assert.ok(!css.includes("#7E22CE") && !css.toLowerCase().includes("#704da1"));
 });
 

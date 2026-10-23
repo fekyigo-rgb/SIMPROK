@@ -64,8 +64,8 @@ describe('AHSP one-truth contextual path', () => {
     }),
   };
 
-  const assignments = { addAssignment: jest.fn().mockResolvedValue({ id: 'asg' }) };
-  const prisma = { aHSPImportJob: { findFirst: jest.fn(), update: jest.fn() } };
+  const assignments = { lockAhsp: jest.fn().mockResolvedValue(undefined), addAssignment: jest.fn().mockResolvedValue({ id: 'asg' }) };
+  const prisma = { $transaction: jest.fn(async (fn: (tx: object) => Promise<unknown>) => fn(prisma)), aHSPImportJob: { findFirst: jest.fn(), update: jest.fn() } };
   let service: AhspImportAssistedClassificationService;
 
   beforeEach(() => {
@@ -175,6 +175,7 @@ describe('AHSP one-truth contextual path', () => {
         provenance: 'HUMAN_ADDED',
         actingWorkspaceId: 'ws-a',
       }),
+      prisma,
     );
     const leafId = assignments.addAssignment.mock.calls[0][0].leafNodeId as string;
     expect(nodes.some((node) => node.id === leafId && node.workspaceId === 'ws-a')).toBe(true);

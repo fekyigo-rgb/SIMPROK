@@ -1,5 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConflictException, ForbiddenException } from '@nestjs/common';
+import { OwnershipType } from '@prisma/client';
 import { GUARDS_METADATA } from '@nestjs/common/constants';
 import { Reflector } from '@nestjs/core';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -824,5 +825,110 @@ describe('AhspController', () => {
       ).rejects.toThrow('AHSP_WORKSPACE_CONTEXT_REQUIRED');
       expect(resourceLookup.searchResources).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe('Classification add: baseline vocabulary pending paths -> existing workspace materializer', () => {
+  let c: AhspController;
+  const request = { workspaceContext: { workspaceId: 'workspace-private' } };
+  const leaf = {
+    kategori: 'Bina Marga',
+    subkategori: 'Terowongan',
+    jenisPekerjaan: 'Perkerasan',
+  };
+  const ahspService = { getById: jest.fn() };
+  const ass = { addAssignment: jest.fn(), listAssignments: jest.fn() };
+  const classify = { applyToAhsp: jest.fn() };
+  const trusted = {
+    resolveActorUserId: jest.fn().mockResolvedValue('actor-1'),
+  };
+  const prisma = {
+    $transaction: jest.fn((f: (tx: object) => unknown) => f({})),
+  };
+  beforeEach(() => {
+    jest.resetAllMocks();
+    trusted.resolveActorUserId.mockResolvedValue('actor-1');
+    ahspService.getById.mockResolvedValue({
+      id: 'ahsp-1',
+      workspaceId: 'workspace-private',
+      ownershipType: OwnershipType.USER_ASSET,
+    });
+    classify.applyToAhsp.mockResolvedValue({ applied: 1 });
+    ass.listAssignments.mockResolvedValue([
+      { id: 'assignment-1', isActive: true },
+    ]);
+    c = new AhspController(
+      ahspService as never,
+      {} as never,
+      {} as never,
+      trusted as never,
+      {} as never,
+      classify as never,
+      ass as never,
+      prisma as never,
+      {} as never,
+      {} as never,
+      {} as never,
+      {} as never,
+    );
+  });
+  it('materializes only selected lawful vocabulary paths using existing service and reads canonical assignments', async () => {
+    const rows = await c.addClassificationAssignments(request, 'ahsp-1', {
+      leafNodeIds: [],
+      jenisPengadaanRootId: 'root-1',
+      pendingPaths: [leaf],
+    });
+    expect(classify.applyToAhsp).toHaveBeenCalledWith({
+      ahspId: 'ahsp-1',
+      actingWorkspaceId: 'workspace-private',
+      actorAccountId: 'actor-1',
+      privateOnly: true,
+      context: {
+        jenisPengadaanRootId: 'root-1',
+        paths: [],
+        pendingPaths: [leaf],
+        dasarAcuan: null,
+        penerbit: null,
+      },
+    });
+    expect(ass.listAssignments).toHaveBeenCalledWith({
+      ahspId: 'ahsp-1',
+      actingWorkspaceId: 'workspace-private',
+    });
+    expect(rows).toEqual([{ id: 'assignment-1', isActive: true }]);
+  });
+  it('forwards the private-only policy and propagates service refusal without read-back', async () => {
+    classify.applyToAhsp.mockRejectedValue(
+      new Error('AHSP_PRIVATE_CLASSIFICATION_ONLY'),
+    );
+    ahspService.getById.mockResolvedValue({
+      id: 'ahsp-official',
+      workspaceId: null,
+      ownershipType: OwnershipType.SIMPROK_ASSET,
+    });
+    await expect(
+      c.addClassificationAssignments(request, 'ahsp-official', {
+        jenisPengadaanRootId: 'root-1',
+        pendingPaths: [leaf],
+      }),
+    ).rejects.toThrow('AHSP_PRIVATE_CLASSIFICATION_ONLY');
+    expect(classify.applyToAhsp).toHaveBeenCalledWith(
+      expect.objectContaining({ privateOnly: true }),
+    );
+    expect(ass.listAssignments).not.toHaveBeenCalled();
+  });
+  it('rejects missing root and malformed pending paths without any classification write', async () => {
+    await expect(
+      c.addClassificationAssignments(request, 'ahsp-1', {
+        pendingPaths: [leaf],
+      }),
+    ).rejects.toThrow('CLASSIFICATION_PATH_ROOT_REQUIRED');
+    await expect(
+      c.addClassificationAssignments(request, 'ahsp-1', {
+        jenisPengadaanRootId: 'root-1',
+        pendingPaths: [{ ...leaf, jenisPekerjaan: '' }],
+      }),
+    ).rejects.toThrow('AHSP_CLASSIFICATION_PENDING_PATHS_INVALID');
+    expect(classify.applyToAhsp).not.toHaveBeenCalled();
   });
 });

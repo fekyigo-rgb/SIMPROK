@@ -93,15 +93,16 @@ function CheckboxMenu(props: {
   footer?: ReactNode;
 }): ReactNode {
   const chips = props.chips ?? [];
+  const { open, onDismiss } = props;
   const rootRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!props.open) return;
+    if (!open) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') props.onDismiss();
+      if (event.key === 'Escape') onDismiss();
     };
     const onPointerDown = (event: PointerEvent) => {
       if (rootRef.current?.contains(event.target as Node)) return;
-      props.onDismiss();
+      onDismiss();
     };
     document.addEventListener('keydown', onKeyDown);
     document.addEventListener('pointerdown', onPointerDown);
@@ -109,7 +110,7 @@ function CheckboxMenu(props: {
       document.removeEventListener('keydown', onKeyDown);
       document.removeEventListener('pointerdown', onPointerDown);
     };
-  }, [props.open, props.onDismiss]);
+  }, [open, onDismiss]);
   return (
     <div className="ahsp-field ahsp-multi-select" ref={rootRef}>
       <span className="ahsp-field__label">{props.label}</span>
@@ -936,20 +937,4 @@ export function AhspImportAssistedClassificationPanel({
       ) : null}
     </section>
   );
-}
-
-export function emptyAssistedContext(): AssistedClassificationContext {
-  return {
-    jenisPengadaanRootId: null,
-    paths: [],
-    pendingPaths: [],
-    dasarAcuan: null,
-    penerbit: null,
-    displayLabels: {
-      jenisPengadaan: null,
-      kategori: [],
-      subkategori: [],
-      jenisPekerjaan: [],
-    },
-  };
 }

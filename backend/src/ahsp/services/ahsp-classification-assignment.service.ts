@@ -43,6 +43,19 @@ export class AhspClassificationAssignmentService {
     private readonly audit: AhspAuditService,
   ) {}
 
+  /** Every classification writer locks the same existing parent row first. */
+  async lockAhsp(ahspId: string, client: Prisma.TransactionClient): Promise<void> {
+    await client.$queryRaw`SELECT id FROM ahsps WHERE id = ${ahspId}::uuid FOR UPDATE`;
+  }
+
+  async assertPrivateTarget(ahspId: string, workspaceId: string, client: Prisma.TransactionClient): Promise<void> {
+    const target = await client.aHSP.findFirst({
+      where: { id: ahspId, workspaceId, deletedAt: null, archivedAt: null, ownershipType: 'USER_ASSET' },
+      select: { id: true },
+    });
+    if (!target) throw new NotFoundException('AHSP_PRIVATE_CLASSIFICATION_ONLY');
+  }
+
   /**
    * Add one lawful path assignment to an AHSP.
    *
@@ -65,7 +78,9 @@ export class AhspClassificationAssignmentService {
      */
     client?: Prisma.TransactionClient,
   ): Promise<AhspClassificationAssignmentView> {
-    const db = client ?? this.prisma;
+    if (!client) return this.prisma.$transaction((tx) => this.addAssignment(input, tx), { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+    const db = client;
+    await this.lockAhsp(input.ahspId, client);
     const ahsp = await db.aHSP.findFirst({
       where: { id: input.ahspId, deletedAt: null },
       select: {
@@ -93,7 +108,7 @@ export class AhspClassificationAssignmentService {
     const lineage = await this.classification.getLineage({
       id: input.leafNodeId,
       workspaceId: input.actingWorkspaceId,
-    });
+    }, client);
 
     if (lineage.node.level !== ConstructionClassificationLevel.JENIS_PEKERJAAN) {
       throw new BadRequestException(
@@ -191,7 +206,7 @@ export class AhspClassificationAssignmentService {
       return created;
     };
 
-    const row = client ? await persist(client) : await this.prisma.$transaction(persist);
+    const row = await persist(client);
     return this.toView(row, lineage, root.id);
   }
 
@@ -248,8 +263,11 @@ export class AhspClassificationAssignmentService {
     assignmentId: string;
     actingWorkspaceId: string;
     actorAccountId: string;
-  }): Promise<AhspClassificationAssignmentView> {
-    const ahsp = await this.prisma.aHSP.findFirst({
+  }, client?: Prisma.TransactionClient): Promise<AhspClassificationAssignmentView> {
+    if (!client) return this.prisma.$transaction((tx) => this.deactivateAssignment(input, tx), { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+    await this.lockAhsp(input.ahspId, client);
+    await this.assertPrivateTarget(input.ahspId, input.actingWorkspaceId, client);
+    const ahsp = await client.aHSP.findFirst({
       where: { id: input.ahspId, deletedAt: null },
       select: { id: true, workspaceId: true },
     });
@@ -264,7 +282,7 @@ export class AhspClassificationAssignmentService {
         'AHSP_CLASSIFICATION_ASSIGNMENT_WORKSPACE_MISMATCH',
       );
     }
-    const row = await this.prisma.ahspClassificationAssignment.findFirst({
+    const row = await client.ahspClassificationAssignment.findFirst({
       where: { id: input.assignmentId, ahspId: ahsp.id },
     });
     if (!row) {
@@ -276,7 +294,7 @@ export class AhspClassificationAssignmentService {
       );
     }
     const current = row.isActive
-      ? await this.prisma.$transaction(async (tx) => {
+      ? await (async (tx: Prisma.TransactionClient) => {
           const updated = await tx.ahspClassificationAssignment.update({
             where: { id: row.id },
             data: { isActive: false },
@@ -292,12 +310,12 @@ export class AhspClassificationAssignmentService {
             tx,
           );
           return updated;
-        })
+        })(client)
       : row;
     const lineage = await this.classification.getLineage({
       id: current.leafNodeId,
       workspaceId: input.actingWorkspaceId,
-    });
+    }, client);
     const root = lineage.path.find(
       (n) => n.level === ConstructionClassificationLevel.JENIS_PENGADAAN,
     );
@@ -325,7 +343,7 @@ export class AhspClassificationAssignmentService {
       const lineage = await this.classification.getLineage({
         id: row.leafNodeId,
         workspaceId: input.actingWorkspaceId,
-      });
+      }, db);
       const root = lineage.path.find(
         (n) => n.level === ConstructionClassificationLevel.JENIS_PENGADAAN,
       );

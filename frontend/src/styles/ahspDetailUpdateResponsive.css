@@ -1,0 +1,287 @@
+/* Owner PASS: Update AHSP professional desktop/tablet/mobile UI.
+   Affects ONLY AhspDetailPage. Existing composition and identity backend reused. */
+.ahsp-detail-basic-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr);
+  gap: 16px;
+  min-width: 0;
+}
+.ahsp-detail-basic-grid > * { min-width: 0; }
+.ahsp-detail-action-card--update > form { padding: 0 12px 20px; min-width: 0; }
+.ahsp-detail-update__section {
+  margin: 14px 0 0;
+  padding: 16px;
+  background: #f5fbff;
+  border: 1px solid #b7dcff;
+  border-radius: 10px;
+  min-width: 0;
+}
+.ahsp-detail-update__heading {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: 0 0 14px;
+  font-size: clamp(14px, 1.1vw, 17px);
+  font-weight: 700;
+  color: #15365f;
+}
+.ahsp-detail-update__heading svg { color: var(--simprok-trust-blue-500); flex: none; }
+.ahsp-detail-update__source-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.3fr) minmax(0, 1.2fr) minmax(0, 0.95fr);
+  gap: 14px;
+  min-width: 0;
+}
+/* One truthful helper for the existing combined source+composition save route. */
+.ahsp-detail-update__source-hint {
+  margin: 10px 0 0;
+  color: #365478;
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+.ahsp-detail-update__field {
+  display: grid;
+  gap: 7px;
+  color: #17375f;
+  font-size: var(--text-sm);
+  font-weight: 600;
+  min-width: 0;
+}
+.ahsp-detail-update__field input,
+.ahsp-detail-update__table :is(input, select) {
+  background: #fff;
+  border: 1px solid #b1c6dc;
+  border-radius: 7px;
+  box-sizing: border-box;
+  color: #17375f;
+  min-width: 0;
+  width: 100%;
+  height: 42px;
+  padding: 8px 10px;
+  font: inherit;
+  font-weight: 400;
+  font-size: 14px;
+}
+.ahsp-detail-update__field :is(input, select):focus-visible,
+.ahsp-detail-update__table :is(input, select):focus-visible {
+  outline: 2px solid var(--simprok-trust-blue-500);
+  outline-offset: 1px;
+}
+.ahsp-detail-update__toolbar,
+.ahsp-detail-update__footer {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+.ahsp-detail-update__toolbar { margin-bottom: 12px; }
+.ahsp-detail-update__toolbar .ahsp-detail-update__heading { margin: 0; }
+.ahsp-detail-update__table-wrap {
+  max-width: 100%;
+  min-width: 0;
+  overflow-x: auto;
+  background: #fff;
+  border-radius: 9px;
+  border: 1px solid #d8e8f6;
+}
+.ahsp-detail-update__table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+  font-size: 13px;
+  color: #14345f;
+}
+.ahsp-detail-update__table th {
+  background: var(--simprok-trust-blue-500);
+  color: #fff;
+  font-weight: 700;
+  text-align: left;
+  padding: 9px 9px;
+}
+.ahsp-detail-update__table th:nth-child(1) { width: 5%; text-align: center; }
+.ahsp-detail-update__table th:nth-child(2) { width: 32%; }
+.ahsp-detail-update__table th:nth-child(3) { width: 14%; }
+.ahsp-detail-update__table th:nth-child(4) { width: 14%; }
+.ahsp-detail-update__table th:nth-child(5) { width: 14%; }
+.ahsp-detail-update__table th:nth-child(6) { width: 21%; }
+.ahsp-detail-update__table td {
+  padding: 5px 8px;
+  border-top: 1px solid #e2edf7;
+  vertical-align: middle;
+  overflow-wrap: anywhere;
+}
+.ahsp-detail-update__table td:first-child { text-align: center; font-weight: 600; }
+.ahsp-detail-update__table tbody tr:hover { background: #f1f9ff; }
+.ahsp-detail-update__table tbody tr.ahsp-detail-update__editing-row { background: #eaf5ff; }
+.ahsp-detail-update__table .ahsp-detail-update__resource { font-weight: 500; }
+.ahsp-detail-update__identity-note {
+  display: block;
+  margin-top: 5px;
+  color: #466281;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.ahsp-detail-update__row-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+.ahsp-detail-update__row-actions button,
+.ahsp-detail-update__add,
+.ahsp-detail-update__save,
+.ahsp-detail-update__cancel {
+  min-height: 38px;
+  border-radius: 7px;
+  border: 1px solid #b2d6fa;
+  padding: 7px 11px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 140ms ease, box-shadow 140ms ease, border-color 140ms ease;
+}
+/* Approved correction: EDIT has a WHITE background, not a blue fill. */
+.ahsp-detail-update__edit {
+  background: #fff;
+  color: #0878d1;
+  border-color: #8dc4fa !important;
+}
+.ahsp-detail-update__edit:hover { background: #f3faff; border-color: #1da1f2 !important; }
+.ahsp-detail-update__delete {
+  background: #fff3f3;
+  color: #b52034;
+  border-color: #efb3bb !important;
+}
+.ahsp-detail-update__delete:hover { background: #ffe7e9; border-color: #dd5e6c !important; }
+.ahsp-detail-update__save {
+  background: var(--simprok-trust-blue-500);
+  border-color: var(--simprok-trust-blue-500);
+  color: #fff;
+}
+.ahsp-detail-update__save:hover { background: #087ac7; }
+.ahsp-detail-update__cancel,
+.ahsp-detail-update__add {
+  background: #fff;
+  color: #087ac7;
+}
+.ahsp-detail-update__cancel:hover,
+.ahsp-detail-update__add:hover { background: #f2f9ff; }
+/* Compact only the desktop table: keep source form and mobile tap targets comfortable. */
+.ahsp-detail-update__table :is(input, select) {
+  height: 34px;
+  padding: 5px 8px;
+}
+.ahsp-detail-update__row-actions button {
+  min-height: 32px;
+  padding: 5px 9px;
+}
+.ahsp-detail-update__add.ahsp-detail-update__add--primary {
+  background: var(--simprok-trust-blue-500);
+  border-color: var(--simprok-trust-blue-500);
+  color: #fff;
+}
+.ahsp-detail-update__add.ahsp-detail-update__add--primary:hover {
+  background: #087ac7;
+}
+.ahsp-detail-update__footer-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+}
+.ahsp-detail-update__new-label { color: #5e7391; font-size: 12px; }
+.ahsp-detail-update__draft-removal-notice {
+  margin: 10px 0 0;
+  padding: 9px 11px;
+  border: 1px solid #b7dcff;
+  border-radius: 7px;
+  background: #f5fbff;
+  color: #15365f;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.ahsp-detail-update__footer { margin-top: 12px; }
+.ahsp-detail-update__row-actions button:focus-visible,
+.ahsp-detail-update__footer button:focus-visible,
+.ahsp-detail-metadata-editor__actions button:focus-visible {
+  outline: 3px solid #15365f;
+  outline-offset: 2px;
+}
+.ahsp-detail-update__row-actions button:disabled,
+.ahsp-detail-update__footer button:disabled,
+.ahsp-detail-metadata-editor__actions button:disabled { opacity: 0.55; cursor: not-allowed; }
+@media (max-width: 1100px) {
+  .ahsp-detail-update__source-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ahsp-detail-update__table th:nth-child(2) { width: 28%; }
+  .ahsp-detail-update__table th:nth-child(6) { width: 25%; }
+}
+@media (max-width: 760px) {
+  .ahsp-detail-basic-grid,
+  .ahsp-detail-update__source-grid { grid-template-columns: minmax(0, 1fr); }
+  .ahsp-detail-metadata-editor,
+  .ahsp-detail-update__section { margin-left: 8px; margin-right: 8px; padding: 12px; }
+  .ahsp-detail-action-card--update > form { padding-left: 0; padding-right: 0; }
+  .ahsp-detail-update__toolbar { align-items: stretch; }
+  .ahsp-detail-update__toolbar button { width: 100%; }
+  .ahsp-detail-update__table-wrap { overflow: visible; border: 0; background: transparent; }
+  .ahsp-detail-update__table,
+  .ahsp-detail-update__table tbody { display: block; width: 100%; }
+  .ahsp-detail-update__table thead { display: none; }
+  .ahsp-detail-update__table tr {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+    padding: 12px;
+    margin-bottom: 12px;
+    border: 1px solid #b9d9f4;
+    border-radius: 9px;
+    background: #fff;
+    min-width: 0;
+  }
+  .ahsp-detail-update__table td,
+  .ahsp-detail-update__table td:first-child {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 6px;
+    border: 0;
+    padding: 0;
+    width: 100%;
+    text-align: left;
+    min-width: 0;
+  }
+  .ahsp-detail-update__table td::before {
+    content: attr(data-label);
+    color: #365478;
+    font-size: 12px;
+    font-weight: 700;
+  }
+  .ahsp-detail-update__row-actions { justify-content: flex-start; }
+  .ahsp-detail-update__row-actions button {
+    flex: 1 1 100px;
+    min-height: 44px;
+  }
+  .ahsp-detail-update__table :is(input, select) { height: 44px; }
+  .ahsp-detail-update__footer > button { flex: 1 1 100%; width: 100%; }
+  .ahsp-detail-update__footer-actions { flex: 1 1 100%; width: 100%; }
+  .ahsp-detail-update__footer-actions > button {
+    flex: 1 1 100%;
+    width: 100%;
+    min-height: 44px;
+  }
+  .ahsp-detail-metadata-editor__actions > button { flex: 1 1 100%; width: 100%; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ahsp-detail-update__row-actions button,
+  .ahsp-detail-update__add,
+  .ahsp-detail-update__save,
+  .ahsp-detail-update__cancel { transition: none; }
+}

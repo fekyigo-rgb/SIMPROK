@@ -34,6 +34,8 @@ export interface UpdateAhspDto {
   methodType?: MethodType;
   locationType?: LocationType;
   methodName?: string;
+  /** Source AHSP code is optional; it is not the stable AHSP UUID. */
+  code?: string | null;
   /** Parent note only. Blank clears it. Classification scalars stay stripped. */
   keterangan?: string | null;
 }
@@ -604,25 +606,68 @@ export class AhspService {
   async update(id: string, updateData: UpdateAhspDto, userId: string, reason: string, workspaceId?: string) {
     const ahsp = await this.getById(id, workspaceId);
 
-    // Run policy validation
+    // Run policy validation; private metadata is not a public-catalog edit.
     this.runPolicy(p => p.canUpdate(ahsp as AhspEntity, reason));
+    // A private-code correction must belong to the actor's verified workspace.
+    // NULL workspace rows are public repository records even if an old legacy
+    // ownership tag is inconsistent; never mutate them through this door.
+    if (updateData.code !== undefined &&
+        (!workspaceId || ahsp.workspaceId === null || ahsp.workspaceId !== workspaceId)) {
+      throw new NotFoundException('AHSP not found');
+    }
+    // An already-submitted proposal has an immutable frozen code. Do not let
+    // a later code correction make the parent appear to revise that subject.
+    if (updateData.code !== undefined && (ahsp as { proposedAt?: Date | null }).proposedAt) {
+      throw new ConflictException('AHSP_CODE_SUBMITTED_PROPOSAL_IMMUTABLE');
+    }
+    if (updateData.code !== undefined && updateData.code !== null && typeof updateData.code !== 'string') {
+      throw new BadRequestException('AHSP_CODE_INVALID');
+    }
 
     const updated = await this.prisma.$transaction(async (tx) => {
       // HTTP PATCH forwards the raw body, which still carries reason/userId and
       // may carry methodType/locationType. Parent identity is source names only.
-      // Classification scalars stay stripped. Keterangan is the one parent note
-      // this writer already owns the row for — not a second metadata engine.
-      const identitySafe: { workType?: string; methodName?: string; keterangan?: string | null } = {};
+      // Classification scalars stay stripped. Source AHSP code is an optional
+      // parent attribute, distinct from the stable UUID and from resource codes.
+      const identitySafe: { workType?: string; methodName?: string; code?: string | null; keterangan?: string | null } = {};
       if (updateData.workType !== undefined) identitySafe.workType = updateData.workType;
       if (updateData.methodName !== undefined) identitySafe.methodName = updateData.methodName;
+      if (updateData.code !== undefined) {
+        const code = updateData.code === null ? '' : updateData.code.trim();
+        identitySafe.code = code.length > 0 ? code : null;
+      }
       if (updateData.keterangan !== undefined) {
         const note = typeof updateData.keterangan === 'string' ? updateData.keterangan.trim() : '';
         identitySafe.keterangan = note.length > 0 ? note : null;
       }
-      const updatedAhsp = await tx.aHSP.update({
-        where: { id },
-        data: identitySafe,
-      });
+      // The proposal writer binds an immutable code snapshot. Recheck the
+      // source row IN THE SAME transaction at write time: a preflight check
+      // alone races with proposal submission. Existing non-code PATCH behavior
+      // is unchanged; this guarded write only applies when code was supplied.
+      let updatedAhsp;
+      if (updateData.code !== undefined) {
+        const result = await tx.aHSP.updateMany({
+          where: {
+            id,
+            workspaceId: ahsp.workspaceId,
+            ownershipType: OwnershipType.USER_ASSET,
+            proposedAt: null,
+            deletedAt: null,
+            archivedAt: null,
+          },
+          data: identitySafe,
+        });
+        if (result.count !== 1) {
+          throw new ConflictException('AHSP_CODE_SUBMITTED_PROPOSAL_IMMUTABLE');
+        }
+        updatedAhsp = await tx.aHSP.findFirst({ where: { id } });
+        if (!updatedAhsp) throw new ConflictException('AHSP_CODE_READBACK_FAILED');
+      } else {
+        updatedAhsp = await tx.aHSP.update({
+          where: { id },
+          data: identitySafe,
+        });
+      }
 
       await this.audit.logAction({
         ahspId: id,
@@ -631,7 +676,7 @@ export class AhspService {
         before: ahsp,
         after: updatedAhsp,
         reason,
-      });
+      }, tx);
 
       return updatedAhsp;
     });

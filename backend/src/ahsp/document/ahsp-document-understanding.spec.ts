@@ -780,10 +780,10 @@ const POSITIVE_PATHS = [
   'C:/SIMPROK/data/first-real-input/Copy of AHSP ok(1).xlsx',
   'C:/SIMPROK/Copy of AHSP ok(1).xlsx',
 ];
-// RE-PINNED. The Owner corrected three coefficients in this real input file,
-// so its bytes changed and this guard fired exactly as designed. The pin and the
-// counts below now describe the file as it stands; the guard's purpose — this
-// test speaks for ONE known file, not for any spreadsheet — is unchanged.
+// RE-PINNED 2026-10-21: Owner confirmed C:/SIMPROK/Copy of AHSP ok(1).xlsx
+// (modified 2026-10-19) as the corrected canonical input. Hash verified from
+// the original bytes before this pin. Keep all 17-work-item, unit/conflict,
+// and readiness assertions below intact; SHA remains an exact fixture guard.
 const POSITIVE_SHA256 =
   '2c42868ecba1c19b31c869f2939ffadaad0d779f35c870fe778bb5bdcffd286f';
 const positivePath = POSITIVE_PATHS.find((path) => existsSync(path)) ?? '';

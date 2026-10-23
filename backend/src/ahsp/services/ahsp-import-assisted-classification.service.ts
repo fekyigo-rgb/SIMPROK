@@ -97,7 +97,7 @@ export class AhspImportAssistedClassificationService {
     kategori: string;
     subkategori: string;
     jenisPekerjaan: string;
-  }): Promise<ClassificationNodeView> {
+  }, client?: Prisma.TransactionClient): Promise<ClassificationNodeView> {
     const kategori = input.kategori.trim();
     const subkategori = input.subkategori.trim();
     const jenisPekerjaan = input.jenisPekerjaan.trim();
@@ -113,7 +113,7 @@ export class AhspImportAssistedClassificationService {
     const root = await this.classification.getById({
       id: input.rootId,
       workspaceId: input.workspaceId,
-    });
+    }, client);
     if (root.level !== ConstructionClassificationLevel.JENIS_PENGADAAN) {
       throw new BadRequestException('CLASSIFICATION_PATH_ROOT_MUST_BE_JENIS_PENGADAAN');
     }
@@ -122,19 +122,19 @@ export class AhspImportAssistedClassificationService {
       parentId: root.id,
       level: ConstructionClassificationLevel.KATEGORI,
       name: kategori,
-    });
+    }, client);
     const subNode = await this.reuseOrCreateLocal({
       workspaceId: input.workspaceId,
       parentId: kategoriNode.id,
       level: ConstructionClassificationLevel.SUBKATEGORI,
       name: subkategori,
-    });
+    }, client);
     return this.reuseOrCreateLocal({
       workspaceId: input.workspaceId,
       parentId: subNode.id,
       level: ConstructionClassificationLevel.JENIS_PEKERJAAN,
       name: jenisPekerjaan,
-    });
+    }, client);
   }
 
   private async reuseOrCreateLocal(input: {
@@ -142,11 +142,11 @@ export class AhspImportAssistedClassificationService {
     parentId: string;
     level: ConstructionClassificationLevel;
     name: string;
-  }): Promise<ClassificationNodeView> {
+  }, client?: Prisma.TransactionClient): Promise<ClassificationNodeView> {
     const children = await this.classification.listChildren({
       parentId: input.parentId,
       workspaceId: input.workspaceId,
-    });
+    }, client);
     const found = children.find(
       (node) => node.level === input.level && node.name === input.name,
     );
@@ -157,7 +157,7 @@ export class AhspImportAssistedClassificationService {
       parentId: input.parentId,
       workspaceId: input.workspaceId,
       allowIdempotentReuse: true,
-    });
+    }, client);
   }
 
   async saveJobContext(input: {
@@ -208,12 +208,28 @@ export class AhspImportAssistedClassificationService {
     actorAccountId: string;
     context: AssistedClassificationContext | null | undefined;
     client?: Prisma.TransactionClient;
+    privateOnly?: boolean;
   }): Promise<{ applied: number }> {
     const pending = input.context?.pendingPaths ?? [];
     if (!input.context || (input.context.paths.length === 0 && pending.length === 0)) {
       return { applied: 0 };
     }
-    await this.assertContextLawful(input.actingWorkspaceId, input.context);
+    if (!input.client) {
+      for (let attempt = 0; ; attempt += 1) {
+        try {
+          return await this.prisma.$transaction((client) =>
+            this.applyToAhsp({ ...input, client }), { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+        } catch (error) {
+          if (attempt >= 2 || !(error instanceof Prisma.PrismaClientKnownRequestError) ||
+              !['P2002', 'P2034'].includes(error.code)) throw error;
+        }
+      }
+    }
+    await this.assignments.lockAhsp(input.ahspId, input.client);
+    if (input.privateOnly) {
+      await this.assignments.assertPrivateTarget(input.ahspId, input.actingWorkspaceId, input.client);
+    }
+    await this.assertContextLawful(input.actingWorkspaceId, input.context, input.client);
 
     let applied = 0;
     for (const path of input.context.paths) {
@@ -245,7 +261,7 @@ export class AhspImportAssistedClassificationService {
           kategori: row.kategori,
           subkategori: row.subkategori,
           jenisPekerjaan: row.jenisPekerjaan,
-        });
+        }, input.client);
         await (input.client
           ? this.assignments.addAssignment(
               {
@@ -273,12 +289,13 @@ export class AhspImportAssistedClassificationService {
   private async assertContextLawful(
     workspaceId: string,
     context: AssistedClassificationContext,
+    client?: Prisma.TransactionClient,
   ): Promise<void> {
     if (context.jenisPengadaanRootId) {
       const root = await this.classification.getLineage({
         id: context.jenisPengadaanRootId,
         workspaceId,
-      });
+      }, client);
       if (root.node.level !== ConstructionClassificationLevel.JENIS_PENGADAAN) {
         throw new BadRequestException(
           'ASSISTED_CLASSIFICATION_ROOT_MUST_BE_JENIS_PENGADAAN',
@@ -291,7 +308,7 @@ export class AhspImportAssistedClassificationService {
       const lineage = await this.classification.getLineage({
         id: path.leafNodeId,
         workspaceId,
-      });
+      }, client);
       if (lineage.node.level !== ConstructionClassificationLevel.JENIS_PEKERJAAN) {
         throw new BadRequestException(
           'ASSISTED_CLASSIFICATION_LEAF_MUST_BE_JENIS_PEKERJAAN',
