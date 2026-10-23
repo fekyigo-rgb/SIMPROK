@@ -966,6 +966,9 @@ describe('BasicPriceImportService', () => {
         rawSourceContext: undefined,
         confirmedSpecifications: null,
         hasAuditedSpecifications: false,
+        sourceRowNumber: 2,
+        rawSourceCategoryName: undefined,
+        rawSourceCategoryCode: undefined,
       });
     });
 

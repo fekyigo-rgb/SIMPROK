@@ -187,6 +187,12 @@ export interface ReviewedMappingEvidence {
   /** Rows subsequently rejected or bearing separate source specifications cannot teach. */
   readonly originatingRowStatus?: string;
   readonly hasAuditedSourceSpecifications?: boolean;
+  /** Prior receipt; not an identity or category decision by itself. */
+  readonly sourceSha256?: string;
+  readonly sourceRowNumber?: number;
+  /** Positive prior append-only category decision, not just uploader text. */
+  readonly priorCategoryConfirmed?: boolean;
+  readonly priorCategoryHistoryConflicted?: boolean;
   readonly reviewerAccountId: string;
   readonly decidedAt: string;
   readonly reason: string | null;
@@ -1098,6 +1104,46 @@ export function isEvidenceBoundSpecificVariantOfGeneral(
  * The existing batch-acceptance endpoint writes a new decision with the ACTING
  * human's account id after server-side revalidation.
  */
+/**
+ * Reuse a category a human ALREADY confirmed for the exact source row.
+ * This is a read-only proof: it never forges a user or a decision event.
+ */
+export function categoryProvenByExactPriorReview(
+  question: {
+    rawName: string;
+    rawCode: string | null;
+    rawUnit: string | null;
+    resourceType: string | null;
+    sourceSha256?: string;
+    sourceRowNumber?: number;
+    hasAuditedSpecifications?: boolean;
+  },
+  reviewedMappings: ReadonlyArray<ReviewedMappingEvidence>,
+): boolean {
+  if (!question.resourceType || !question.sourceSha256 ||
+      question.sourceRowNumber === undefined ||
+      question.hasAuditedSpecifications !== false) return false;
+  const history = reviewedMappings.filter(item =>
+    item.sourceSha256 === question.sourceSha256 &&
+    item.sourceRowNumber === question.sourceRowNumber &&
+    item.rawName === question.rawName &&
+    item.rawCode === question.rawCode &&
+    item.rawUnit === question.rawUnit);
+  if (history.length === 0) return false;
+  // All previous answers must agree; contradiction fails closed.
+  return new Set(history.map(item => item.resourceType)).size === 1 &&
+    new Set(history.map(item => item.resourceCatalogId)).size === 1 &&
+    history.every(item =>
+      item.resourceType === question.resourceType &&
+      item.priorCategoryConfirmed === true &&
+      item.priorCategoryHistoryConflicted === false &&
+      item.hasAuditedSourceSpecifications === false &&
+      Boolean(item.reviewerAccountId) &&
+      (item.originatingRowStatus === 'READY_FOR_SUBMISSION' ||
+        item.originatingRowStatus === 'SUBMISSION_CREATED' ||
+        item.originatingRowStatus === 'SUBMITTED'));
+}
+
 export function reuseExactPrivateReviewedMapping(
   verdict: ResourceIdentityResolution,
   reference: RawResourceReference,

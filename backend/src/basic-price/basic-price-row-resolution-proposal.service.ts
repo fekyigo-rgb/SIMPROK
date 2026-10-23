@@ -18,6 +18,7 @@ import {
   ResourceIdentityCandidate,
   isEvidenceBoundSpecificVariantOfGeneral,
   reuseExactPrivateReviewedMapping,
+  categoryProvenByExactPriorReview,
   type ResourceIdentityResolution,
 } from '../resource-catalog/resource-identity-resolution.kernel';
 import { candidateContextDigest } from '../resource-catalog/ghx-candidate-context';
@@ -450,6 +451,8 @@ export interface BasicPriceRowResourceProposal {
 
 export interface BasicPriceRowMachineProposal {
   rowId: string;
+  /** Private category review reused; NOT a new reviewer decision on this row. */
+  categoryReusedFromPriorReview?: boolean;
   unit: BasicPriceRowUnitProposal;
   resource: BasicPriceRowResourceProposal;
   /**
@@ -489,6 +492,9 @@ export interface BasicPriceRowProposalInput {
   confirmedSpecifications?: Record<string, string> | null;
   /** Set explicitly by the server's actual specification ledger lookup. */
   hasAuditedSpecifications?: boolean;
+  sourceRowNumber?: number;
+  rawSourceCategoryName?: string | null;
+  rawSourceCategoryCode?: string | null;
   batchId?: string;
   rowVersion?: number;
   sourceSha256?: string;
@@ -704,10 +710,28 @@ export class BasicPriceRowResolutionProposalService {
     for (const row of rows) {
       const unit = unitByRow.get(row.id)!;
       const resource = resourceByRow.get(row.id)!;
+      const previousCategoryProven =
+        row.sourceSectionProvenance === 'UPLOADER_DECLARED' &&
+        row.rowCategoryConfirmedByReviewer !== true &&
+        !row.rawSourceCategoryName?.trim() &&
+        !row.rawSourceCategoryCode?.trim() &&
+        categoryProvenByExactPriorReview(
+          {
+            rawName: row.rawResourceNameText,
+            rawCode: row.rawResourceCodeText,
+            rawUnit: row.rawUnitText,
+            resourceType: row.sourceSection,
+            sourceSha256: row.sourceSha256,
+            sourceRowNumber: row.sourceRowNumber,
+            hasAuditedSpecifications: row.hasAuditedSpecifications,
+          },
+          evidence.reviewedMappings,
+        );
       const categoryProven =
         row.sourceSectionProvenance === 'SOURCE_ROW_CATEGORY' ||
         row.sourceSectionProvenance === 'SOURCE_SECTION_TITLE' ||
-        row.rowCategoryConfirmedByReviewer === true;
+        row.rowCategoryConfirmedByReviewer === true ||
+        previousCategoryProven;
       // Reuse a SAME-QUESTION private answer only when its prior audited
       // canonical unit is also the CURRENT Unit Kernel answer. This is one
       // kernel ruling over already-loaded evidence, not a second matcher.
@@ -746,15 +770,20 @@ export class BasicPriceRowResolutionProposalService {
             admissionReview: null,
           }
         : resource;
-      proposals.set(
-        row.id,
-        this.compose(row, unit, {
-          ...effectiveResource,
-          admissibleForResolve:
-            effectiveResource.resourceCatalogId !== null &&
-            admissible.has(effectiveResource.resourceCatalogId),
-        }),
-      );
+      const proposed = this.compose(row, unit, {
+        ...effectiveResource,
+        admissibleForResolve:
+          effectiveResource.resourceCatalogId !== null &&
+          admissible.has(effectiveResource.resourceCatalogId),
+      });
+      // The old human audit informs the machine, but never pretends a new
+      // reviewer confirmed the receiving row in this read-only request.
+      if (previousCategoryProven &&
+          remembered?.authority === 'VERIFIED_PRIVATE_ROW_MAPPING_REUSED' &&
+          proposed.identityPairProven) {
+        proposed.categoryReusedFromPriorReview = true;
+      }
+      proposals.set(row.id, proposed);
     }
     return proposals;
   }

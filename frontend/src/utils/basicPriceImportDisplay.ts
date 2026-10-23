@@ -120,6 +120,7 @@ export interface RowResourceProposal {
 
 export interface RowMachineProposal {
   rowId: string;
+  categoryReusedFromPriorReview?: boolean;
   unit: RowUnitProposal;
   resource: RowResourceProposal;
   /**
@@ -1068,7 +1069,9 @@ export function privateMappingReuseNotice(
   row: Pick<BasicPriceImportRowSummary, 'machineProposal'>,
 ): string | null {
   return row.machineProposal?.resource.authority === 'VERIFIED_PRIVATE_ROW_MAPPING_REUSED'
-    ? 'Dikenali dari keputusan privat sebelumnya. Tidak perlu memilih padanan ulang. Periksa dan gunakan penerimaan batch untuk mencatat keputusan atas akun Anda.'
+    ? row.machineProposal.categoryReusedFromPriorReview === true
+      ? 'Kategori dan padanan dikenali dari keputusan privat sebelumnya yang telah diaudit. Tidak perlu konfirmasi ulang; penerimaan batch tetap keputusan Anda.'
+      : 'Dikenali dari keputusan privat sebelumnya. Tidak perlu memilih padanan ulang. Periksa dan gunakan penerimaan batch untuk mencatat keputusan atas akun Anda.'
     : null;
 }
 

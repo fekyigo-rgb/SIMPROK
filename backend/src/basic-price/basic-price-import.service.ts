@@ -2688,6 +2688,9 @@ export class BasicPriceImportService {
           rawSourceContext: row.rawSourceContext,
           confirmedSpecifications: reviewedSpecsByRow.get(row.id)?.facts ?? null,
           hasAuditedSpecifications: auditedSpecificationRowIds.has(row.id),
+          sourceRowNumber: row.sourceRowNumber,
+          rawSourceCategoryName: row.rawSourceCategoryName,
+          rawSourceCategoryCode: row.rawSourceCategoryCode,
         })),
     );
 

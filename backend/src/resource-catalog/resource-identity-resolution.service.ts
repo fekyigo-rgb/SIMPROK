@@ -281,6 +281,12 @@ export class ResourceIdentityResolutionService {
               rawResourceNameText: true,
               rawResourceCodeText: true,
               rawUnitText: true,
+                sourceRowNumber: true,
+                reasonCodes: true,
+                batch: { select: { sourceSha256: true } },
+                categoryDecisions: {
+                  select: { chosenSection: true, actorAccountId: true },
+                },
               status: true,
               specificationDecisions: { select: { id: true }, take: 1 },
               resolvedResourceType: true,
@@ -411,6 +417,17 @@ export class ResourceIdentityResolutionService {
             unitDefinitionId: row.unitDefinitionId,
             originatingRowStatus: row.row.status,
             hasAuditedSourceSpecifications: (row.row.specificationDecisions?.length ?? 0) > 0,
+            sourceSha256: row.row.batch?.sourceSha256,
+            sourceRowNumber: row.row.sourceRowNumber,
+            priorCategoryConfirmed:
+              row.row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true &&
+              (row.row.categoryDecisions?.length ?? 0) > 0 &&
+              row.row.categoryDecisions!.every(decision =>
+                decision.chosenSection === resourceType && Boolean(decision.actorAccountId)),
+            priorCategoryHistoryConflicted:
+              (row.row.categoryDecisions?.length ?? 0) > 0 &&
+              row.row.categoryDecisions!.some(decision =>
+                decision.chosenSection !== resourceType),
             reviewerAccountId: row.reviewerAccountId,
             decidedAt: row.decidedAt.toISOString(),
             reason: row.reason,
