@@ -12,6 +12,16 @@ import {
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+// Stable round-trip for mixed persisted UUIDs and vocabulary-only IDs
+// (which themselves contain ||). Never split these IDs on punctuation.
+export function projectKategoriSelectionKey(picks: readonly { id: string; level: string }[]): string {
+  return JSON.stringify(picks.filter((pick) => pick.level === 'KATEGORI').map((pick) => pick.id));
+}
+
+export function projectKategoriIdsFromKey(key: string): string[] {
+  return JSON.parse(key) as string[];
+}
+
 export type ProjectVocabularyPath = {
   kategori: string;
   subkategori?: string;

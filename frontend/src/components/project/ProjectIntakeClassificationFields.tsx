@@ -10,6 +10,8 @@ import {
 } from '../../utils/projectIntakeSelection';
 import {
   projectKategoriOptions,
+  projectKategoriSelectionKey,
+  projectKategoriIdsFromKey,
   projectSubkategoriOptions,
   projectClassificationCreateSelection,
   toggleProjectClassification,
@@ -119,13 +121,10 @@ export function ProjectIntakeClassificationFields({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootId]);
 
-  const kategoriKey = selection.picks
-    .filter((pick) => pick.level === 'KATEGORI')
-    .map((pick) => pick.id)
-    .join('|');
+  const kategoriKey = projectKategoriSelectionKey(selection.picks);
 
   useEffect(() => {
-    const ids = kategoriKey ? kategoriKey.split('|') : [];
+    const ids = projectKategoriIdsFromKey(kategoriKey);
     setChildren((current) => {
       const next: Record<string, ChildState> = {};
       for (const id of ids) next[id] = current[id] ?? { loaded: false, nodes: [] };

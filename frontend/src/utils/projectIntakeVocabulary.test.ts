@@ -2,6 +2,8 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   projectKategoriOptions,
+  projectKategoriSelectionKey,
+  projectKategoriIdsFromKey,
   projectSubkategoriOptions,
   projectClassificationCreateSelection,
   toggleProjectClassification,
@@ -76,4 +78,12 @@ test('mixed existing UUID and virtual categories remain selected together', () =
   });
   assert.deepEqual(payload.classificationNodeIds, [ROOT, BINA]);
   assert.deepEqual(payload.classificationVocabularyPaths, [{ kategori: 'Cipta Karya' }]);
+});
+
+test('category loading identity round-trips a vocabulary ID containing || without splitting', () => {
+  const category = projectKategoriOptions([local], ROOT).find((item) => item.name === 'Cipta Karya')!;
+  const key = projectKategoriSelectionKey([
+    { id: BINA, level: 'KATEGORI' }, { id: category.id, level: 'KATEGORI' },
+  ]);
+  assert.deepEqual(projectKategoriIdsFromKey(key), [BINA, category.id]);
 });
