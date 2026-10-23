@@ -1116,6 +1116,34 @@ export function basicPriceReviewCompass(
   return 'Belum ada identitas yang terbukti. Langkah berikutnya: periksa nama, kategori, satuan, serta spesifikasi sumber. Jangan membuat item baru sebelum memastikan tidak ada padanan yang sama.';
 }
 
+/**
+ * Display-only grouping of *already nominated* canonical kernel candidates.
+ * Human decision history is surfaced first, but never becomes proof or a
+ * source-matched identity decision. Server outcome/choice rules are unchanged.
+ */
+export type GuidedIdentityCandidate = Omit<RowResourceCandidate, 'resourceCatalogId'> & {
+  /** Opaque stable UI key only; never displayed or sent as a selected resource. */
+  searchKey: string;
+};
+
+export function guidedIdentityCandidates(
+  row: Pick<BasicPriceImportRowSummary, 'status' | 'machineProposal'>,
+): { prior: GuidedIdentityCandidate[]; other: GuidedIdentityCandidate[] } {
+  const empty = { prior: [], other: [] };
+  if (row.status !== 'NEEDS_REVIEW' || !row.machineProposal ||
+      row.machineProposal.identityPairProven) return empty;
+  const prior: GuidedIdentityCandidate[] = [];
+  const other: GuidedIdentityCandidate[] = [];
+  const seen = new Set<string>();
+  for (const candidate of row.machineProposal.resource.candidates) {
+    if (!candidate.resourceCatalogId || seen.has(candidate.resourceCatalogId)) continue;
+    seen.add(candidate.resourceCatalogId);
+    const { resourceCatalogId, ...displayFacts } = candidate;
+    (candidate.hasPriorHumanDecision ? prior : other).push({ ...displayFacts, searchKey: resourceCatalogId });
+  }
+  return { prior, other };
+}
+
 export function rowIdentityAdmissionOffered(
   row: Pick<BasicPriceImportRowSummary, 'status' | 'machineProposal'>,
 ): boolean {

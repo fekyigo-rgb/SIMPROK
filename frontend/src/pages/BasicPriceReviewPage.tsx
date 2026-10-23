@@ -47,6 +47,7 @@ import {
   rowIdentityAdmissionOffered,
   privateMappingReuseNotice,
   basicPriceReviewCompass,
+  guidedIdentityCandidates,
   rowSafeNewAdmissionEligible,
   rowIdentityRefusalChoices,
   rowIdentityAdmissionBlockReason,
@@ -77,6 +78,7 @@ import {
   WHY_DISCLOSURE_TITLE,
   type BasicPriceImportBatchSummary,
   type BasicPriceImportRowSummary,
+  type GuidedIdentityCandidate,
 } from '../utils/basicPriceImportDisplay';
 import { importRequestMessage } from '../utils/basicPriceIntakeErrors';
 import '../styles/basicPrice.css';
@@ -240,6 +242,8 @@ export function BasicPriceReviewPage() {
   /** Rows a person has edited by hand since this batch was loaded. */
   const [touchedRowIds, setTouchedRowIds] = useState<Set<string>>(new Set());
   const [lookupRows, setLookupRows] = useState<Set<string>>(new Set());
+  /** Human-selected SEARCH TARGET, never a catalog identity selection. */
+  const [candidateSearchSeeds, setCandidateSearchSeeds] = useState<Record<string, { id: string; name: string }>>({});
   const [rowFilter, setRowFilter] = useState<ReviewRowFilter>('ALL');
   const [visibleRowLimit, setVisibleRowLimit] = useState(REVIEW_ROW_PAGE_SIZE);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -364,6 +368,12 @@ export function BasicPriceReviewPage() {
    * Previous catalog selections belong to the old spelling and must be cleared. */
   const changeWorkingName = (row: BasicPriceImportRowSummary, value: string) => {
     updateDraft(row.id, { correctedCanonicalName: value, resource: null, resourcePending: false });
+    setCandidateSearchSeeds((current) => {
+      if (!(row.id in current)) return current;
+      const next = { ...current };
+      delete next[row.id];
+      return next;
+    });
     setRowNotice((current) => current?.rowId === row.id ? null : current);
     setSafeNewRowIds((current) => {
       if (!current.has(row.id)) return current;
@@ -1371,7 +1381,44 @@ export function BasicPriceReviewPage() {
           const mutable = isRowMutable(row);
           const proven = row.machineProposal?.identityPairProven === true;
           const reviewCompass = basicPriceReviewCompass(row);
+          const guidedCandidates = guidedIdentityCandidates(row);
           const expanded = expandedRows.has(row.id);
+          const renderGuidedCandidate = (candidate: GuidedIdentityCandidate) => (
+            <li key={candidate.searchKey} className="bp-guided-candidate">
+              <div className="bp-guided-candidate__body">
+                <strong>{candidate.name}</strong>
+                <span className="bp-field__help">
+                  {candidateResourceTypeLabel(candidate.type)} Â· satuan katalog: {candidate.baseUnit}
+                  {candidate.code ? ' Â· kode: ' + candidate.code : ''}
+                </span>
+                {candidate.hasPriorHumanDecision ? (
+                  <span className="bp-field__help">Pernah dipilih manusia; belum membuktikan kesamaan item pada impor ini.</span>
+                ) : null}
+                {candidate.specificationUnproved ? (
+                  <span className="bp-field__help">
+                    Spesifikasi belum terbukti
+                    {candidate.unprovedSpecificationFacts.length > 0 ? ': ' + candidate.unprovedSpecificationFacts.join(', ') : ''}
+                  </span>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="bp-btn bp-btn--sm"
+                disabled={isBusy}
+                aria-label={'Cari di katalog: ' + candidate.name}
+                onClick={() => {
+                  // Reuse the CURRENT catalog picker and server search. A click
+                  // here searches by name, it does NOT select a catalog UUID.
+                  setCandidateSearchSeeds((current) => ({ ...current, [row.id]: { id: candidate.searchKey, name: candidate.name } }));
+                  updateDraft(row.id, { resource: null, resourcePending: false, admitOpen: false });
+                  setLookupRows((current) => new Set(current).add(row.id));
+                  setRowNotice({ rowId: row.id, text: 'Pencarian katalog untuk ' + candidate.name + ' dibuka. Pilih hasil yang benar dan periksa satuan sebelum Gunakan Pilihan.' });
+                }}
+              >
+                Periksa di katalog
+              </button>
+            </li>
+          );
           const resourceProven = machinePickedResource(row) !== null;
           const unitProven = machinePickedUnit(row) !== null;
           const collisionLabel = collisionWarningLabel(row.collisionType);
@@ -1766,6 +1813,32 @@ export function BasicPriceReviewPage() {
                         {reviewCompass}
                       </p>
                     ) : null}
+                    {mutable && !proven &&
+                      (guidedCandidates.prior.length > 0 || guidedCandidates.other.length > 0) ? (
+                        <section className="bp-guided-candidates" aria-label={'Kandidat yang perlu diperiksa pada baris ' + row.sourceRowNumber}>
+                          <p className="bp-field__help">
+                            <strong>Kandidat dari mesin â€” belum dipilih.</strong> Periksa riwayat dan spesifikasinya; pilihan tetap melalui katalog resmi.
+                          </p>
+                          {guidedCandidates.prior.length > 0 ? (
+                            <>
+                              <p className="bp-guided-candidates__heading">Pernah dipilih manusia ({guidedCandidates.prior.length})</p>
+                              <ul className="bp-guided-candidates__list">{guidedCandidates.prior.map(renderGuidedCandidate)}</ul>
+                            </>
+                          ) : null}
+                          {guidedCandidates.other.length > 0 ? (
+                            <>
+                              <p className="bp-guided-candidates__heading">Kandidat lainnya ({guidedCandidates.other.length})</p>
+                              <ul className="bp-guided-candidates__list">{guidedCandidates.other.slice(0, 3).map(renderGuidedCandidate)}</ul>
+                              {guidedCandidates.other.length > 3 ? (
+                                <details className="bp-details">
+                                  <summary>Lihat {guidedCandidates.other.length - 3} kandidat lainnya</summary>
+                                  <ul className="bp-guided-candidates__list">{guidedCandidates.other.slice(3).map(renderGuidedCandidate)}</ul>
+                                </details>
+                              ) : null}
+                            </>
+                          ) : null}
+                        </section>
+                      ) : null}
                     {identityReviewStatuses?.[row.id] && identityReviewStatuses[row.id].status !== 'NOT_REQUESTED' ? (
                       <details className="bp-details" aria-label={`Riwayat identitas baris ${row.sourceRowNumber}`}>
                         <summary>Riwayat keputusan identitas</summary>
@@ -1814,8 +1887,8 @@ export function BasicPriceReviewPage() {
                             {!resourceProven ? (
                               <CatalogSearchSelect
                                 mode="resource"
-                                key={`${row.id}:${draft.correctedCanonicalName ?? row.name}`}
-                                initialQuery={(draft.correctedCanonicalName ?? row.name).trim().replace(/^-\s+/, '')}
+                                key={[row.id, candidateSearchSeeds[row.id]?.id ?? draft.correctedCanonicalName ?? row.name].join(':')}
+                                initialQuery={(candidateSearchSeeds[row.id]?.name ?? draft.correctedCanonicalName ?? row.name).trim().replace(/^-\s+/, '')}
                                 initialResourceType={reviewResourceSearchFamily(row)}
                                 selected={draft.resource}
                                 disabled={isBusy}
