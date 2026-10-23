@@ -63,11 +63,11 @@ test('BP205-PRIVATE-06 no private price auto-publishing through identity review'
   assert.match(page, /Persetujuan pihak lain bukan syarat pemakaian item privat/u);
 });
 
-test('BP205-CALM-01 blocked private identity shows one short result, with candidates disclosed on demand', () => {
+test('BP205-CALM-01 blocked identity explains why new resource cannot be made without duplicated candidate list', () => {
   assert.match(page, /<div className="bp-field__help">\s*<p role="status">\{row.machineProposal\?\.blockingFacts.includes\('SOURCE_SPECIFICATION_UNVERIFIED'\)/u);
   assert.match(page, /Spesifikasi dari berkas belum diperiksa\. Item ini belum bisa disimpan atau dinyatakan identik\./u);
-  assert.match(page, /<details className="bp-details">\s*<summary>Bandingkan kandidat dan bukti identitas<\/summary>/u);
-  assert.match(page, /bukti yang masih diperlukan:/u);
+  assert.match(page, /<details className="bp-details">\s*<summary>Mengapa item baru belum dapat dibuat\?<\/summary>/u);
+  assert.match(page, /Spesifikasi belum terbukti/u);
   assert.doesNotMatch(page, /Jika item itu berbeda, perbaiki nama atau kode sumber/u);
   assert.match(page, /Nama kerja bukan bukti spesifikasi/u);
 });

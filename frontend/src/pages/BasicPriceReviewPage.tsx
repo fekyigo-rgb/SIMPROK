@@ -1382,6 +1382,13 @@ export function BasicPriceReviewPage() {
           const proven = row.machineProposal?.identityPairProven === true;
           const reviewCompass = basicPriceReviewCompass(row);
           const guidedCandidates = guidedIdentityCandidates(row);
+          const guidedCount = guidedCandidates.prior.length + guidedCandidates.other.length;
+          const visibleGuidedCandidates = guidedCandidates.prior.length > 0
+            ? guidedCandidates.prior.slice(0, 2)
+            : guidedCandidates.other.slice(0, 2);
+          const hiddenGuidedPrior = guidedCandidates.prior.slice(visibleGuidedCandidates.filter((item) => item.hasPriorHumanDecision).length);
+          const hiddenGuidedOther = guidedCandidates.other.slice(visibleGuidedCandidates.filter((item) => !item.hasPriorHumanDecision).length);
+          const hiddenGuidedCount = hiddenGuidedPrior.length + hiddenGuidedOther.length;
           const expanded = expandedRows.has(row.id);
           const renderGuidedCandidate = (candidate: GuidedIdentityCandidate) => (
             <li key={candidate.searchKey} className="bp-guided-candidate">
@@ -1771,26 +1778,10 @@ export function BasicPriceReviewPage() {
                               : 'Item baru belum tersedia: ' + admissionUnavailableReason(admissionReview.reasonCode)}</p>
                             {admissionReview.reasonCode === 'IDENTITY_CANDIDATE_BLOCKED' ? (
                               <details className="bp-details">
-                                <summary>Bandingkan kandidat dan bukti identitas</summary>
-                                {row.machineProposal?.resource.candidates.some((candidate) => candidate.admissionDisposition === 'BLOCKED') ? (
-                                  <>
-                                    <ul>
-                                    {row.machineProposal.resource.candidates
-                                      .filter((candidate) => candidate.admissionDisposition === 'BLOCKED')
-                                      .map((candidate, index) => (
-                                        <li key={index}>
-                                          <strong>{candidate.name}</strong>
-                                          {candidate.code ? ' (' + candidate.code + ')' : ''}
-                                          {' — ' + candidateResourceTypeLabel(candidate.type) + ' · satuan ' + candidate.baseUnit}
-                                          {candidate.specificationUnproved && candidate.unprovedSpecificationFacts.length > 0
-                                            ? ' — bukti yang masih diperlukan: ' + candidate.unprovedSpecificationFacts.join(', ')
-                                            : ''}
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  </>
-                                ) : <p>Daftar item yang mungkin sama belum dapat ditampilkan. Item baru belum dapat dibuat sebelum pemeriksaan.</p>}
-                                <p>Jika sesuai, gunakan <strong>Pilih Item yang Sesuai Padanan</strong> dan pilih satuan. Jika berbeda, jangan pilih padanan yang salah; perbedaan spesifikasi masih memerlukan bukti.</p>
+                                <summary>Mengapa item baru belum dapat dibuat?</summary>
+                                {row.machineProposal?.resource.candidates.some((candidate) => candidate.admissionDisposition === 'BLOCKED')
+                                  ? <p>Ada calon padanan yang belum terbukti berbeda. Daftar kandidat ditampilkan satu kali di panel peninjauan; bukti spesifikasinya tetap wajib diperiksa.</p>
+                                  : <p>Identitas baru belum boleh ditetapkan sampai perbandingan sumber dan katalog selesai.</p>}
                                 <p>Hasil pencarian kosong belum membuktikan bahwa item ini baru. Nama kerja bukan bukti spesifikasi; memuat ulang halaman saja tidak membuktikan perbedaan tersebut.</p>
                                 <p>Item privat tidak memerlukan persetujuan katalog resmi SIMPROK.</p>
                                 {!(row.sectionProvenance === 'SOURCE_ROW_CATEGORY' ||
@@ -1803,42 +1794,51 @@ export function BasicPriceReviewPage() {
                             ) : null}
                           </div>
                         ) : null}
-                    {row.machineProposal?.categoryReusedFromPriorReview === true && !proven ? (
-                      <p className="bp-field__help" role="status">
-                        Kategori dari keputusan terdahulu sudah dikenali. Tidak perlu Konfirmasi Jenis ulang. Identitas, ukuran, dan spesifikasi tetap diperiksa sebelum harga disimpan.
-                      </p>
-                    ) : null}
-                    {mutable && reviewCompass ? (
+                    {/* The LEFT item fact already displays audited category memory.
+                        Never repeat this message on the resolution side. */}
+                    {mutable && reviewCompass && guidedCount === 0 ? (
                       <p className="bp-field__help" role="status" aria-label="Panduan langkah berikutnya">
                         {reviewCompass}
                       </p>
                     ) : null}
-                    {mutable && !proven &&
-                      (guidedCandidates.prior.length > 0 || guidedCandidates.other.length > 0) ? (
-                        <section className="bp-guided-candidates" aria-label={'Kandidat yang perlu diperiksa pada baris ' + row.sourceRowNumber}>
-                          <p className="bp-field__help">
-                            <strong>Kandidat dari mesin â€” belum dipilih.</strong> Periksa riwayat dan spesifikasinya; pilihan tetap melalui katalog resmi.
-                          </p>
-                          {guidedCandidates.prior.length > 0 ? (
-                            <>
-                              <p className="bp-guided-candidates__heading">Pernah dipilih manusia ({guidedCandidates.prior.length})</p>
-                              <ul className="bp-guided-candidates__list">{guidedCandidates.prior.map(renderGuidedCandidate)}</ul>
-                            </>
-                          ) : null}
-                          {guidedCandidates.other.length > 0 ? (
-                            <>
-                              <p className="bp-guided-candidates__heading">Kandidat lainnya ({guidedCandidates.other.length})</p>
-                              <ul className="bp-guided-candidates__list">{guidedCandidates.other.slice(0, 3).map(renderGuidedCandidate)}</ul>
-                              {guidedCandidates.other.length > 3 ? (
-                                <details className="bp-details">
-                                  <summary>Lihat {guidedCandidates.other.length - 3} kandidat lainnya</summary>
-                                  <ul className="bp-guided-candidates__list">{guidedCandidates.other.slice(3).map(renderGuidedCandidate)}</ul>
-                                </details>
-                              ) : null}
-                            </>
-                          ) : null}
-                        </section>
-                      ) : null}
+                    {mutable && !proven && guidedCount > 0 && !lookupRows.has(row.id) ? (
+                      <section className="bp-guided-candidates" aria-label={'Saran kandidat baris ' + row.sourceRowNumber}>
+                        <p className="bp-guided-candidates__heading">
+                          {guidedCandidates.prior.length > 0
+                            ? 'Pernah dipilih sebelumnya (' + guidedCandidates.prior.length + ') - belum tentu cocok'
+                            : 'Kandidat perlu diperiksa (' + guidedCount + ')'}
+                        </p>
+                        <ul className="bp-guided-candidates__list">{visibleGuidedCandidates.map(renderGuidedCandidate)}</ul>
+                        {hiddenGuidedCount > 0 ? (
+                          <details className="bp-details">
+                            <summary>Lihat {hiddenGuidedCount} kandidat lainnya</summary>
+                            {hiddenGuidedPrior.length > 0 ? (
+                              <>
+                                <p className="bp-guided-candidates__heading">Riwayat pilihan lainnya</p>
+                                <ul className="bp-guided-candidates__list">{hiddenGuidedPrior.map(renderGuidedCandidate)}</ul>
+                              </>
+                            ) : null}
+                            {hiddenGuidedOther.length > 0 ? (
+                              <>
+                                <p className="bp-guided-candidates__heading">Kandidat lain</p>
+                                <ul className="bp-guided-candidates__list">{hiddenGuidedOther.map(renderGuidedCandidate)}</ul>
+                              </>
+                            ) : null}
+                          </details>
+                        ) : null}
+                        <button type="button" className="bp-btn bp-btn--link bp-btn--sm" disabled={isBusy}
+                          onClick={() => {
+                            setCandidateSearchSeeds((current) => {
+                              if (!(row.id in current)) return current;
+                              const next = { ...current };
+                              delete next[row.id];
+                              return next;
+                            });
+                            updateDraft(row.id, { resource: null, resourcePending: false, admitOpen: false });
+                            setLookupRows((current) => new Set(current).add(row.id));
+                          }}>Cari padanan lain di katalog</button>
+                      </section>
+                    ) : null}
                     {identityReviewStatuses?.[row.id] && identityReviewStatuses[row.id].status !== 'NOT_REQUESTED' ? (
                       <details className="bp-details" aria-label={`Riwayat identitas baris ${row.sourceRowNumber}`}>
                         <summary>Riwayat keputusan identitas</summary>
@@ -1866,7 +1866,7 @@ export function BasicPriceReviewPage() {
                           <button type="button" className="bp-btn bp-rowcard__choice" title="Pilih satuan standar untuk item yang sudah dikenali." aria-expanded={lookupRows.has(row.id)} onClick={() => { updateDraft(row.id, { admitOpen: false }); setLookupRows((current) => new Set(current).add(row.id)); }} disabled={isBusy}>
                             Pilih Satuan
                           </button>
-                        ) : !sourceSpecUnverified && !resourceProven ? (
+                        ) : !sourceSpecUnverified && !resourceProven && guidedCount === 0 ? (
                           <button
                             type="button"
                             className="bp-btn bp-rowcard__choice"
@@ -1884,6 +1884,14 @@ export function BasicPriceReviewPage() {
                         {!sourceSpecUnverified && lookupRows.has(row.id) && mutable && !proven ? (
                           <div id={`bp-lookup-${row.id}`} tabIndex={-1} className="bp-rowcard__lookup bp-rowcard__lookup--contextual" aria-label="Cari dan pilih item atau satuan">
                             <strong className="bp-rowcard__lookup-heading">{resourceProven ? "Pilih satuan yang sesuai" : "Cari item yang sudah ada di SIMPROK"}</strong>
+                            {guidedCount > 0 && !resourceProven ? (
+                              <button type="button" className="bp-btn bp-btn--link bp-btn--sm" disabled={isBusy}
+                                onClick={() => setLookupRows((current) => {
+                                  const next = new Set(current);
+                                  next.delete(row.id);
+                                  return next;
+                                })}>Kembali ke saran kandidat</button>
+                            ) : null}
                             {!resourceProven ? (
                               <CatalogSearchSelect
                                 mode="resource"

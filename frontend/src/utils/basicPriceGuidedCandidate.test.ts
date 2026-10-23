@@ -59,11 +59,25 @@ test('duplicate nominated identity is shown once, without manufacturing alternat
 
 test('periksa di katalog uses canonical search control without selecting or persisting catalog ID', () => {
   const page = readFileSync('src/pages/BasicPriceReviewPage.tsx', 'utf8');
-  assert.match(page, /guidedCandidates\.prior\.map\(renderGuidedCandidate\)/u);
-  assert.match(page, /guidedCandidates\.other\.slice\(0, 3\)\.map\(renderGuidedCandidate\)/u);
+  assert.match(page, /visibleGuidedCandidates\.map\(renderGuidedCandidate\)/u);
+  assert.match(page, /hiddenGuidedOther\.map\(renderGuidedCandidate\)/u);
   assert.match(page, /setCandidateSearchSeeds/u);
   assert.match(page, /initialQuery=\{\(candidateSearchSeeds\[row.id\]\?\.name/u);
   assert.match(page, /Pilih hasil yang benar dan periksa satuan/u);
   const buttonBody = page.slice(page.indexOf('const renderGuidedCandidate'), page.indexOf('const resourceProven ='));
   assert.doesNotMatch(buttonBody, /resolveBasicPriceImportRow|onSelect\(|setDrafts\(.*resourceCatalogId/u);
+});
+
+test('one compact candidate surface at a time, not duplicated against picker or raw evidence list', () => {
+  const page = readFileSync('src/pages/BasicPriceReviewPage.tsx', 'utf8');
+  assert.match(page, /guidedCandidates\.prior\.slice\(0, 2\)/u);
+  assert.match(page, /guidedCandidates\.other\.slice\(0, 2\)/u);
+  assert.match(page, /hiddenGuidedCount > 0/u);
+  assert.match(page, /guidedCount > 0 && !lookupRows\.has\(row\.id\)/u);
+  assert.match(page, /!sourceSpecUnverified && !resourceProven && guidedCount === 0/u);
+  assert.match(page, /Kembali ke saran kandidat/u);
+  assert.match(page, /Mengapa item baru belum dapat dibuat\?/u);
+  assert.doesNotMatch(page, /<summary>Bandingkan kandidat dan bukti identitas<\/summary>/u);
+  const oldDetails = page.slice(page.indexOf('<summary>Mengapa item baru belum dapat dibuat?</summary>'), page.indexOf('Hasil pencarian kosong belum membuktikan'));
+  assert.doesNotMatch(oldDetails, /<li|\.map\(/u);
 });
