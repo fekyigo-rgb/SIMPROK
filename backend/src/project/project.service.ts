@@ -439,7 +439,9 @@ export class ProjectService {
         throw new NotFoundException('Workspace not found');
       }
 
-      return await this.prisma.$transaction(async (tx) => {
+      // An idempotent classification race must replay the WHOLE transaction:
+      // no partial node/project writes or changes to existing engine contracts.
+      const createOnce = () => this.prisma.$transaction(async (tx) => {
         const classificationNodeIds = await this.materializeProjectVocabularyPaths(
           workspaceId, selectedClassificationIds, vocabularyPaths, tx,
         );
@@ -521,6 +523,24 @@ export class ProjectService {
 
         return { ...project, classificationNodeIds };
       });
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          return await createOnce();
+        } catch (error) {
+          const target = error instanceof Prisma.PrismaClientKnownRequestError
+            ? error.meta?.target
+            : null;
+          const isClassificationCollision = error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === 'P2002' &&
+            (target === 'construction_classification_nodes_workspace_identity_uidx' ||
+              (Array.isArray(target) &&
+                ['workspaceId', 'level', 'parentId', 'normalizedName'].every((column) => target.includes(column))));
+          if (!vocabularyPaths.length || attempt === 2 || !isClassificationCollision) {
+            throw error;
+          }
+        }
+      }
+      throw new InternalServerErrorException('PROJECT_CLASSIFICATION_RETRY_EXHAUSTED');
     } catch (error) {
       if (
         error instanceof NotFoundException ||

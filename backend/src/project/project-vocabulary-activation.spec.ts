@@ -1,7 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { ConstructionClassificationLevel as Level } from '@prisma/client';
+import { ConstructionClassificationLevel as Level, Prisma } from '@prisma/client';
 import { ProjectService } from './project.service';
 import { CreateProjectDto } from './dto/create-project.dto';
 
@@ -102,6 +102,81 @@ describe('RI-01 classification vocabulary activation (no new engine)', () => {
     }, 'workspace-b')).rejects.toBeInstanceOf(NotFoundException);
     expect(h.tx.project.create).not.toHaveBeenCalled();
     expect(h.classification.createNode).not.toHaveBeenCalled();
+  });
+
+  it('retries the full transaction after a real classification index collision', async () => {
+    const h = harness();
+    const unique = new Prisma.PrismaClientKnownRequestError('Classification identity collision', {
+      code: 'P2002', clientVersion: 'test',
+      meta: { target: 'construction_classification_nodes_workspace_identity_uidx' },
+    });
+    h.classification.createNode.mockRejectedValueOnce(unique);
+    const response = await h.service.create({
+      name: 'Pekerjaan', code: 'PRJVOC-RACE',
+      classificationNodeIds: [ROOT],
+      classificationVocabularyPaths: [{ kategori: 'Cipta Karya' }],
+    }, 'workspace-1');
+    expect(response.classificationNodeIds).toEqual([ROOT, CAT]);
+    expect(h.prisma.$transaction).toHaveBeenCalledTimes(2);
+    expect(h.classification.createNode).toHaveBeenCalledTimes(2);
+    expect(h.tx.project.create).toHaveBeenCalledTimes(1);
+    expect(h.tx.projectClassificationSelection.createMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry project-code collisions despite a vocabulary path', async () => {
+    const h = harness();
+    const unique = new Prisma.PrismaClientKnownRequestError('Project code collision', {
+      code: 'P2002', clientVersion: 'test',
+      meta: { target: ['workspaceId', 'code'] },
+    });
+    h.tx.project.create.mockRejectedValueOnce(unique);
+    await expect(h.service.create({
+      name: 'Pekerjaan', code: 'PRJVOC-CODE-409',
+      classificationNodeIds: [ROOT],
+      classificationVocabularyPaths: [{ kategori: 'Cipta Karya' }],
+    }, 'workspace-1')).rejects.toMatchObject({ status: 409 });
+    expect(h.prisma.$transaction).toHaveBeenCalledTimes(1);
+    expect(h.tx.project.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry classification collision without a vocabulary materialization', async () => {
+    const h = harness();
+    const unique = new Prisma.PrismaClientKnownRequestError('Unexpected identity collision', {
+      code: 'P2002', clientVersion: 'test',
+      meta: { target: 'construction_classification_nodes_workspace_identity_uidx' },
+    });
+    h.tx.project.create.mockRejectedValueOnce(unique);
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(h.service.create({
+        name: 'Pekerjaan', code: 'PRJVOC-NO-VOCAB',
+        classificationNodeIds: [ROOT],
+      }, 'workspace-1')).rejects.toMatchObject({ status: 500 });
+    } finally {
+      log.mockRestore();
+    }
+    expect(h.prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('bounds classification conflict retries to three complete attempts', async () => {
+    const h = harness();
+    const unique = new Prisma.PrismaClientKnownRequestError('Repeat identity collision', {
+      code: 'P2002', clientVersion: 'test',
+      meta: { target: ['workspaceId', 'level', 'parentId', 'normalizedName'] },
+    });
+    h.classification.createNode.mockRejectedValue(unique);
+    const log = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(h.service.create({
+        name: 'Pekerjaan', code: 'PRJVOC-THREE',
+        classificationNodeIds: [ROOT],
+        classificationVocabularyPaths: [{ kategori: 'Cipta Karya' }],
+      }, 'workspace-1')).rejects.toMatchObject({ status: 500 });
+    } finally {
+      log.mockRestore();
+    }
+    expect(h.prisma.$transaction).toHaveBeenCalledTimes(3);
+    expect(h.tx.project.create).not.toHaveBeenCalled();
   });
 
   it('DTO rejects malformed paths and fake UUIDs before handling the request', async () => {
