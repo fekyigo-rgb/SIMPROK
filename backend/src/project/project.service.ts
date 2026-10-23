@@ -268,7 +268,14 @@ export class ProjectService {
     if (!this.classification) {
       throw new BadRequestException('PROJECT_CLASSIFICATION_SERVICE_UNAVAILABLE');
     }
-    const rootId = selectedIds[0];
+    const firstId = selectedIds[0];
+    if (!firstId) throw new BadRequestException('PROJECT_CLASSIFICATION_ROOT_REQUIRED');
+    // The existing project contract treats selection IDs as an unordered set.
+    // Reuse canonical lineage to resolve its root, rather than trusting array order.
+    const lineage = await this.classification.getLineage({ id: firstId, workspaceId }, tx);
+    const rootId = lineage.path.find(
+      (node) => node.level === ConstructionClassificationLevel.JENIS_PENGADAAN,
+    )?.id;
     if (!rootId) throw new BadRequestException('PROJECT_CLASSIFICATION_ROOT_REQUIRED');
     const root = await this.classification.getById({ id: rootId, workspaceId }, tx);
     if (root.level !== ConstructionClassificationLevel.JENIS_PENGADAAN) {

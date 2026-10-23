@@ -67,6 +67,39 @@ describe('RI-01 classification vocabulary activation (no new engine)', () => {
     );
   });
 
+  it('resolves root via canonical lineage even when KATEGORI precedes the root ID', async () => {
+    const h = harness();
+    const response = await h.service.create({
+      name: 'Pekerjaan', code: 'PRJVOC-UNORDERED',
+      classificationNodeIds: [CAT, ROOT],
+      classificationVocabularyPaths: [{ kategori: 'Cipta Karya', subkategori: 'Bangunan Gedung' }],
+    }, 'workspace-1');
+    expect(response.classificationNodeIds).toEqual([CAT, ROOT, SUB]);
+    expect(h.classification.getLineage).toHaveBeenCalledWith(
+      { id: CAT, workspaceId: 'workspace-1' }, h.tx,
+    );
+    expect(h.classification.getById).toHaveBeenCalledWith(
+      { id: ROOT, workspaceId: 'workspace-1' }, h.tx,
+    );
+    expect(h.tx.projectClassificationSelection.createMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('resolves the root when the selection provides only a canonical descendant', async () => {
+    const h = harness();
+    const response = await h.service.create({
+      name: 'Pekerjaan', code: 'PRJVOC-DESCENDANT',
+      classificationNodeIds: [CAT],
+      classificationVocabularyPaths: [{ kategori: 'Cipta Karya' }],
+    }, 'workspace-1');
+    expect(response.classificationNodeIds).toEqual([CAT]);
+    expect(h.classification.getLineage).toHaveBeenCalledWith(
+      { id: CAT, workspaceId: 'workspace-1' }, h.tx,
+    );
+    expect(h.classification.getById).toHaveBeenCalledWith(
+      { id: ROOT, workspaceId: 'workspace-1' }, h.tx,
+    );
+  });
+
   it('blocks construction vocabulary under Pengadaan Barang with no writes', async () => {
     const h = harness();
     h.classification.getById.mockResolvedValueOnce({ id: ROOT, name: 'Pengadaan Barang', level: Level.JENIS_PENGADAAN });
