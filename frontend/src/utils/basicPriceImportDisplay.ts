@@ -1063,6 +1063,15 @@ export function optionalRowCanEnrichKdnNow(
  * does not invent a second gate; it only decides whether the existing writer
  * may be shown.
  */
+/** Private memory is displayed as a HUMAN-VERIFIED answer, not a guess. */
+export function privateMappingReuseNotice(
+  row: Pick<BasicPriceImportRowSummary, 'machineProposal'>,
+): string | null {
+  return row.machineProposal?.resource.authority === 'VERIFIED_PRIVATE_ROW_MAPPING_REUSED'
+    ? 'Dikenali dari keputusan privat sebelumnya. Tidak perlu memilih padanan ulang. Periksa dan gunakan penerimaan batch untuk mencatat keputusan atas akun Anda.'
+    : null;
+}
+
 export function rowIdentityAdmissionOffered(
   row: Pick<BasicPriceImportRowSummary, 'status' | 'machineProposal'>,
 ): boolean {

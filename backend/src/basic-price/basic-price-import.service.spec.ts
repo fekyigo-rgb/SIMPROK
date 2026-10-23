@@ -965,6 +965,7 @@ describe('BasicPriceImportService', () => {
         rawUnitText: 'ltr',
         rawSourceContext: undefined,
         confirmedSpecifications: null,
+        hasAuditedSpecifications: false,
       });
     });
 

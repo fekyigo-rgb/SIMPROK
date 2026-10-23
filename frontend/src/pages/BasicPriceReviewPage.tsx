@@ -45,6 +45,7 @@ import {
   optionalRowCanEnrichKdnNow,
   OPTIONAL_ENRICHMENT_EMPTY,
   rowIdentityAdmissionOffered,
+  privateMappingReuseNotice,
   rowSafeNewAdmissionEligible,
   rowIdentityRefusalChoices,
   rowIdentityAdmissionBlockReason,
@@ -1767,7 +1768,7 @@ export function BasicPriceReviewPage() {
                       </details>
                     ) : null}
                     {proven ? (
-                      <p className="bp-field__help">Dikenali otomatis. Gunakan Simpan &amp; Gunakan di atas untuk menyimpan baris ini bersama baris pasti lainnya.</p>
+                      <p className="bp-field__help">{privateMappingReuseNotice(row) ?? 'Dikenali otomatis. Gunakan Simpan & Gunakan di atas untuk menyimpan baris ini bersama baris pasti lainnya.'}</p>
                     ) : row.status === 'REJECTED' ? (
                       <p className="bp-field__help">{noteDisclosure.primary ?? 'Baris ini telah ditolak.'}</p>
                     ) : mutable ? (

@@ -17,6 +17,7 @@ import {
 import {
   ResourceIdentityCandidate,
   isEvidenceBoundSpecificVariantOfGeneral,
+  reuseExactPrivateReviewedMapping,
   type ResourceIdentityResolution,
 } from '../resource-catalog/resource-identity-resolution.kernel';
 import { candidateContextDigest } from '../resource-catalog/ghx-candidate-context';
@@ -486,6 +487,8 @@ export interface BasicPriceRowProposalInput {
   rawSourceContext?: unknown;
   /** Optional audited decision, scoped to this row and supplied only by server. */
   confirmedSpecifications?: Record<string, string> | null;
+  /** Set explicitly by the server's actual specification ledger lookup. */
+  hasAuditedSpecifications?: boolean;
   batchId?: string;
   rowVersion?: number;
   sourceSha256?: string;
@@ -701,13 +704,55 @@ export class BasicPriceRowResolutionProposalService {
     for (const row of rows) {
       const unit = unitByRow.get(row.id)!;
       const resource = resourceByRow.get(row.id)!;
+      const categoryProven =
+        row.sourceSectionProvenance === 'SOURCE_ROW_CATEGORY' ||
+        row.sourceSectionProvenance === 'SOURCE_SECTION_TITLE' ||
+        row.rowCategoryConfirmedByReviewer === true;
+      // Reuse a SAME-QUESTION private answer only when its prior audited
+      // canonical unit is also the CURRENT Unit Kernel answer. This is one
+      // kernel ruling over already-loaded evidence, not a second matcher.
+      const remembered = categoryProven &&
+        row.hasAuditedSpecifications === false &&
+        row.sourceSection !== null &&
+        resolutionByRow.has(row.id)
+        ? reuseExactPrivateReviewedMapping(
+            resolutionByRow.get(row.id)!,
+            {
+              rawName: row.rawResourceNameText,
+              rawCode: row.rawResourceCodeText,
+              rawUnit: row.rawUnitText,
+              resourceType: row.sourceSection,
+              confirmedSpecifications: row.confirmedSpecifications ?? null,
+            },
+            unit.unitDefinitionId,
+            evidence.reviewedMappings,
+          )
+        : null;
+      const chosen = remembered?.authority === 'VERIFIED_PRIVATE_ROW_MAPPING_REUSED'
+        ? remembered.candidates.find(c =>
+            c.resourceCatalogId === remembered.resolvedResourceCatalogId) ?? null
+        : null;
+      const effectiveResource = chosen && admissible.has(chosen.resourceCatalogId)
+        ? {
+            ...resource,
+            status: 'RESOLVED' as const,
+            authority: remembered!.authority,
+            resourceCatalogId: chosen.resourceCatalogId,
+            resourceName: chosen.name,
+            resourceCode: chosen.code,
+            resourceType: chosen.type,
+            resourceBaseUnit: chosen.baseUnit,
+            reasonCodes: [...remembered!.reasonCodes],
+            admissionReview: null,
+          }
+        : resource;
       proposals.set(
         row.id,
         this.compose(row, unit, {
-          ...resource,
+          ...effectiveResource,
           admissibleForResolve:
-            resource.resourceCatalogId !== null &&
-            admissible.has(resource.resourceCatalogId),
+            effectiveResource.resourceCatalogId !== null &&
+            admissible.has(effectiveResource.resourceCatalogId),
         }),
       );
     }

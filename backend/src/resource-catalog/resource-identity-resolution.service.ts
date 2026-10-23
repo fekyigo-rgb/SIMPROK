@@ -272,6 +272,7 @@ export class ResourceIdentityResolutionService {
           // returned the rows in — no extra query, no extra round trip.
           id: true,
           resourceCatalogId: true,
+          unitDefinitionId: true,
           reviewerAccountId: true,
           decidedAt: true,
           reason: true,
@@ -279,6 +280,9 @@ export class ResourceIdentityResolutionService {
             select: {
               rawResourceNameText: true,
               rawResourceCodeText: true,
+              rawUnitText: true,
+              status: true,
+              specificationDecisions: { select: { id: true }, take: 1 },
               resolvedResourceType: true,
               sourceSection: true,
             },
@@ -403,6 +407,10 @@ export class ResourceIdentityResolutionService {
             rawName: row.row.rawResourceNameText,
             rawCode: row.row.rawResourceCodeText,
             resourceType,
+            rawUnit: row.row.rawUnitText,
+            unitDefinitionId: row.unitDefinitionId,
+            originatingRowStatus: row.row.status,
+            hasAuditedSourceSpecifications: (row.row.specificationDecisions?.length ?? 0) > 0,
             reviewerAccountId: row.reviewerAccountId,
             decidedAt: row.decidedAt.toISOString(),
             reason: row.reason,

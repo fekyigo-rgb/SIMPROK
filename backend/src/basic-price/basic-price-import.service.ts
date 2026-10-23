@@ -2657,6 +2657,7 @@ export class BasicPriceImportService {
           ORDER BY d."rowId", d."resultingVersion" DESC
         `);
     const rowVersions = new Map(rows.map((row) => [row.id, row.version]));
+    const auditedSpecificationRowIds = new Set(decisions.map((decision) => decision.rowId));
     const reviewedSpecsByRow = new Map<string, {
       facts: Record<string, string>; decisionKind: string; resultingVersion: number;
     }>();
@@ -2686,6 +2687,7 @@ export class BasicPriceImportService {
           rawUnitText: row.rawUnitText,
           rawSourceContext: row.rawSourceContext,
           confirmedSpecifications: reviewedSpecsByRow.get(row.id)?.facts ?? null,
+          hasAuditedSpecifications: auditedSpecificationRowIds.has(row.id),
         })),
     );
 

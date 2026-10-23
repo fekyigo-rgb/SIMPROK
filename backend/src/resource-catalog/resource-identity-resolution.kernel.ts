@@ -180,6 +180,13 @@ export interface ReviewedMappingEvidence {
   readonly rawName: string;
   readonly rawCode: string | null;
   readonly resourceType: string;
+  /** Exact source spelling; absent in old test fixtures means NO private auto-reuse. */
+  readonly rawUnit?: string | null;
+  /** Unit actually verified by the prior reviewer, not inferred from text. */
+  readonly unitDefinitionId?: string;
+  /** Rows subsequently rejected or bearing separate source specifications cannot teach. */
+  readonly originatingRowStatus?: string;
+  readonly hasAuditedSourceSpecifications?: boolean;
   readonly reviewerAccountId: string;
   readonly decidedAt: string;
   readonly reason: string | null;
@@ -350,6 +357,8 @@ export type ResourceIdentityAuthority =
    * "this exact question was decided before".
    */
   | 'VERIFIED_IDENTICAL_QUESTION_REUSED'
+  /** Prior *same-question* Basic Price human mapping, reapplied ONLY on explicit batch acceptance. */
+  | 'VERIFIED_PRIVATE_ROW_MAPPING_REUSED'
   /**
    * The caller handed in a canonical ResourceCatalog id and it VALIDATED: the
    * row exists inside this workspace's own evidence boundary, it is ACTIVE, and
@@ -372,6 +381,7 @@ export type ResourceIdentityReasonCode =
   | 'EXACT_CANONICAL_MATCH'
   | 'VERIFIED_MAPPING_REUSED'
   | 'VERIFIED_IDENTICAL_QUESTION_REUSED'
+  | 'VERIFIED_PRIVATE_ROW_MAPPING_REUSED'
   | 'STRONG_CANDIDATE_NEEDS_REVIEW'
   | 'MULTIPLE_CANDIDATES_NEEDS_REVIEW'
   | 'REVIEWED_MAPPING_CONFLICT'
@@ -1070,6 +1080,81 @@ export function isEvidenceBoundSpecificVariantOfGeneral(
     );
     return !!remainder && remainder === catalogName;
   });
+}
+
+
+/**
+ * Private, same-question learning through the ONE Resource Identity authority.
+ *
+ * A prior mapping is normally a candidate, NOT identity proof. This *narrow*
+ * exception reuses an actual reviewer's proven choice only if the ENTIRE raw
+ * question (name, code, unit and resource type) is identical, there is one
+ * non-conflicting answer, both unit definitions are IDENTICAL, neither occurrence
+ * carries separately audited specifications, and the still-active catalogue row
+ * is already among the current kernel's RECORDED_FACT candidates.
+ *
+ * No catalog aliases, no guessed unit, no automatic DB write, no cross-workspace
+ * borrowing (the canonical evidence loader enforces strict workspace equality).
+ * The existing batch-acceptance endpoint writes a new decision with the ACTING
+ * human's account id after server-side revalidation.
+ */
+export function reuseExactPrivateReviewedMapping(
+  verdict: ResourceIdentityResolution,
+  reference: RawResourceReference,
+  unitDefinitionId: string | null,
+  reviewedMappings: ReadonlyArray<ReviewedMappingEvidence>,
+): ResourceIdentityResolution {
+  if (verdict.status !== 'NEEDS_REVIEW' || !unitDefinitionId ||
+      reference.confirmedSpecifications != null ||
+      verdict.reasonCodes.some(code => code === 'REVIEWED_MAPPING_CONFLICT' ||
+        code === 'SPECIFICATION_CONFLICT' || code === 'SPECIFICATION_UNPROVED')) {
+    return verdict;
+  }
+  const exact = reviewedMappings.filter(mapping =>
+    mapping.rawName === reference.rawName &&
+    mapping.rawCode === reference.rawCode &&
+    mapping.rawUnit === reference.rawUnit &&
+    mapping.resourceType === reference.resourceType &&
+    mapping.unitDefinitionId === unitDefinitionId &&
+    mapping.hasAuditedSourceSpecifications === false &&
+    (mapping.originatingRowStatus === 'READY_FOR_SUBMISSION' ||
+      mapping.originatingRowStatus === 'SUBMISSION_CREATED' ||
+      mapping.originatingRowStatus === 'SUBMITTED') &&
+    Boolean(mapping.reviewerAccountId),
+  );
+  if (exact.length === 0) return verdict;
+  // ALL historical answers to this exact question must agree, including
+  // outdated/inactive answers. Silence about conflicts is NOT permission.
+  const history = reviewedMappings.filter(mapping =>
+    mapping.rawName === reference.rawName &&
+    mapping.rawCode === reference.rawCode &&
+    mapping.rawUnit === reference.rawUnit &&
+    mapping.resourceType === reference.resourceType,
+  );
+  const ids = new Set(history.map(mapping => mapping.resourceCatalogId));
+  if (ids.size !== 1) return verdict;
+  const onlyId = exact[0].resourceCatalogId;
+  const candidate = verdict.candidates.find(c =>
+    c.resourceCatalogId === onlyId &&
+    c.type === reference.resourceType &&
+    c.identityBasis === 'RECORDED_FACT' &&
+    !c.specificationUnproved &&
+    c.specifications == null &&
+    (c.evidence.includes('REVIEWED_MAPPING_NAME_MATCH') ||
+      c.evidence.includes('REVIEWED_MAPPING_CODE_MATCH')),
+  );
+  if (!candidate || verdict.candidates.some(c =>
+    c.resourceCatalogId !== onlyId &&
+    c.identityBasis === 'RECORDED_FACT' &&
+    c.type === reference.resourceType)) return verdict;
+  return {
+    status: 'RESOLVED',
+    authority: 'VERIFIED_PRIVATE_ROW_MAPPING_REUSED',
+    resolvedResourceCatalogId: onlyId,
+    candidates: verdict.candidates,
+    reasonCodes: ['VERIFIED_PRIVATE_ROW_MAPPING_REUSED'],
+    explanation: 'Keputusan identitas privat terdahulu dipakai kembali untuk pertanyaan identik dan satuan kanonis sama. Identitas tidak dibuat ulang. Pengguna tetap memutuskan penerimaan batch; keputusan dicatat atas akun yang bertindak.',
+  };
 }
 
 export function isAdmissibleAfterExamination(

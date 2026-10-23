@@ -556,6 +556,8 @@ export class BasicPriceRowResolutionService {
         rawResourceCodeText: true,
         rawUnitText: true,
         rawSourceContext: true,
+        reasonCodes: true,
+        specificationDecisions: { select: { id: true }, take: 1 },
       },
     });
     const considered = rows.filter((row) => !excluded.has(row.id));
@@ -565,7 +567,11 @@ export class BasicPriceRowResolutionService {
     // load for the whole set, never a query per row.
     const proposals = await this.proposals.proposeForRows(
       workspaceId,
-      considered,
+      considered.map(row => ({
+        ...row,
+        hasAuditedSpecifications: (row.specificationDecisions?.length ?? 0) > 0,
+        rowCategoryConfirmedByReviewer: row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true,
+      })),
     );
 
     const eligible: Array<{
