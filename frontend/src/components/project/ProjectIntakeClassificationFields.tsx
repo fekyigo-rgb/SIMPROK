@@ -1,20 +1,28 @@
 import { useEffect, useRef, useState } from 'react';
 import { apiFetch } from '../../utils/apiClient';
 import {
-  classificationNodeIds,
   emptyIntakeClassification,
   projectIntakeChildrenQuery,
   setIntakeClassificationRoot,
-  toggleIntakeClassification,
   visibleProjectClassificationNodes,
-  type ClassificationCatalogEntry,
   type IntakeClassificationSelection,
   type ProjectClassificationNode,
 } from '../../utils/projectIntakeSelection';
+import {
+  projectKategoriOptions,
+  projectKategoriSelectionKey,
+  projectKategoriIdsFromKey,
+  projectSubkategoriOptions,
+  projectClassificationCreateSelection,
+  toggleProjectClassification,
+  type ProjectVocabularyPath,
+} from '../../utils/projectIntakeVocabulary';
+import { isVocabularyOptionId } from '../../utils/ahspBaselineVocabulary';
 
 type ProjectIntakeClassificationFieldsProps = {
   onChange: (state: {
     classificationNodeIds: string[] | null;
+    classificationVocabularyPaths: ProjectVocabularyPath[];
     blockedReason: string | null;
   }) => void;
 };
@@ -41,6 +49,10 @@ export function ProjectIntakeClassificationFields({
     level: 'JENIS_PENGADAAN' | 'KATEGORI' | 'SUBKATEGORI',
     parentId?: string,
   ): Promise<ProjectClassificationNode[]> {
+    if (level === 'SUBKATEGORI' && parentId && isVocabularyOptionId(parentId)) {
+      const parent = kategoriOptions.find((node) => node.id === parentId);
+      return parent ? projectSubkategoriOptions([], parent, selection.root?.name ?? '') : [];
+    }
     const response = await apiFetch(
       parentId
         ? projectIntakeChildrenQuery(parentId)
@@ -48,9 +60,15 @@ export function ProjectIntakeClassificationFields({
     );
     if (!response.ok) throw new Error(await readError(response));
     const body: unknown = await response.json();
-    return visibleProjectClassificationNodes(readClassificationNodes(body), level).filter(
+    const stored = visibleProjectClassificationNodes(readClassificationNodes(body), level).filter(
       (node) => isPersistedNode(node),
     );
+    if (level === 'KATEGORI' && parentId) return projectKategoriOptions(stored, parentId, roots.find((node) => node.id === parentId)?.name ?? '');
+    if (level === 'SUBKATEGORI' && parentId) {
+      const parent = kategoriOptions.find((node) => node.id === parentId);
+      return parent ? projectSubkategoriOptions(stored, parent, selection.root?.name ?? '') : stored;
+    }
+    return stored;
   }
 
   async function loadRoots() {
@@ -103,13 +121,10 @@ export function ProjectIntakeClassificationFields({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rootId]);
 
-  const kategoriKey = selection.picks
-    .filter((pick) => pick.level === 'KATEGORI')
-    .map((pick) => pick.id)
-    .join('|');
+  const kategoriKey = projectKategoriSelectionKey(selection.picks);
 
   useEffect(() => {
-    const ids = kategoriKey ? kategoriKey.split('|') : [];
+    const ids = projectKategoriIdsFromKey(kategoriKey);
     setChildren((current) => {
       const next: Record<string, ChildState> = {};
       for (const id of ids) next[id] = current[id] ?? { loaded: false, nodes: [] };
@@ -133,23 +148,18 @@ export function ProjectIntakeClassificationFields({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kategoriKey]);
 
-  const catalog: ClassificationCatalogEntry[] = selection.picks
-    .filter((pick) => pick.level === 'KATEGORI')
-    .map((pick) => ({
-      kategoriId: pick.id,
-      loaded: children[pick.id]?.loaded === true,
-      childIds: (children[pick.id]?.nodes ?? []).map((node) => node.id),
-    }));
-  const ids = classificationNodeIds(selection, catalog);
-  const idKey = ids?.join('|') ?? '';
-  const waitingForChildren = catalog.some((entry) => !entry.loaded);
+  const prepared = projectClassificationCreateSelection(selection, children);
+  const idKey = prepared.classificationNodeIds?.join('|') ?? '';
+  const pathKey = JSON.stringify(prepared.classificationVocabularyPaths);
+  const waitingForChildren = prepared.waitingForChildren;
 
   useEffect(() => {
     onChange({
       classificationNodeIds: idKey ? idKey.split('|') : null,
+      classificationVocabularyPaths: prepared.classificationVocabularyPaths,
       blockedReason: error ?? (loading || waitingForChildren ? 'Memuat klasifikasi resmi.' : null),
     });
-  }, [error, idKey, loading, onChange, waitingForChildren]);
+  }, [error, idKey, pathKey, loading, onChange, waitingForChildren]);
 
   const selectedKategori = new Set(
     selection.picks.filter((pick) => pick.level === 'KATEGORI').map((pick) => pick.id),
@@ -214,7 +224,7 @@ export function ProjectIntakeClassificationFields({
                   onChange={() => {
                     if (!selection.root) return;
                     setSelection((current) =>
-                      toggleIntakeClassification(current, {
+                      toggleProjectClassification(current, {
                         id: node.id,
                         name: node.name,
                         parentId: current.root?.id ?? '',
@@ -258,7 +268,7 @@ export function ProjectIntakeClassificationFields({
                   onChange={() => {
                     if (!node.parentId) return;
                     setSelection((current) =>
-                      toggleIntakeClassification(current, {
+                      toggleProjectClassification(current, {
                         id: node.id,
                         name: node.name,
                         parentId: node.parentId ?? '',

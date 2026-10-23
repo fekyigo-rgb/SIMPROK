@@ -23,6 +23,11 @@ import {
 import { WorkspacePermissionResolverService } from '../auth/workspace-permission-resolver.service';
 import { PERMISSIONS } from '../common/constants/permissions';
 import { ConstructionClassificationService } from '../construction-classification/construction-classification.service';
+import { JENIS_PENGADAAN_WITH_BIDANG } from '../construction-classification/jenis-pengadaan.vocabulary';
+import {
+  APPROVED_KATEGORI,
+  approvedSubkategoriFor,
+} from '../construction-classification/construction-taxonomy.vocabulary';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProgressAuthorityService } from '../progress/progress-authority.service';
 import { CreateProjectDto } from './dto/create-project.dto';
@@ -247,9 +252,76 @@ export class ProjectService {
     return new Prisma.Decimal(value);
   }
 
+  /**
+   * Reuse the existing classification service and the existing AHSP-approved
+   * vocabulary. A selection is only materialized when the human commits their
+   * project; no speculative writes on dropdown opening or checking a box.
+   * All writes share the project-creation transaction.
+   */
+  private async materializeProjectVocabularyPaths(
+    workspaceId: string,
+    selectedIds: readonly string[],
+    paths: readonly { kategori: string; subkategori?: string }[],
+    tx: Prisma.TransactionClient,
+  ): Promise<string[]> {
+    if (!paths.length) return [...selectedIds];
+    if (!this.classification) {
+      throw new BadRequestException('PROJECT_CLASSIFICATION_SERVICE_UNAVAILABLE');
+    }
+    const firstId = selectedIds[0];
+    if (!firstId) throw new BadRequestException('PROJECT_CLASSIFICATION_ROOT_REQUIRED');
+    // The existing project contract treats selection IDs as an unordered set.
+    // Reuse canonical lineage to resolve its root, rather than trusting array order.
+    const lineage = await this.classification.getLineage({ id: firstId, workspaceId }, tx);
+    const rootId = lineage.path.find(
+      (node) => node.level === ConstructionClassificationLevel.JENIS_PENGADAAN,
+    )?.id;
+    if (!rootId) throw new BadRequestException('PROJECT_CLASSIFICATION_ROOT_REQUIRED');
+    const root = await this.classification.getById({ id: rootId, workspaceId }, tx);
+    if (root.level !== ConstructionClassificationLevel.JENIS_PENGADAAN) {
+      throw new BadRequestException('PROJECT_CLASSIFICATION_ROOT_REQUIRED');
+    }
+    // Never materialize a construction baseline under nonconstruction roots.
+    // Existing AHSP-created workspace node IDs are independently allowed.
+    if (!JENIS_PENGADAAN_WITH_BIDANG.includes(root.name)) {
+      throw new BadRequestException('PROJECT_CLASSIFICATION_BASELINE_ROOT_UNSUPPORTED');
+    }
+    const resolved = [...selectedIds];
+    for (const path of paths) {
+      const kategori = path.kategori?.trim();
+      const subkategori = path.subkategori?.trim() || null;
+      if (!kategori || !APPROVED_KATEGORI.includes(kategori)) {
+        throw new BadRequestException('PROJECT_CLASSIFICATION_KATEGORI_NOT_APPROVED');
+      }
+      if (subkategori && !approvedSubkategoriFor(kategori).includes(subkategori)) {
+        throw new BadRequestException('PROJECT_CLASSIFICATION_SUBKATEGORI_NOT_APPROVED');
+      }
+      const categoryNode = await this.classification.createNode({
+        workspaceId,
+        parentId: root.id,
+        level: ConstructionClassificationLevel.KATEGORI,
+        name: kategori,
+        allowIdempotentReuse: true,
+      }, tx);
+      resolved.push(categoryNode.id);
+      if (subkategori) {
+        const subNode = await this.classification.createNode({
+          workspaceId,
+          parentId: categoryNode.id,
+          level: ConstructionClassificationLevel.SUBKATEGORI,
+          name: subkategori,
+          allowIdempotentReuse: true,
+        }, tx);
+        resolved.push(subNode.id);
+      }
+    }
+    return [...new Set(resolved)];
+  }
+
   private async assertProjectClassificationSelections(
     workspaceId: string,
     classificationNodeIds: readonly string[],
+    client?: Prisma.TransactionClient,
   ): Promise<void> {
     if (classificationNodeIds.length === 0) return;
     if (!this.classification) {
@@ -258,7 +330,9 @@ export class ProjectService {
 
     const rootIds = new Set<string>();
     for (const id of classificationNodeIds) {
-      const lineage = await this.classification.getLineage({ id, workspaceId });
+      const lineage = client
+        ? await this.classification.getLineage({ id, workspaceId }, client)
+        : await this.classification.getLineage({ id, workspaceId });
       if (!PROJECT_CLASSIFICATION_LEVELS.has(lineage.node.level)) {
         throw new BadRequestException('PROJECT_CLASSIFICATION_LEVEL_FORBIDDEN');
       }
@@ -364,7 +438,8 @@ export class ProjectService {
     workspaceId: string,
     creatorAccountId?: string,
   ) {
-    const classificationNodeIds = uniqueCanonicalIds(data.classificationNodeIds);
+    const selectedClassificationIds = uniqueCanonicalIds(data.classificationNodeIds);
+    const vocabularyPaths = data.classificationVocabularyPaths ?? [];
     const locationRegionIds = uniqueCanonicalIds(data.locationRegionIds);
 
     try {
@@ -377,10 +452,16 @@ export class ProjectService {
         throw new NotFoundException('Workspace not found');
       }
 
-      return await this.prisma.$transaction(async (tx) => {
+      // An idempotent classification race must replay the WHOLE transaction:
+      // no partial node/project writes or changes to existing engine contracts.
+      const createOnce = () => this.prisma.$transaction(async (tx) => {
+        const classificationNodeIds = await this.materializeProjectVocabularyPaths(
+          workspaceId, selectedClassificationIds, vocabularyPaths, tx,
+        );
         await this.assertProjectClassificationSelections(
           workspaceId,
           classificationNodeIds,
+          vocabularyPaths.length ? tx : undefined,
         );
         await this.assertProjectRegionSelections(locationRegionIds);
 
@@ -453,8 +534,26 @@ export class ProjectService {
           });
         }
 
-        return project;
+        return { ...project, classificationNodeIds };
       });
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        try {
+          return await createOnce();
+        } catch (error) {
+          const target = error instanceof Prisma.PrismaClientKnownRequestError
+            ? error.meta?.target
+            : null;
+          const isClassificationCollision = error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === 'P2002' &&
+            (target === 'construction_classification_nodes_workspace_identity_uidx' ||
+              (Array.isArray(target) &&
+                ['workspaceId', 'level', 'parentId', 'normalizedName'].every((column) => target.includes(column))));
+          if (!vocabularyPaths.length || attempt === 2 || !isClassificationCollision) {
+            throw error;
+          }
+        }
+      }
+      throw new InternalServerErrorException('PROJECT_CLASSIFICATION_RETRY_EXHAUSTED');
     } catch (error) {
       if (
         error instanceof NotFoundException ||
