@@ -117,6 +117,7 @@ export interface CatalogNameImpact {
   resourceCode: string | null;
   baseUnit: string;
   hasSpecifications: boolean;
+  specificationFacts: Array<{ name: string; value: string }>;
   observedVersion: string;
   impact: {
     basicPrices: number;
@@ -135,6 +136,21 @@ export const previewCatalogNameImpact = (
 ): Promise<CatalogNameImpact> =>
   requestJson<CatalogNameImpact>(
     withQuery('/basic-prices/catalog-name-impact/' + encodeURIComponent(resourceCatalogId), { proposedName }),
+  );
+
+/** BP-C3: only the existing workspace identity curator can commit a proven
+ * same-identity typography correction; the backend does all authorization. */
+export const correctActiveResourceCatalogName = (resourceCatalogId: string, input: {
+  previousName: string;
+  correctedName: string;
+  expectedUpdatedAt: string;
+  reason: string;
+  evidence: string;
+  sameIdentityConfirmed: true;
+}): Promise<{ corrected: true; previousName: string; correctedName: string }> =>
+  requestJson(
+    '/resource-observations/catalog/' + encodeURIComponent(resourceCatalogId) + '/correct-name',
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) },
   );
 
 // BP-MULTI-ACTION-01 — a private owner's governed withdrawal, not physical delete.

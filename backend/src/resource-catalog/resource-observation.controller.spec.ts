@@ -37,6 +37,7 @@ describe('ResourceObservationController — permission boundary', () => {
     'curateNew',
     'supersedeQuestion',
     'revokeQuestion',
+    'correctCatalogName',
   ] as const)(
     '%s stays curator-only: the second holder can never decide rows, teach, revoke or supersede',
     (handler) => {

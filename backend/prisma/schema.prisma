@@ -32,6 +32,7 @@ model Account {
   reviewedBasicPriceImportRowResourceMappings BasicPriceImportRowResourceMapping[] @relation("BasicPriceImportRowResourceMappingReviewer")
   basicPriceMappingReasonClarifications BasicPriceImportRowMappingReasonClarification[] @relation("BasicPriceMappingReasonClarificationActor")
   basicPriceRowCompensations                  BasicPriceImportRowResolutionCompensation[] @relation("BasicPriceImportRowCompensationActor")
+  resourceCatalogNameCorrections             ResourceCatalogNameCorrection[] @relation("ResourceCatalogNameCorrectionActor")
   basicPriceRejectedReviewReopens             BasicPriceImportRowRejectedReviewReopen[] @relation("BasicPriceRejectedReviewReopenActor")
   basicPriceCategoryDecisions                  BasicPriceImportRowCategoryDecision[] @relation("BasicPriceImportRowCategoryActor")
   basicPriceSpecificationDecisions             BasicPriceImportRowSpecificationDecision[] @relation("BasicPriceImportRowSpecificationActor")
@@ -114,6 +115,7 @@ model Workspace {
   ahspVersions                      AHSPVersion[]
   ahspSnapshots                     AHSPSnapshot[]
   resourceCatalogs                  ResourceCatalog[]
+  resourceCatalogNameCorrections     ResourceCatalogNameCorrection[]
   observedResources                 ObservedResource[]
   basicPrices                       BasicPrice[]
   priceSubmissions                  PriceSubmission[]
@@ -1655,6 +1657,7 @@ model ResourceCatalog {
   basicPriceImportRows           BasicPriceImportRow[]
   sourceIdentities               ResourceSourceIdentity[]
   importRowResourceMappings      BasicPriceImportRowResourceMapping[]
+  nameCorrections                 ResourceCatalogNameCorrection[]
   basicPriceRowCompensations      BasicPriceImportRowResolutionCompensation[]
 
   ahspResourceIdentityDecisions     AhspResourceIdentityDecision[]
@@ -1667,6 +1670,32 @@ model ResourceCatalog {
   // in the schema DSL. See migration 20260727..._rm02c1a_resource_identity_schema_foundation.
   @@index([workspaceId])
   @@map("resource_catalogs")
+}
+
+/// BP-C3: append-only proof of a curator-authorized nomenclature correction.
+ /// The resource ID, type, unit and technical specifications stay unchanged.
+ /// Source observations, Basic Prices and AHSP/BOQ references are never rewritten.
+model ResourceCatalogNameCorrection {
+  id                String   @id @default(uuid()) @db.Uuid
+  workspaceId       String   @db.Uuid
+  resourceCatalogId String   @db.Uuid
+  actorAccountId    String   @db.Uuid
+  previousName      String
+  correctedName     String
+  reason            String   @db.Text
+  evidence          String   @db.Text
+  priorUpdatedAt    DateTime
+  newUpdatedAt      DateTime
+  createdAt         DateTime @default(now())
+
+  workspace       Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  resourceCatalog ResourceCatalog @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
+  actor           Account         @relation("ResourceCatalogNameCorrectionActor", fields: [actorAccountId], references: [id], onDelete: Restrict)
+
+  @@unique([resourceCatalogId, priorUpdatedAt], map: "bp_c3_name_one_per_version")
+  @@index([workspaceId, createdAt], map: "bp_c3_name_workspace_time_idx")
+  @@index([resourceCatalogId, createdAt], map: "bp_c3_name_catalog_time_idx")
+  @@map("resource_catalog_name_corrections")
 }
 
 /// SHARED-OBSERVED-RESOURCE-01 — the ONE domain-neutral home for a resource a

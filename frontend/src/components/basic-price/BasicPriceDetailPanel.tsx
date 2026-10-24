@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { previewCatalogNameImpact, type CatalogNameImpact } from '../../api/basicPriceExplorer';
+import { previewCatalogNameImpact, correctActiveResourceCatalogName, type CatalogNameImpact } from '../../api/basicPriceExplorer';
 import { X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { enrichBasicPriceKdn, enrichCatalogBasicPriceKdn, correctPrivateBasicPrice, observePrivateBasicPrice, observePrivateKdn, correctPrivateKdn, submitPrivateBasicPrice, ImportRequestError } from '../../api/basicPriceImport';
@@ -141,6 +141,9 @@ export function BasicPriceDetailPanel({
   const [nameImpactBusy, setNameImpactBusy] = useState(false);
   const [nameImpactResult, setNameImpactResult] = useState<CatalogNameImpact | null>(null);
   const [nameImpactError, setNameImpactError] = useState<string | null>(null);
+  const [nameCorrectionReason, setNameCorrectionReason] = useState('');
+  const [nameCorrectionEvidence, setNameCorrectionEvidence] = useState('');
+  const [nameCorrectionConfirmed, setNameCorrectionConfirmed] = useState(false);
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
   const detail = useBasicPriceDetail(item.basicPriceId, detailEpoch);
@@ -418,6 +421,7 @@ export function BasicPriceDetailPanel({
                       setNameProposal(event.target.value);
                       setNameImpactResult(null);
                       setNameImpactError(null);
+                      setNameCorrectionConfirmed(false);
                     }}
                   />
                 </label>
@@ -455,8 +459,81 @@ export function BasicPriceDetailPanel({
                             ? 'Terdapat nama serupa pada identitas katalog lain. Perlu adjudikasi identitas.'
                             : 'Perubahan ini dapat mengubah makna identitas. Perlu pemeriksaan teknis.'}
                     </p>
-                    <p>Terpakai pada {nameImpactResult.impact.basicPrices} harga dasar, {nameImpactResult.impact.projectAhspResolutions} resolusi AHSP proyek, dan {nameImpactResult.impact.importRows} baris impor.</p>
-                    <p className="bp-field__help">Belum disimpan. Nama lama, ID resource, satuan, dan seluruh hubungan tetap utuh.</p>
+                    <p>Jenis: {resourceTypeLabel(nameImpactResult.resourceType as typeof item.resource.type)} · Kode: {nameImpactResult.resourceCode ?? 'Tidak ditetapkan'} · Satuan: {nameImpactResult.baseUnit}</p>
+                    {(nameImpactResult.specificationFacts?.length ?? 0) > 0 ? (
+                      <p>Spesifikasi katalog: {nameImpactResult.specificationFacts.map((entry) => entry.name + ': ' + entry.value).join(' · ')}</p>
+                    ) : (
+                      <p className="bp-field__help">Tidak ada spesifikasi terverifikasi yang dapat ditampilkan. Cocokkan identitas dengan bukti sumber sebelum memutuskan.</p>
+                    )}
+                    <p>Dipakai oleh {nameImpactResult.impact.basicPrices} Basic Price, {nameImpactResult.impact.projectAhspResolutions} resolusi AHSP proyek, {nameImpactResult.impact.importRows} baris impor, {nameImpactResult.impact.sourceIdentityRecords} catatan sumber, dan {nameImpactResult.impact.conversionRules} aturan konversi.</p>
+                    <p className="bp-field__help">Pemeriksaan ini belum menyimpan apa pun. ID resource, satuan, dan seluruh hubungan tetap utuh.</p>
+                    {nameImpactResult.verdict === 'SPELLING_ONLY_PREVIEW' &&
+                      hasPermission('AHSP_RESOURCE_IDENTITY_DECIDE') ? (
+                      <div style={{ paddingTop: 10 }}>
+                        <p><strong>Koreksi nama katalog — khusus kurator identitas</strong></p>
+                        <p className="bp-field__help">Hanya pembetulan penulisan pada identitas yang SAMA. Perubahan mutu, kapasitas, jenis dan satuan tidak boleh lewat pintu ini.</p>
+                        <label className="bp-field">
+                          <span className="bp-field__label">Alasan koreksi</span>
+                          <textarea
+                            className="bp-input"
+                            value={nameCorrectionReason}
+                            maxLength={500}
+                            onChange={(event) => setNameCorrectionReason(event.target.value)}
+                          />
+                        </label>
+                        <label className="bp-field">
+                          <span className="bp-field__label">Bukti bahwa identitas item tetap sama</span>
+                          <textarea
+                            className="bp-input"
+                            value={nameCorrectionEvidence}
+                            maxLength={2000}
+                            onChange={(event) => setNameCorrectionEvidence(event.target.value)}
+                          />
+                        </label>
+                        <label className="bp-field">
+                          <input
+                            type="checkbox"
+                            checked={nameCorrectionConfirmed}
+                            onChange={(event) => setNameCorrectionConfirmed(event.target.checked)}
+                          />
+                          <span className="bp-field__label">Saya sudah memeriksa spesifikasi dan memastikan ini resource yang sama.</span>
+                        </label>
+                        <button
+                          type="button"
+                          className="bp-btn bp-btn--primary"
+                          disabled={nameImpactBusy ||
+                            !nameCorrectionConfirmed ||
+                            nameCorrectionReason.trim().length < 10 ||
+                            nameCorrectionEvidence.trim().length < 20}
+                          onClick={async () => {
+                            setNameImpactBusy(true);
+                            setNameImpactError(null);
+                            try {
+                              await correctActiveResourceCatalogName(item.resource.id, {
+                                previousName: nameImpactResult.currentName,
+                                correctedName: nameImpactResult.proposedName,
+                                expectedUpdatedAt: nameImpactResult.observedVersion,
+                                reason: nameCorrectionReason,
+                                evidence: nameCorrectionEvidence,
+                                sameIdentityConfirmed: true,
+                              });
+                              setNameImpactOpen(false);
+                              setNameImpactResult(null);
+                              setNameCorrectionConfirmed(false);
+                              onCurrentChanged?.(item.basicPriceId, 'Nama katalog berhasil dikoreksi; identitas, satuan dan harga tetap.');
+                            } catch {
+                              setNameImpactError('Koreksi ditolak atau kondisi katalog sudah berubah. Periksa dampak ulang; tidak ada penyimpanan sebagian.');
+                              setNameImpactResult(null);
+                              setNameCorrectionConfirmed(false);
+                            } finally {
+                              setNameImpactBusy(false);
+                            }
+                          }}
+                        >
+                          {nameImpactBusy ? 'Menyimpan koreksi...' : 'Konfirmasi & Simpan Koreksi Nama'}
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

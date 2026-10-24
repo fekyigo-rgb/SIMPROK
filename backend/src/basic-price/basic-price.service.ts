@@ -7,6 +7,9 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import { catalogLabelSignature } from '../resource-catalog/resource-catalog-name-correction.service';
+import { normalizeResourceName } from '../resource-catalog/resource-identity-resolution.kernel';
+import { confirmedSpecifications } from '../resource-catalog/resource-identity-specification.contract';
 import { trustedUnitContext } from '../unit-kernel/unit-kernel.contracts';
 import { GetBasicPricesDto } from './dto/get-basic-prices.dto';
 import { Prisma } from '@prisma/client';
@@ -286,14 +289,20 @@ export class BasicPriceService {
         this.prisma.resourceCatalog.findMany({
           where: { workspaceId, type: resource.type, status: 'ACTIVE', id: { not: resourceId } },
           select: { id: true, name: true, baseUnit: true },
+          take: 5001,
         }),
       ]);
-    const folded = proposal.toLocaleLowerCase('id-ID');
+    // Never claim a complete conflict preflight from a truncated candidate set.
+    if (neighbors.length > 5000) {
+      throw new ConflictException('CATALOG_NAME_PREVIEW_SCOPE_EXCEEDED');
+    }
+    const folded = normalizeResourceName(proposal);
+    const signature = catalogLabelSignature(proposal);
     const collisions = neighbors.filter((other) =>
-      other.name.trim().replace(/\s+/g, ' ').toLocaleLowerCase('id-ID') === folded,
+      normalizeResourceName(other.name) === folded ||
+      catalogLabelSignature(other.name) === signature,
     );
-    const oldTrimmed = resource.name.trim().replace(/\s+/g, ' ');
-    const identicalDisplay = oldTrimmed === proposal;
+    const sameTypographyIdentity = catalogLabelSignature(resource.name) === catalogLabelSignature(proposal);
     return {
       currentName: resource.name,
       proposedName: proposal,
@@ -301,6 +310,8 @@ export class BasicPriceService {
       resourceCode: resource.code,
       baseUnit: resource.baseUnit,
       hasSpecifications: resource.specifications !== null,
+      specificationFacts: Object.entries(confirmedSpecifications(resource.specifications) ?? {})
+        .map(([name, value]) => ({ name, value })),
       // A database timestamp is not an authorization to edit; it is evidence
       // for a future stale-write guard and is deliberately read-only here.
       observedVersion: resource.updatedAt.toISOString(),
@@ -314,10 +325,10 @@ export class BasicPriceService {
       conflictingSameTypeNames: collisions.length,
       verdict: collisions.length > 0
         ? 'IDENTITY_CONFLICT_REVIEW_REQUIRED'
-        : identicalDisplay && resource.name !== proposal
-          ? 'SPELLING_ONLY_PREVIEW'
-          : identicalDisplay
-            ? 'NO_CHANGE'
+        : resource.name === proposal
+          ? 'NO_CHANGE'
+          : sameTypographyIdentity
+            ? 'SPELLING_ONLY_PREVIEW'
             : 'IDENTITY_REVIEW_REQUIRED',
       writable: false as const,
       message: 'Pemeriksaan dampak saja. Nama katalog belum diubah; persetujuan identitas dan jurnal koreksi masih diwajibkan.',
