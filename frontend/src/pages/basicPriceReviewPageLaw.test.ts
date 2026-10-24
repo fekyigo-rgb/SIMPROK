@@ -472,7 +472,7 @@ test("BP-NEW-ITEM-NO-DEADEND: when admission is not offered, candidate reason is
   const problem = renderable.indexOf('!admissionOffered && admissionReview?.reasonCode');
   const choices = renderable.indexOf('Pilih Item yang Sesuai Padanan');
   assert.ok(problem > 0 && problem < choices);
-  assert.match(renderable, /Item Baru BELUM dapat disimpan/u);
+  assert.match(renderable, /Periksa kandidat di bawah dan bandingkan identitas serta spesifikasinya/u);
 });
 
 test("BP-FUNCTION-03. Tetapkan Item Baru stays on server-offered review and passes the bound type, unit, and refusals", () => {
@@ -480,6 +480,27 @@ test("BP-FUNCTION-03. Tetapkan Item Baru stays on server-offered review and pass
   assert.match(renderable, /onClick=\{\(\) => void handleAdmit\(row\)\}/u);
   assert.match(page, /await admitResourceForImportRow\([\s\S]*?draft\.unit\.id,[\s\S]*?unitCorrectionAuditNote\(row, draft\.unit, draft\.unitCorrectionReason\)[\s\S]*?draft\.admitReason\.trim\(\)[\s\S]*?draft\.admitResourceType,[\s\S]*?draft\.refusedCandidateIds,[\s\S]*?typeConfirmation\.reviewBindingFingerprint,/u);
   assert.match(page, /rowIdentityAdmissionBlockReason\(/u);
+});
+
+test("BP-UX-REVISE-01. reject explicitly targets the entire imported price row, not a catalog candidate", () => {
+  assert.match(renderable, /Tolak baris harga ini/u);
+  assert.match(renderable, /Ini menolak baris harga dari impor, bukan salah satu kandidat katalog/u);
+  assert.match(page, /Anda akan menolak seluruh baris harga/u);
+  assert.match(renderable, /Alasan menolak seluruh baris harga/u);
+  assert.doesNotMatch(renderable, />Tolak<\/button>/u);
+});
+
+test("BP-UX-REVISE-02. Smart Save shows an upper bound, not a guaranteed persisted count", () => {
+  assert.match(renderable, /Simpan &amp; Gunakan \(hingga \{oneActionRowCount\}\)/u);
+  assert.match(renderable, /Jumlah akhirnya mengikuti harga yang benar-benar tersimpan/u);
+  assert.match(page, /smartSaveOutcomeMessage\(outcome\)/u);
+  assert.match(page, /await loadBatch\(false\)/u);
+});
+
+test("BP-UX-REVISE-03. blocked candidates offer the next decision, not pressure to mint a new catalog item", () => {
+  assert.match(renderable, /Periksa kandidat di bawah dan bandingkan identitas serta spesifikasinya/u);
+  assert.match(renderable, /Pilih padanan yang terbukti sama/u);
+  assert.match(renderable, /Jangan nyatakan sama atau buat item baru sebelum perbedaannya terbukti/u);
 });
 
 test("BP-FUNCTION-04. Tolak is a deliberate reason-gated writer, never just a visual close", () => {

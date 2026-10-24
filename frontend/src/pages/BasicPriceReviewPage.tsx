@@ -750,11 +750,11 @@ export function BasicPriceReviewPage() {
     const draft = draftFor(row.id);
     if (!draft.rejectOpen) {
       updateDraft(row.id, { rejectOpen: true });
-      setStatusMessage(`Tuliskan alasan penolakan untuk baris ${row.sourceRowNumber}.`);
+      setStatusMessage(`Anda akan menolak seluruh baris harga ${row.sourceRowNumber}, bukan kandidat katalog. Tuliskan alasannya jika itu keputusan Anda.`);
       return;
     }
     if (!draft.reason.trim()) {
-      setStatusMessage('Alasan penolakan wajib diisi.');
+      setStatusMessage('Alasan menolak seluruh baris harga wajib diisi.');
       return;
     }
     setIsBusy(true);
@@ -762,7 +762,7 @@ export function BasicPriceReviewPage() {
       await rejectBasicPriceImportRow(batchId, row.id, row.version, draft.reason.trim());
       forgetCompletedEdit(row.id);
       await loadBatch();
-      setStatusMessage(`Baris ${row.sourceRowNumber} ditolak.`);
+      setStatusMessage(`Seluruh baris harga ${row.sourceRowNumber} ditolak; kandidat katalog tidak ditolak oleh tindakan ini.`);
     } catch (error) {
       setStatusMessage(await recoverFromRowFailure('REJECT', row, error));
     } finally {
@@ -1217,13 +1217,13 @@ export function BasicPriceReviewPage() {
             onClick={() => void handleKeepPrivate()}
             disabled={!oneActionOffered || isBusy}
             aria-disabled={!oneActionOffered || isBusy}
-            title="Terima baris yang sudah dikenali SIMPROK, lalu simpan semuanya sebagai harga milik ruang kerja ini"
+            title="Proses hingga jumlah ini; benturan identitas dapat menahan sebagian harga. Jumlah tersimpan dipastikan dari hasil backend."
           >
-            Simpan &amp; Gunakan ({oneActionRowCount})
+            Simpan &amp; Gunakan (hingga {oneActionRowCount})
           </button>
         )}
         <p className="bp-bulk-action__help">
-          Simpan sekaligus semua harga yang sudah dipastikan SIMPROK; lainnya dapat ditinjau nanti.
+          SIMPROK memeriksa ulang sebelum menyimpan. Jumlah akhirnya mengikuti harga yang benar-benar tersimpan; benturan tetap untuk ditinjau.
         </p>
         {/*
           BP-SHARED-PROPOSAL-01 — door EXISTS vs door OPENS.
@@ -1772,9 +1772,9 @@ export function BasicPriceReviewPage() {
                         {!admissionOffered && admissionReview?.reasonCode && admissionUnavailableReason(admissionReview.reasonCode) ? (
                           <div className="bp-field__help">
                             <p role="status">{row.machineProposal?.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED')
-                              ? 'Spesifikasi dari berkas belum diperiksa. Item ini belum bisa disimpan atau dinyatakan identik.'
+                              ? 'Periksa spesifikasi yang tercantum pada berkas dan kandidat katalog. Jangan nyatakan sama atau buat item baru sebelum perbedaannya terbukti.'
                               : admissionReview.reasonCode === 'IDENTITY_CANDIDATE_BLOCKED'
-                              ? 'Item Baru BELUM dapat disimpan: SIMPROK menemukan calon padanan yang belum terbukti berbeda. Periksa daftar kandidat di bawah sebelum menetapkan identitas baru.'
+                              ? 'Periksa kandidat di bawah dan bandingkan identitas serta spesifikasinya. Pilih padanan yang terbukti sama; item baru hanya jika perbedaannya terbukti.'
                               : 'Item baru belum tersedia: ' + admissionUnavailableReason(admissionReview.reasonCode)}</p>
                             {admissionReview.reasonCode === 'IDENTITY_CANDIDATE_BLOCKED' ? (
                               <details className="bp-details">
@@ -2039,11 +2039,12 @@ export function BasicPriceReviewPage() {
                         ) : null}
                         {draft.rejectOpen ? (
                           <label className="bp-field">
-                            <span className="bp-field__label">Alasan tolak</span>
-                            <input className="bp-input" type="text" placeholder="Mengapa baris ini ditolak?" value={draft.reason} onChange={(event) => updateDraft(row.id, { reason: event.target.value })} />
+                            <span className="bp-field__label">Alasan menolak seluruh baris harga</span>
+                            <input className="bp-input" type="text" placeholder="Mengapa baris harga ini ditolak?" value={draft.reason} onChange={(event) => updateDraft(row.id, { reason: event.target.value })} />
+                            <span className="bp-field__help">Ini menolak baris harga dari impor, bukan salah satu kandidat katalog.</span>
                           </label>
                         ) : null}
-                        <button type="button" className="bp-btn bp-btn--danger-quiet" onClick={() => void handleReject(row)} disabled={isBusy} aria-disabled={isBusy}>Tolak</button>
+                        <button type="button" className="bp-btn bp-btn--danger-quiet" onClick={() => void handleReject(row)} disabled={isBusy} aria-disabled={isBusy}>Tolak baris harga ini</button>
                       </>
                     ) : <p className="bp-field__help">{rowStateLabel(row)}</p>}
                     {row.mappingReasonAudit ? (

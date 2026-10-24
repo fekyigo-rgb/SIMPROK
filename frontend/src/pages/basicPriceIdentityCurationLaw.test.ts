@@ -65,7 +65,7 @@ test('BP205-PRIVATE-06 no private price auto-publishing through identity review'
 
 test('BP205-CALM-01 blocked identity explains why new resource cannot be made without duplicated candidate list', () => {
   assert.match(page, /<div className="bp-field__help">\s*<p role="status">\{row.machineProposal\?\.blockingFacts.includes\('SOURCE_SPECIFICATION_UNVERIFIED'\)/u);
-  assert.match(page, /Spesifikasi dari berkas belum diperiksa\. Item ini belum bisa disimpan atau dinyatakan identik\./u);
+  assert.match(page, /Periksa spesifikasi yang tercantum pada berkas dan kandidat katalog/u);
   assert.match(page, /<details className="bp-details">\s*<summary>Mengapa item baru belum dapat dibuat\?<\/summary>/u);
   assert.match(page, /Spesifikasi belum terbukti/u);
   assert.doesNotMatch(page, /Jika item itu berbeda, perbaiki nama atau kode sumber/u);

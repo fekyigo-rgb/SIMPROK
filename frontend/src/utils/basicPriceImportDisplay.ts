@@ -2887,7 +2887,7 @@ export const UNKNOWN_REQUIRED_FACT_MESSAGE =
  * as two successes, so prices that were already kept are named as such.
  */
 export const smartSaveOutcomeMessage = (outcome: {
-  accepted: { acceptedCount: number; remainingEligible: number };
+  accepted: { acceptedCount: number; remainingEligible: number; skippedCount?: number };
   kept: { createdCount: number; alreadyPrivateCount: number };
 }): string => {
   const parts: string[] = [];
@@ -2904,6 +2904,14 @@ export const smartSaveOutcomeMessage = (outcome: {
   if (outcome.kept.createdCount === 0 && outcome.kept.alreadyPrivateCount > 0) {
     parts.push(
       `${outcome.kept.alreadyPrivateCount} harga memang sudah tersimpan sebelumnya, jadi tidak ada yang digandakan.`,
+    );
+  }
+  // The writer can return NEEDS_REVIEW for a same-identity collision without
+  // throwing. Never call a skipped row a price created, and never guess its
+  // specific reason: refresh reveals the authoritative per-row collision.
+  if ((outcome.accepted.skippedCount ?? 0) > 0) {
+    parts.push(
+      `${outcome.accepted.skippedCount} baris belum diterima otomatis; periksa Perlu Tinjauan untuk alasan yang tercatat.`,
     );
   }
   if (outcome.accepted.remainingEligible > 0) {
