@@ -44,6 +44,8 @@ export interface AhspResolutionWire {
    * single extra request.
    */
   reasonCodes?: readonly string[] | null;
+  /** Existing server-side explanation, including the AHSP's own work context. */
+  explanation?: string | null;
 }
 
 export interface AhspComponentRow {
@@ -65,6 +67,8 @@ export interface AhspComponentRow {
    * longer the same colour of problem here.
    */
   trust: ResourceTrustView;
+  /** Details only for the user to open, never a new identity decision. */
+  explanation: string | null;
 }
 
 export interface AhspComponentGroup {
@@ -266,6 +270,7 @@ export const groupAhspComposition = (
         // human. Removing it would make the analysis look complete when it
         // is not.
         unresolved: Boolean(row.status) && row.status !== 'RESOLVED',
+        explanation: (row.explanation ?? '').trim() || null,
         // Server verdict in, reader's language out. Nothing is inferred from
         // the component's name, unit or position in the recipe.
         trust: toResourceTrust({

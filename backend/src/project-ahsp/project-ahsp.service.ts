@@ -427,7 +427,9 @@ export class ProjectAhspService {
           // RAB-TRUTH-01H — the ownership as it stands right now, read on the
           // same transaction that freezes this calculation context, so the
           // occurrence records the authority that actually formed it.
-          ahsp: { select: { ownershipType: true } },
+          ahsp: {
+            select: { ownershipType: true, workType: true, methodName: true },
+          },
         },
       });
       if (!version || version.resources.length === 0) {

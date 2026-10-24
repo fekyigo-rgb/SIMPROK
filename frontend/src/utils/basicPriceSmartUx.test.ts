@@ -297,6 +297,28 @@ test("the outcome names both halves of the one command", () => {
   assert.match(message, /13 harga tersimpan/u);
 });
 
+test("a same-identity collision never appears as a successful stored price", () => {
+  const message = smartSaveOutcomeMessage({
+    accepted: { acceptedCount: 59, skippedCount: 1, remainingEligible: 0 },
+    kept: { createdCount: 59, alreadyPrivateCount: 0 },
+  });
+  assert.match(message, /59 harga tersimpan dan siap dipakai/u);
+  assert.match(message, /1 baris belum diterima otomatis/u);
+  assert.match(message, /periksa Perlu Tinjauan/u);
+  assert.doesNotMatch(message, /60 harga tersimpan/u);
+  assert.doesNotMatch(message, /pasti.*duplikat/iu);
+});
+
+test("a skipped row with no newly saved prices is still reported", () => {
+  const message = smartSaveOutcomeMessage({
+    accepted: { acceptedCount: 0, skippedCount: 1, remainingEligible: 0 },
+    kept: { createdCount: 0, alreadyPrivateCount: 13 },
+  });
+  assert.match(message, /sudah tersimpan sebelumnya/u);
+  assert.match(message, /1 baris belum diterima otomatis/u);
+  assert.doesNotMatch(message, /13 harga tersimpan dan siap dipakai/u);
+});
+
 test("pressing twice does not read as two successes", () => {
   const message = smartSaveOutcomeMessage({
     accepted: { acceptedCount: 0, remainingEligible: 0 },

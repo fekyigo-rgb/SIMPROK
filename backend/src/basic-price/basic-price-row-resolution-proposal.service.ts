@@ -16,6 +16,9 @@ import {
 } from '../resource-catalog/resource-identity-resolution.service';
 import {
   ResourceIdentityCandidate,
+  isEvidenceBoundSpecificVariantOfGeneral,
+  reuseExactPrivateReviewedMapping,
+  categoryProvenByExactPriorReview,
   type ResourceIdentityResolution,
 } from '../resource-catalog/resource-identity-resolution.kernel';
 import { candidateContextDigest } from '../resource-catalog/ghx-candidate-context';
@@ -26,7 +29,7 @@ import {
 import { identicalQuestionKey } from '../resource-catalog/identical-question-key';
 
 export const BASIC_PRICE_ADMISSION_REVIEW_POLICY_VERSION =
-  'B02A_BASIC_PRICE_ADMISSION_REVIEW_V1';
+  'B02A_BASIC_PRICE_ADMISSION_REVIEW_V3_SCOPE';
 
 export type BasicPriceAdmissionCandidateDisposition =
   | 'HUMAN_REFUSABLE'
@@ -60,6 +63,10 @@ export interface BasicPriceAdmissionQuestionInput {
   rawUnitText: string | null;
   sourceSection: ResourceType;
   sourceSectionProvenance: string | null;
+  /** Audited reviewer confirmation for THIS source row, not the workbook. */
+  rowCategoryConfirmedByReviewer?: boolean;
+  /** Server-owned, audited product facts — not workbook assumptions. */
+  confirmedSpecifications?: Record<string, string> | null;
 }
 
 /**
@@ -79,6 +86,8 @@ export function buildBasicPriceAdmissionReview(
     question.sourceSectionProvenance === 'SOURCE_SECTION_TITLE';
   const uploaderMayConfirmType =
     question.sourceSectionProvenance === 'UPLOADER_DECLARED';
+  const reviewedRowCategory =
+    uploaderMayConfirmType && question.rowCategoryConfirmedByReviewer === true;
   const authoritativeOverride =
     sourceTypeProven && effectiveResourceType !== question.sourceSection;
   const digest = candidateContextDigest(
@@ -95,11 +104,26 @@ export function buildBasicPriceAdmissionReview(
       let disposition: BasicPriceAdmissionCandidateDisposition = 'BLOCKED';
       const crossTypeWeakEvidence =
         uploaderMayConfirmType && candidate.type !== effectiveResourceType;
+      // Only an audited per-row type confirmation may permit explicit human
+      // refusal of cross-family NAME-ONLY hints. Exact/recorded facts still BLOCK.
+      const verifiedSpecificScope =
+        (sourceTypeProven || reviewedRowCategory) &&
+        isEvidenceBoundSpecificVariantOfGeneral({
+          rawName: question.rawResourceNameText,
+          rawCode: question.rawResourceCodeText,
+          rawUnit: question.rawUnitText,
+          resourceType: effectiveResourceType,
+          confirmedSpecifications: question.confirmedSpecifications ?? null,
+        }, candidate);
+      const reviewedWeakCrossType =
+        reviewedRowCategory &&
+        effectiveResourceType === question.sourceSection &&
+        candidate.identityBasis === 'NAME_SIMILARITY_ONLY';
       if (
-        !crossTypeWeakEvidence &&
+        (!crossTypeWeakEvidence || reviewedWeakCrossType) &&
         selectableCandidateIds.has(candidate.resourceCatalogId)
       ) {
-        if (candidate.identityBasis === 'NAME_SIMILARITY_ONLY') {
+        if (candidate.identityBasis === 'NAME_SIMILARITY_ONLY' || verifiedSpecificScope) {
           disposition = 'HUMAN_REFUSABLE';
         } else if (candidate.identityBasis === 'RULED_OUT') {
           disposition = 'MACHINE_RULED_OUT';
@@ -143,6 +167,8 @@ export function buildBasicPriceAdmissionReview(
         question.rawUnitText,
         question.sourceSection,
         question.sourceSectionProvenance,
+        reviewedRowCategory,
+        question.confirmedSpecifications ?? null,
         effectiveResourceType,
         RESOURCE_IDENTITY_POLICY_VERSION,
         questionKey,
@@ -167,7 +193,8 @@ export function buildBasicPriceAdmissionReview(
     humanRefusableCandidateIds.length + machineRuledOutCandidateIds.length ===
       resolution.candidates.length;
   const typeAuthorityValid =
-    (sourceTypeProven && !authoritativeOverride) || uploaderMayConfirmType;
+    ((sourceTypeProven && !authoritativeOverride) || uploaderMayConfirmType) &&
+    (!reviewedRowCategory || effectiveResourceType === question.sourceSection);
   const offered = typeAuthorityValid && (machineExhausted || examinedNameOnly);
   const reasonCode = offered
     ? null
@@ -424,6 +451,8 @@ export interface BasicPriceRowResourceProposal {
 
 export interface BasicPriceRowMachineProposal {
   rowId: string;
+  /** Private category review reused; NOT a new reviewer decision on this row. */
+  categoryReusedFromPriorReview?: boolean;
   unit: BasicPriceRowUnitProposal;
   resource: BasicPriceRowResourceProposal;
   /**
@@ -452,6 +481,8 @@ export interface BasicPriceRowProposalInput {
   sourceSection: ResourceType | null;
   /** Only UPLOADER_DECLARED may be corrected by exact contrary catalog proof. */
   sourceSectionProvenance?: string | null;
+  /** Server-owned audited category confirmation for this row. */
+  rowCategoryConfirmedByReviewer?: boolean;
   rawResourceNameText: string;
   rawResourceCodeText: string | null;
   rawUnitText: string | null;
@@ -459,6 +490,11 @@ export interface BasicPriceRowProposalInput {
   rawSourceContext?: unknown;
   /** Optional audited decision, scoped to this row and supplied only by server. */
   confirmedSpecifications?: Record<string, string> | null;
+  /** Set explicitly by the server's actual specification ledger lookup. */
+  hasAuditedSpecifications?: boolean;
+  sourceRowNumber?: number;
+  rawSourceCategoryName?: string | null;
+  rawSourceCategoryCode?: string | null;
   batchId?: string;
   rowVersion?: number;
   sourceSha256?: string;
@@ -603,11 +639,16 @@ export class BasicPriceRowResolutionProposalService {
           rawUnitText: row.rawUnitText,
           sourceSection: row.sourceSection,
           sourceSectionProvenance: row.sourceSectionProvenance ?? null,
-        };
+          rowCategoryConfirmedByReviewer: row.rowCategoryConfirmedByReviewer === true,
+          confirmedSpecifications: row.confirmedSpecifications ?? null,
+         };
       const sourceTypeProven =
         question.sourceSectionProvenance === 'SOURCE_ROW_CATEGORY' ||
         question.sourceSectionProvenance === 'SOURCE_SECTION_TITLE';
-      const effectiveTypes: ResourceType[] = sourceTypeProven
+      const categoryPinnedByAudit =
+        question.sourceSectionProvenance === 'UPLOADER_DECLARED' &&
+        question.rowCategoryConfirmedByReviewer === true;
+      const effectiveTypes: ResourceType[] = sourceTypeProven || categoryPinnedByAudit
         ? [question.sourceSection]
         : question.sourceSectionProvenance === 'UPLOADER_DECLARED'
           ? [ResourceType.LABOR, ResourceType.MATERIAL, ResourceType.EQUIPMENT]
@@ -669,15 +710,80 @@ export class BasicPriceRowResolutionProposalService {
     for (const row of rows) {
       const unit = unitByRow.get(row.id)!;
       const resource = resourceByRow.get(row.id)!;
-      proposals.set(
-        row.id,
-        this.compose(row, unit, {
-          ...resource,
-          admissibleForResolve:
-            resource.resourceCatalogId !== null &&
-            admissible.has(resource.resourceCatalogId),
-        }),
-      );
+      const previousCategoryProven =
+        row.sourceSectionProvenance === 'UPLOADER_DECLARED' &&
+        row.rowCategoryConfirmedByReviewer !== true &&
+        !row.rawSourceCategoryName?.trim() &&
+        !row.rawSourceCategoryCode?.trim() &&
+        categoryProvenByExactPriorReview(
+          {
+            rawName: row.rawResourceNameText,
+            rawCode: row.rawResourceCodeText,
+            rawUnit: row.rawUnitText,
+            resourceType: row.sourceSection,
+            sourceSha256: row.sourceSha256,
+            sourceRowNumber: row.sourceRowNumber,
+            hasAuditedSpecifications: row.hasAuditedSpecifications,
+          },
+          evidence.reviewedMappings,
+        );
+      const categoryProven =
+        row.sourceSectionProvenance === 'SOURCE_ROW_CATEGORY' ||
+        row.sourceSectionProvenance === 'SOURCE_SECTION_TITLE' ||
+        row.rowCategoryConfirmedByReviewer === true ||
+        previousCategoryProven;
+      // Reuse a SAME-QUESTION private answer only when its prior audited
+      // canonical unit is also the CURRENT Unit Kernel answer. This is one
+      // kernel ruling over already-loaded evidence, not a second matcher.
+      const remembered = categoryProven &&
+        row.hasAuditedSpecifications === false &&
+        row.sourceSection !== null &&
+        resolutionByRow.has(row.id)
+        ? reuseExactPrivateReviewedMapping(
+            resolutionByRow.get(row.id)!,
+            {
+              rawName: row.rawResourceNameText,
+              rawCode: row.rawResourceCodeText,
+              rawUnit: row.rawUnitText,
+              resourceType: row.sourceSection,
+              confirmedSpecifications: row.confirmedSpecifications ?? null,
+            },
+            unit.unitDefinitionId,
+            evidence.reviewedMappings,
+          )
+        : null;
+      const chosen = remembered?.authority === 'VERIFIED_PRIVATE_ROW_MAPPING_REUSED'
+        ? remembered.candidates.find(c =>
+            c.resourceCatalogId === remembered.resolvedResourceCatalogId) ?? null
+        : null;
+      const effectiveResource = chosen && admissible.has(chosen.resourceCatalogId)
+        ? {
+            ...resource,
+            status: 'RESOLVED' as const,
+            authority: remembered!.authority,
+            resourceCatalogId: chosen.resourceCatalogId,
+            resourceName: chosen.name,
+            resourceCode: chosen.code,
+            resourceType: chosen.type,
+            resourceBaseUnit: chosen.baseUnit,
+            reasonCodes: [...remembered!.reasonCodes],
+            admissionReview: null,
+          }
+        : resource;
+      const proposed = this.compose(row, unit, {
+        ...effectiveResource,
+        admissibleForResolve:
+          effectiveResource.resourceCatalogId !== null &&
+          admissible.has(effectiveResource.resourceCatalogId),
+      });
+      // The old human audit informs the machine, but never pretends a new
+      // reviewer confirmed the receiving row in this read-only request.
+      if (previousCategoryProven) {
+        // Category may be proven even if identity stays under human review.
+        // Never turn this flag into resourceCatalogId or a forged row decision.
+        proposed.categoryReusedFromPriorReview = true;
+      }
+      proposals.set(row.id, proposed);
     }
     return proposals;
   }

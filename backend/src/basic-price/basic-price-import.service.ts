@@ -2657,6 +2657,7 @@ export class BasicPriceImportService {
           ORDER BY d."rowId", d."resultingVersion" DESC
         `);
     const rowVersions = new Map(rows.map((row) => [row.id, row.version]));
+    const auditedSpecificationRowIds = new Set(decisions.map((decision) => decision.rowId));
     const reviewedSpecsByRow = new Map<string, {
       facts: Record<string, string>; decisionKind: string; resultingVersion: number;
     }>();
@@ -2680,11 +2681,16 @@ export class BasicPriceImportService {
           sourceSha256: batch.sourceSha256,
           sourceSection: row.sourceSection,
           sourceSectionProvenance: row.sourceSectionProvenance,
+          rowCategoryConfirmedByReviewer: row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true,
           rawResourceNameText: row.rawResourceNameText,
           rawResourceCodeText: row.rawResourceCodeText,
           rawUnitText: row.rawUnitText,
           rawSourceContext: row.rawSourceContext,
           confirmedSpecifications: reviewedSpecsByRow.get(row.id)?.facts ?? null,
+          hasAuditedSpecifications: auditedSpecificationRowIds.has(row.id),
+          sourceRowNumber: row.sourceRowNumber,
+          rawSourceCategoryName: row.rawSourceCategoryName,
+          rawSourceCategoryCode: row.rawSourceCategoryCode,
         })),
     );
 

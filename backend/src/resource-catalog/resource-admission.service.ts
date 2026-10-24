@@ -274,6 +274,7 @@ export class ResourceAdmissionService {
             specifications: candidate.specifications,
           })),
         ),
+        reference,
       );
     if (!exhausted && !examined) {
       throw new ResourceAdmissionNotExhaustedError(resolution);

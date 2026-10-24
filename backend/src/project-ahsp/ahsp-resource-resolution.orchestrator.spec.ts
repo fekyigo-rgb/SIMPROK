@@ -166,14 +166,62 @@ const run = (
     coefficient: string;
     baseUnit: string;
   }>,
+  ahsp?: { workType?: string | null; methodName?: string | null },
 ) =>
   makeOrchestrator().resolveVersionResources(tx, {
     workspaceId: 'workspace-fixture',
     projectId: 'project-fixture',
     referenceRegionId: 'region-fixture',
     asOf: new Date('2026-08-13T00:00:00.000Z'),
-    version: { id: 'version-fixture', resources },
+    version: { id: 'version-fixture', resources, ahsp },
   });
+
+describe('AHSP work context is informative, NEVER a resource identity assertion', () => {
+  const generalSand = [{
+    id: 'ahsp-sand-general',
+    resourceId: 'Pasir',
+    resourceType: 'MATERIAL',
+    coefficient: '0.25',
+    baseUnit: 'M3',
+  }];
+
+  it('preserves general AHSP wording and refuses speculative identity while explaining the source work', async () => {
+    const [result] = await run(generalSand, {
+      workType: 'B.01',
+      methodName: 'Pekerjaan Pasangan Batu Kali dengan Adukan',
+    });
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.selectedBasicPriceId).toBeNull();
+    expect(result.rawAhspResourceRef).toBe('Pasir');
+    expect(result.reasonCodes).toContain('RESOURCE_NOT_FOUND');
+    expect(result.explanation).toContain('Pekerjaan Pasangan Batu Kali dengan Adukan');
+    expect(result.explanation).toContain('bukan bukti kesamaan identitas ResourceCatalog');
+  });
+
+  it('does not fabricate context when the original AHSP parent has no description', async () => {
+    const [result] = await run(generalSand, { workType: 'B.01', methodName: null });
+    expect(result.explanation).not.toContain('Konteks pekerjaan AHSP:');
+    expect(result.status).toBe('UNRESOLVED');
+  });
+
+  it('does not change the selected price, identity or money for a proven resource', async () => {
+    const person = [{
+      id: 'ahsp-person-context-control',
+      resourceId: 'Pekerja',
+      resourceType: 'LABOR',
+      coefficient: '0.2914',
+      baseUnit: 'jam',
+    }];
+    const [original] = await run(person);
+    const [withContext] = await run(person, {
+      methodName: 'Pekerjaan pasangan batu kali',
+    });
+    expect(withContext.status).toBe(original.status);
+    expect(withContext.reasonCodes).toEqual(original.reasonCodes);
+    expect(withContext.selectedBasicPriceId).toBe(original.selectedBasicPriceId);
+    expect(withContext.adaptedPriceValue).toBe(original.adaptedPriceValue);
+  });
+});
 
 describe('AHSP resource resolution — trusted unit context', () => {
   it('reads "jam" on a LABOR line as the PERSON hour and prices it', async () => {

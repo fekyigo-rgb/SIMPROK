@@ -472,7 +472,7 @@ test("BP-NEW-ITEM-NO-DEADEND: when admission is not offered, candidate reason is
   const problem = renderable.indexOf('!admissionOffered && admissionReview?.reasonCode');
   const choices = renderable.indexOf('Pilih Item yang Sesuai Padanan');
   assert.ok(problem > 0 && problem < choices);
-  assert.match(renderable, /Item Baru BELUM dapat disimpan/u);
+  assert.match(renderable, /Periksa kandidat di bawah dan bandingkan identitas serta spesifikasinya/u);
 });
 
 test("BP-FUNCTION-03. Tetapkan Item Baru stays on server-offered review and passes the bound type, unit, and refusals", () => {
@@ -480,6 +480,27 @@ test("BP-FUNCTION-03. Tetapkan Item Baru stays on server-offered review and pass
   assert.match(renderable, /onClick=\{\(\) => void handleAdmit\(row\)\}/u);
   assert.match(page, /await admitResourceForImportRow\([\s\S]*?draft\.unit\.id,[\s\S]*?unitCorrectionAuditNote\(row, draft\.unit, draft\.unitCorrectionReason\)[\s\S]*?draft\.admitReason\.trim\(\)[\s\S]*?draft\.admitResourceType,[\s\S]*?draft\.refusedCandidateIds,[\s\S]*?typeConfirmation\.reviewBindingFingerprint,/u);
   assert.match(page, /rowIdentityAdmissionBlockReason\(/u);
+});
+
+test("BP-UX-REVISE-01. reject explicitly targets the entire imported price row, not a catalog candidate", () => {
+  assert.match(renderable, /Tolak baris harga ini/u);
+  assert.match(renderable, /Ini menolak baris harga dari impor, bukan salah satu kandidat katalog/u);
+  assert.match(page, /Anda akan menolak seluruh baris harga/u);
+  assert.match(renderable, /Alasan menolak seluruh baris harga/u);
+  assert.doesNotMatch(renderable, />Tolak<\/button>/u);
+});
+
+test("BP-UX-REVISE-02. Smart Save shows an upper bound, not a guaranteed persisted count", () => {
+  assert.match(renderable, /Simpan &amp; Gunakan \(hingga \{oneActionRowCount\}\)/u);
+  assert.match(renderable, /Jumlah akhirnya mengikuti harga yang benar-benar tersimpan/u);
+  assert.match(page, /smartSaveOutcomeMessage\(outcome\)/u);
+  assert.match(page, /await loadBatch\(false\)/u);
+});
+
+test("BP-UX-REVISE-03. blocked candidates offer the next decision, not pressure to mint a new catalog item", () => {
+  assert.match(renderable, /Periksa kandidat di bawah dan bandingkan identitas serta spesifikasinya/u);
+  assert.match(renderable, /Pilih padanan yang terbukti sama/u);
+  assert.match(renderable, /Jangan nyatakan sama atau buat item baru sebelum perbedaannya terbukti/u);
 });
 
 test("BP-FUNCTION-04. Tolak is a deliberate reason-gated writer, never just a visual close", () => {
@@ -501,8 +522,8 @@ test("BP-EDIT-SNAPSHOT-01. one corrected row name drives BOTH decision doors", (
   assert.match(page, /const changeWorkingName = \(row: BasicPriceImportRowSummary, value: string\)/u);
   assert.match(page, /correctedCanonicalName: value, resource: null, resourcePending: false/u);
   assert.match(renderable, /onChange=\{\(event\) => changeWorkingName\(row, event\.target\.value\)\}/u);
-  assert.match(renderable, /initialQuery=\{\(draft\.correctedCanonicalName \?\? row\.name\)/u);
-  assert.match(renderable, /key=\{`\$\{row\.id\}:\$\{draft\.correctedCanonicalName \?\? row\.name\}`\}/u);
+  assert.match(renderable, /initialQuery=\{\(candidateSearchSeeds\[row\.id\]\?\.name \?\? draft\.correctedCanonicalName \?\? row\.name\)/u);
+  assert.match(renderable, /key=\{\[row\.id, candidateSearchSeeds\[row\.id\]\?\.id \?\? draft\.correctedCanonicalName \?\? row\.name\]\.join\(':'\)\}/u);
   const search = readFileSync('src/components/basic-price/CatalogSearchSelect.tsx', 'utf8');
   assert.match(search, /const \[query, setQuery\] = useState\(initialQuery\)/u);
   assert.match(search, /const \[hasInteracted, setHasInteracted\] = useState\(initialQuery\.trim\(\)\.length >= 2\)/u);
@@ -602,7 +623,7 @@ test("BP-ACTIVATION-01. review facts flow from server kernel proposals to the vi
   const proposer = readFileSync("../backend/src/basic-price/basic-price-row-resolution-proposal.service.ts", "utf8");
 
   assert.match(page, /const result = await getBasicPriceImportBatch\(batchId\);\s*setBatch\(result\)/u);
-  assert.ok(api.includes("apiFetch(`/basic-price-imports/${batchId}`)"));
+  assert.ok(api.includes("apiFetch(`/basic-price-imports/${batchId}`, { cache: 'no-store' })"));
   assert.match(controller, /@Get\(':batchId'\)[\s\S]*?return this\.importService\.getBatch\(workspaceId, batchId, currentAccountId\)/u);
   assert.match(service, /const proposals = await this\.proposals\.proposeForRows\(/u);
   assert.match(service, /machineProposal: proposals\?\.get\(r\.id\) \?\? null/u);
@@ -659,7 +680,7 @@ test("BP-EDIT-TRUTH-02. material changes require confirmation before authoritati
 });
 
 test("BP-CANDIDATE-DOOR-01. blocked admissions explain candidates without minting duplicate identities", () => {
-  assert.match(renderable, /Bandingkan kandidat dan bukti identitas/u);
+  assert.match(renderable, /Mengapa item baru belum dapat dibuat/u);
   assert.match(renderable, /candidate\.admissionDisposition === 'BLOCKED'/u);
   assert.match(renderable, /Hasil pencarian kosong belum membuktikan bahwa item ini baru/u);
   assert.match(renderable, /memuat ulang halaman saja tidak membuktikan perbedaan tersebut/u);
