@@ -42,7 +42,11 @@ export interface ResolveVersionResourcesInput {
   referenceRegionId: string;
   /** The business pricing date this resolution answers for. Never "today". */
   asOf: Date;
-  version: { id: string; resources: readonly any[] };
+  version: {
+    id: string;
+    resources: readonly any[];
+    ahsp?: { workType?: string | null; methodName?: string | null } | null;
+  };
 }
 
 /**
@@ -118,6 +122,18 @@ export class AhspResourceResolutionOrchestrator {
     input: ResolveVersionResourcesInput,
   ): Promise<ResolutionCreate[]> {
     const { asOf, version } = input;
+    // The AHSP parent already owns its work description. Reuse that source
+    // context to explain a held candidate without treating an application
+    // (e.g. mortar) as proof that two catalog resource identities are equal.
+    // Missing context remains missing; no heuristic or brand is invented.
+    const workDescription = version.ahsp?.methodName?.replace(/\s+/g, ' ').trim() ?? '';
+    const workCode = version.ahsp?.workType?.replace(/\s+/g, ' ').trim() ?? '';
+    // A code without a work description is NOT evidence of material function.
+    const workContextNote = workDescription.length > 0
+      ? ` Konteks pekerjaan AHSP: ${JSON.stringify(
+          [workCode, workDescription].filter(Boolean).join(' — ').slice(0, 240),
+        )}. Gunakan sebagai petunjuk kecocokan fungsi saat meninjau kandidat; konteks bukan bukti kesamaan identitas ResourceCatalog.`
+      : '';
 
     // GHX-01: the version's AHSP source facts are known up front, so governed
     // human decisions for all of them are preloaded in ONE bounded query here
@@ -291,7 +307,7 @@ for (const resource of version.resources) {
       resolutionMethod:
         ProjectAhspResolutionMethod.DETERMINISTIC_ATTEMPTED,
       reasonCodes: [...identity.reasonCodes],
-      explanation: identity.explanation,
+      explanation: identity.explanation + workContextNote,
       policyVersion: E1A_RESOLUTION_POLICY_VERSION,
     });
     continue;
@@ -446,7 +462,8 @@ for (const resource of version.resources) {
   // identity first, by its own authority, then pricing. Neither kernel gains the
   // other's job — the price kernel still knows nothing about representation
   // ties, and the identity kernel still knows nothing about money.
-  const explanation = `${identity.explanation} ${result.explanation}`;
+  const explanation = `${identity.explanation} ${result.explanation}` +
+    (result.status === 'RESOLVED' ? '' : workContextNote);
   const resolved =
     result.status === 'RESOLVED' &&
     selected !== null &&

@@ -816,6 +816,34 @@ describe('B02A server-owned admission review binding', () => {
     expect(asMaterial.humanRefusableCandidateIds).toEqual(['material-1']);
   });
 
+  it('permits refusal of weak cross-family candidates only after audited per-row category confirmation', () => {
+    const confirmed = { ...question, sourceSectionProvenance: 'UPLOADER_DECLARED', rowCategoryConfirmedByReviewer: true };
+    const material = candidate('material-weak', 'NAME_SIMILARITY_ONLY');
+    const equipment = { ...candidate('equipment-weak', 'NAME_SIMILARITY_ONLY'), type: 'EQUIPMENT' };
+    const candidates = verdict([material, equipment]);
+    const selectable = new Set(['material-weak', 'equipment-weak']);
+    const confirmedReview = buildBasicPriceAdmissionReview(confirmed, candidates, selectable, ResourceType.MATERIAL);
+    expect(confirmedReview.offered).toBe(true);
+    expect(confirmedReview.blockedCandidateIds).toEqual([]);
+    expect(confirmedReview.humanRefusableCandidateIds).toEqual(['equipment-weak', 'material-weak']);
+    const unconfirmed = buildBasicPriceAdmissionReview({ ...confirmed, rowCategoryConfirmedByReviewer: false }, candidates, selectable, ResourceType.MATERIAL);
+    expect(unconfirmed.offered).toBe(false);
+    expect(unconfirmed.blockedCandidateIds).toEqual(['equipment-weak']);
+    expect(confirmedReview.reviewBindingFingerprint).not.toBe(unconfirmed.reviewBindingFingerprint);
+    const unauthorizedOtherType = buildBasicPriceAdmissionReview(confirmed, candidates, selectable, ResourceType.EQUIPMENT);
+    expect(unauthorizedOtherType.offered).toBe(false);
+  });
+
+  it('never bypasses strong cross-family facts or inaccessible catalog rows after category confirmation', () => {
+    const confirmed = { ...question, sourceSectionProvenance: 'UPLOADER_DECLARED', rowCategoryConfirmedByReviewer: true };
+    const strong = { ...candidate('evidence-other-type', 'RECORDED_FACT'), type: 'EQUIPMENT' };
+    const reviewedStrong = buildBasicPriceAdmissionReview(confirmed, verdict([strong]), new Set(['evidence-other-type']), ResourceType.MATERIAL);
+    expect(reviewedStrong.offered).toBe(false);
+    expect(reviewedStrong.blockedCandidateIds).toEqual(['evidence-other-type']);
+    const unavailable = buildBasicPriceAdmissionReview(confirmed, verdict([candidate('global-only', 'NAME_SIMILARITY_ONLY')]), new Set(), ResourceType.MATERIAL);
+    expect(unavailable.offered).toBe(false);
+    expect(unavailable.blockedCandidateIds).toEqual(['global-only']);
+  });
   it('blocks overriding a source-authoritative type', () => {
     const review = buildBasicPriceAdmissionReview(
       question,

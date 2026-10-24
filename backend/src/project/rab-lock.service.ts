@@ -157,7 +157,12 @@ export class RabLockService {
         workspaceId: line.workspaceId,
       },
       include: {
-        ahspVersion: { include: { resources: { orderBy: { id: 'asc' } } } },
+        ahspVersion: {
+          include: {
+            resources: { orderBy: { id: 'asc' } },
+            ahsp: { select: { workType: true, methodName: true } },
+          },
+        },
         resourceResolutions: { orderBy: { id: 'asc' } },
       },
     });

@@ -28,7 +28,7 @@ import { toBasicPriceSafeCandidate } from './basic-price-row-resolution-proposal
 import { findProvenanceCandidate } from './basic-price-source-provenance.service';
 import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
-import { ResourceIdentityResolution } from '../resource-catalog/resource-identity-resolution.kernel';
+import { ResourceIdentityResolution, isEvidenceBoundSpecificVariantOfGeneral } from '../resource-catalog/resource-identity-resolution.kernel';
 import {
   ResourceAdmissionService,
   ResourceAdmissionNotExhaustedError,
@@ -156,7 +156,7 @@ export class BasicPriceRowResolutionService {
       // A matching weak uploader hint is NOT a human decision. The first explicit
       // confirmation must record actor and append-only event even when the type
       // stays MATERIAL; only an already-confirmed value is idempotent.
-      const alreadyConfirmed = row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER');
+      const alreadyConfirmed = row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true;
       if (row.sourceSection === dto.resourceType && row.sourceSectionProvenance === 'UPLOADER_DECLARED' && alreadyConfirmed) {
         return { rowId: row.id, version: row.version, resourceType: row.sourceSection, unchanged: true };
       }
@@ -241,6 +241,7 @@ export class BasicPriceRowResolutionService {
         // document truth. Resolve must be able to tell that apart from a
         // source-proven family before applying the type boundary.
         sourceSectionProvenance: string | null;
+        reasonCodes: string[];
         sourceRowNumber: number;
         rawResourceCodeText: string | null;
         rawResourceNameText: string;
@@ -248,7 +249,7 @@ export class BasicPriceRowResolutionService {
         rawSourceContext: unknown;
       }>
     >(
-      Prisma.sql`SELECT "id", "batchId", "version", "status", "proposedCanonicalPrice", "resourceCatalogId", "unitDefinitionId", "sourceSection", "sourceSectionProvenance", "sourceRowNumber", "rawResourceCodeText", "rawResourceNameText", "rawUnitText", "rawSourceContext" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE`,
+      Prisma.sql`SELECT "id", "batchId", "version", "status", "proposedCanonicalPrice", "resourceCatalogId", "unitDefinitionId", "sourceSection", "sourceSectionProvenance", "reasonCodes", "sourceRowNumber", "rawResourceCodeText", "rawResourceNameText", "rawUnitText", "rawSourceContext" FROM "basic_price_import_rows" WHERE "id" = ${rowId}::uuid FOR UPDATE`,
     );
     const row = rowLock[0];
     if (!row || row.batchId !== batchId)
@@ -528,6 +529,7 @@ export class BasicPriceRowResolutionService {
         workspaceId: true,
         status: true,
         uploadedByAccountId: true,
+        sourceSha256: true,
       },
     });
     if (!batch || batch.workspaceId !== workspaceId)
@@ -554,17 +556,37 @@ export class BasicPriceRowResolutionService {
         rawResourceNameText: true,
         rawResourceCodeText: true,
         rawUnitText: true,
+        sourceRowNumber: true,
+        rawSourceCategoryName: true,
+        rawSourceCategoryCode: true,
         rawSourceContext: true,
+        reasonCodes: true,
+        collisionType: true,
+        specificationDecisions: { select: { id: true }, take: 1 },
       },
     });
-    const considered = rows.filter((row) => !excluded.has(row.id));
+    // A previously recorded identity collision is human review, not another
+    // candidate for silent re-acceptance on every retry.
+    const considered = rows.filter(
+      (row) => !excluded.has(row.id) && row.collisionType === 'NONE',
+    );
 
     // THE SAME PROPOSAL AUTHORITY THE ROOM READ, asked again at execution time
     // so a stale screen cannot bind anything. Batched internally — one evidence
     // load for the whole set, never a query per row.
     const proposals = await this.proposals.proposeForRows(
       workspaceId,
-      considered,
+      considered.map(row => ({
+        ...row,
+        // EXACTLY the audited question context supplied by the review room.
+        // Without the source fingerprint and current version, proven private
+        // category/identity memory is shown in UI but lost on Simpan & Gunakan.
+        batchId,
+        rowVersion: row.version,
+        sourceSha256: batch.sourceSha256,
+        hasAuditedSpecifications: (row.specificationDecisions?.length ?? 0) > 0,
+        rowCategoryConfirmedByReviewer: row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true,
+      })),
     );
 
     const eligible: Array<{
@@ -617,7 +639,7 @@ export class BasicPriceRowResolutionService {
         async (tx) => {
           for (const item of chunk) {
             try {
-              await this.resolveWithinTransaction(
+              const resolved = await this.resolveWithinTransaction(
                 tx,
                 workspaceId,
                 batchId,
@@ -639,7 +661,17 @@ export class BasicPriceRowResolutionService {
                 // The batch-wide verdict taken at the instant the human pressed.
                 item.proposal,
               );
-              acceptedRowIds.push(item.rowId);
+              // The existing resolver may lawfully persist a collision as
+              // NEEDS_REVIEW rather than throwing. That is not an accepted
+              // price; only a READY+RESOLVED row counts as a success.
+              if (
+                resolved.status === 'READY_FOR_SUBMISSION' &&
+                resolved.resolutionStatus === 'RESOLVED'
+              ) {
+                acceptedRowIds.push(item.rowId);
+              } else {
+                skippedCount += 1;
+              }
             } catch (error) {
               // A ROW MAY LAWFULLY REFUSE. A same-identity collision with a row
               // bound moments ago, a stale version because someone edited it in
@@ -1062,6 +1094,7 @@ export class BasicPriceRowResolutionService {
                     id: rowId,
                     sourceSection: row.sourceSection,
                     sourceSectionProvenance: row.sourceSectionProvenance,
+                    rowCategoryConfirmedByReviewer: row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true,
                     rawResourceNameText: row.rawResourceNameText,
                     rawResourceCodeText: row.rawResourceCodeText,
                     rawUnitText: row.rawUnitText,
@@ -1399,6 +1432,7 @@ export class BasicPriceRowResolutionService {
                 sourceSha256: row.batch.sourceSha256,
                 sourceSection: row.sourceSection,
                 sourceSectionProvenance: row.sourceSectionProvenance,
+                rowCategoryConfirmedByReviewer: row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true,
                 rawResourceNameText: row.rawResourceNameText,
                 rawResourceCodeText: row.rawResourceCodeText,
                 rawUnitText: row.rawUnitText,
@@ -1460,7 +1494,16 @@ export class BasicPriceRowResolutionService {
           selectedTypeIdentity.candidates.every(
             (candidate) =>
               (candidate.identityBasis === 'NAME_SIMILARITY_ONLY' ||
-                candidate.identityBasis === 'RULED_OUT') &&
+                candidate.identityBasis === 'RULED_OUT' ||
+                ((sourceTypeProven ||
+                    row.reasonCodes?.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') === true) &&
+                  isEvidenceBoundSpecificVariantOfGeneral({
+                    rawName: row.rawResourceNameText,
+                    rawCode: row.rawResourceCodeText,
+                    rawUnit: row.rawUnitText,
+                    resourceType: dto.confirmedResourceType,
+                    confirmedSpecifications: row.confirmedSpecifications,
+                  }, candidate))) &&
               reviewedCandidateIds.has(candidate.resourceCatalogId),
           );
         if (

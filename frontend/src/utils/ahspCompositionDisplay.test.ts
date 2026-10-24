@@ -44,6 +44,26 @@ test("groups Tenaga, Bahan and Peralatan in the order an analysis is written", (
   assert.deepEqual(groups[2].rows.map((r) => r.name), ["Alat Bantu"]);
 });
 
+test("keeps existing server explanation available only as detail for unresolved AHSP rows", () => {
+  const groups = groupAhspComposition([
+    {
+      rawAhspResourceRef: "Pasir",
+      rawAhspResourceType: "MATERIAL",
+      ahspUnit: "m3",
+      ahspCoefficient: "0.25",
+      status: "NEEDS_REVIEW",
+      reasonCodes: ["MULTIPLE_CANDIDATES_NEEDS_REVIEW"],
+      explanation: 'Konteks pekerjaan AHSP: "Pekerjaan Pasangan Batu Kali". Konteks bukan bukti identitas.',
+    },
+  ]);
+  const sand = groups[1].rows[0];
+  assert.equal(sand.name, "Pasir");
+  assert.equal(sand.unit, "m3");
+  assert.equal(sand.unresolved, true);
+  assert.match(sand.explanation ?? "", /Pekerjaan Pasangan Batu Kali/);
+  assert.equal(sand.trust.needsAttention, true);
+});
+
 test("carries each component's own unit and coefficient", () => {
   const [tenaga, bahan] = groupAhspComposition(rows);
   assert.deepEqual(tenaga.rows[0], {
@@ -51,6 +71,7 @@ test("carries each component's own unit and coefficient", () => {
     unit: "OH",
     coefficient: "0.66",
     unresolved: false,
+    explanation: null,
     trust: toResourceTrust({ status: "RESOLVED", reasonCodes: [] }),
   });
   assert.equal(bahan.rows[0].unit, "m3");

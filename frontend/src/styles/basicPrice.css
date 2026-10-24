@@ -2091,3 +2091,52 @@ tr.bp-detail-anchor > td {
 @media (max-width: 860px) {
   .bp-room .bp-rowcard__resolution { grid-column: 1; grid-row: 5; }
 }
+
+/* BP-REVIEW-ASSIST: read-only candidate evidence, not an automatic identity selector. */
+.bp-room .bp-guided-candidates {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  padding: 10px 0;
+  border-top: 1px solid var(--simprok-engineering-blue-200);
+}
+.bp-room .bp-guided-candidates__heading {
+  margin: 4px 0 0;
+  font-size: var(--text-xs);
+  font-weight: 700;
+  color: var(--simprok-authority-navy-900);
+}
+.bp-room .bp-guided-candidates__list {
+  list-style: none;
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+}
+.bp-room .bp-guided-candidate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+  padding: 9px;
+  background: var(--simprok-white);
+  border: 1px solid var(--simprok-engineering-blue-200);
+  border-radius: var(--radius-sm);
+}
+.bp-room .bp-guided-candidate__body {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.bp-room .bp-guided-candidate .bp-btn {
+  flex-shrink: 0;
+  white-space: normal;
+}
+@media (max-width: 600px) {
+  .bp-room .bp-guided-candidate {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
