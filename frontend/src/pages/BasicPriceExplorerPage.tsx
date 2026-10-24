@@ -26,6 +26,7 @@ import {
   explorerErrorMessageFromStatus,
   explorerErrorStateFromStatus,
   explorerSourceNameLabel,
+  explorerVerifiedUnitLabel,
   formatExplorerPrice,
   basicPriceRegionLabel,
   canProposePrivateExplorerItem,
@@ -348,7 +349,7 @@ export function BasicPriceExplorerPage() {
         resourceTypeLabel(item.resource.type),
         item.resource.code ?? '',
         item.price,
-        item.resource.baseUnit,
+        explorerVerifiedUnitLabel(item.resource),
         basicPriceRegionLabel(item),
         item.sourceName ?? '',
         formatDate(item.effectiveDate),
@@ -828,7 +829,9 @@ onClick={() => { setSelectedIds(new Set()); setPage(1); }}
                       {formatExplorerPrice(item.price)}
                     </td>
                     <td data-label="Satuan" className="bp-cell-unit">
-                      {item.resource.baseUnit}
+                      <span title={item.resource.displayUnit === null ? 'Satuan katalog perlu diverifikasi oleh Unit Kernel' : 'Satuan tampilan baku dari Unit Kernel'}>
+                        {explorerVerifiedUnitLabel(item.resource)}
+                      </span>
                     </td>
                     <td data-label="Wilayah" className="bp-cell-region">
                       {basicPriceRegionLabel(item)}

@@ -33,7 +33,15 @@ export interface ExplorerResourceIdentity {
   name: string;
   type: string;
   baseUnit: string;
+  /** Unit Kernel-verified presentation symbol; null means unresolved. */
+  displayUnit?: string | null;
 }
+
+/** One screen-wide representation, never a guessed unit conversion. */
+export const explorerVerifiedUnitLabel = (resource: ExplorerResourceIdentity): string =>
+  resource.displayUnit === undefined
+    ? resource.baseUnit // Legacy API compatibility only.
+    : resource.displayUnit || 'Perlu verifikasi';
 
 export type BasicPriceWorkspaceScope = 'WORKSPACE' | 'GLOBAL';
 

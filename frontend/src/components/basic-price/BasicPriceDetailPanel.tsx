@@ -8,6 +8,7 @@ import {
   effectiveDateProvenanceLabel,
   EVIDENCE_FILE_RETAINED_NOTE,
   explorerSourceNameLabel,
+  explorerVerifiedUnitLabel,
   formatExplorerPrice,
   kdnLabel,
   observationBasisLabel,
@@ -287,7 +288,10 @@ export function BasicPriceDetailPanel({
         >
           <dl className="bp-facts">
             <Fact label="Harga" value={formatExplorerPrice(item.price)} variant="price" />
-            <Fact label="Satuan" value={item.resource.baseUnit} />
+            <Fact label="Satuan" value={explorerVerifiedUnitLabel(item.resource)} />
+            {item.resource.displayUnit !== undefined && item.resource.baseUnit !== item.resource.displayUnit ? (
+              <Fact label="Satuan katalog asal" value={item.resource.baseUnit} />
+            ) : null}
             <Fact label="Kategori" value={resourceTypeLabel(item.resource.type)} />
             <Fact label="Wilayah" value={basicPriceRegionLabel(item)} />
             <Fact label="Sumber" value={explorerSourceNameLabel(item.sourceName)} />

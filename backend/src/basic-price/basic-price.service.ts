@@ -3,8 +3,11 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import { trustedUnitContext } from '../unit-kernel/unit-kernel.contracts';
 import { GetBasicPricesDto } from './dto/get-basic-prices.dto';
 import { Prisma } from '@prisma/client';
 import {
@@ -246,6 +249,7 @@ export class BasicPriceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eligibility: BasicPriceEligibilityPolicy,
+    @Optional() private readonly unitKernel?: UnitKernelService,
   ) {}
 
   /**
@@ -1087,6 +1091,9 @@ export class BasicPriceService {
       explorerRows,
       workspaceId,
     );
+    const unitDisplays = this.unitKernel
+      ? await this.explorerVerifiedUnitDisplays(explorerRows)
+      : new Map<string, string | null>();
     // Same existing provenance-reference law as removeOwnPrivatePrice.
     // One bounded read for the visible page, never a per-row search.
     const privateIds = explorerRows
@@ -1114,6 +1121,11 @@ export class BasicPriceService {
         const inherited = inheritedNames.get(row.id);
         return {
           ...item,
+          ...(this.unitKernel ? { resource: {
+            ...item.resource,
+            // Presentation ONLY: canonical UnitDefinition symbol, not raw source text.
+            displayUnit: unitDisplays.get(row.resource.id) ?? null,
+          } } : {}),
           sourceName: item.sourceName ?? inherited ?? null,
           alreadyProposed:
             row.assetScope === 'WORKSPACE_PRIVATE'
@@ -1141,6 +1153,58 @@ export class BasicPriceService {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  /**
+   * Explorer presentation only. Reuse the ONE Unit Kernel's documented
+   * alias+trusted-resource-class law; resolve once per class/page, not N+1.
+   * This DOES NOT change resource base units, price denominators, conversion
+   * factors, saved source text, or any canonical identity.
+   *
+   * Null is an honest unresolved unit, never an inferred equivalent.
+   */
+  private async explorerVerifiedUnitDisplays(
+    rows: ExplorerRowSource[],
+  ): Promise<Map<string, string | null>> {
+    const output = new Map<string, string | null>();
+    const groups = new Map<'LABOR' | 'MATERIAL' | 'EQUIPMENT', Set<string>>();
+    for (const row of rows) {
+      output.set(row.resource.id, null);
+      const context = trustedUnitContext(row.resource.type);
+      if (!context) continue;
+      const units = groups.get(context) ?? new Set<string>();
+      units.add(row.resource.baseUnit);
+      groups.set(context, units);
+    }
+
+    const verifiedIds = new Map<string, string>();
+    await Promise.all([...groups.entries()].map(async ([context, rawUnits]) => {
+      const identities = await this.unitKernel!.resolveCanonicalUnitIdentities(
+        [...rawUnits], context,
+      );
+      for (const identity of identities) {
+        if (identity.status === 'RESOLVED' && identity.unitDefinition) {
+          verifiedIds.set(context + '\u0000' + identity.rawUnit, identity.unitDefinition.id);
+        }
+      }
+    }));
+    const definitionIds = [...new Set(verifiedIds.values())];
+    if (definitionIds.length === 0) return output;
+    const definitions = await this.prisma.unitDefinition.findMany({
+      where: { id: { in: definitionIds }, isActive: true },
+      select: { id: true, symbol: true },
+    });
+    const symbols = new Map(definitions.map((d) => [d.id, d.symbol]));
+    for (const row of rows) {
+      const context = trustedUnitContext(row.resource.type);
+      const definitionId = context
+        ? verifiedIds.get(context + '\u0000' + row.resource.baseUnit)
+        : undefined;
+      if (definitionId) {
+        output.set(row.resource.id, symbols.get(definitionId) ?? null);
+      }
+    }
+    return output;
   }
 
   /**
