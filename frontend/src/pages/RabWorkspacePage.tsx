@@ -11,6 +11,8 @@ import {
 import { useBlocker, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
 import { isFreshDraftSave, shouldBlockRabLeave, shouldWarnOnBrowserExit } from '../utils/rabUnsavedExit';
 import { readRabPreparedProject } from '../utils/rabPreparedProject';
+import { clearRabRecovery, readRabRecovery, writeRabRecovery } from '../utils/rabProvisionalRecovery';
+import { useAuth } from '../contexts/AuthContext';
 import {
   ArrowDown,
   ArrowLeft,
@@ -514,18 +516,22 @@ const PERSIST_REACHABILITY_TITLE: Record<PersistActionReachability, string> = {
 export function RabWorkspacePage() {
   const navigate = useNavigate();
   const location = useLocation();
+  const { account, activeWorkspaceId } = useAuth();
   const { projectId: routeProjectId } = useParams();
   const layoutContext = useOutletContext<DashboardOutletContext | null>();
   const projectId = routeProjectId ?? null;
-  const pendingProject = projectId ? null : readRabPreparedProject(location.state);
-  const isProvisional = Boolean(
-    pendingProject && pendingProject.workspaceId === localStorage.getItem('simprok_workspace'),
-  );
+  const preparedFromRoute = projectId ? null : readRabPreparedProject(location.state);
+  // Recover only this account's browser-session draft after an auth redirect.
+  const recovery = !projectId && !preparedFromRoute
+    ? readRabRecovery<RabRow>(account?.id, activeWorkspaceId) : null;
+  const pendingProject = preparedFromRoute ?? recovery?.preparedProject ?? null;
+  const isProvisional = Boolean(pendingProject && activeWorkspaceId === pendingProject.workspaceId);
+  const [localProjectCode, setLocalProjectCode] = useState(recovery?.projectCode ?? pendingProject?.code ?? '');
   // Never infer a Project from a browser-only draft. Project context and RBAC
   // are verified by the canonical backend only when the user saves.
-  const [rows, setRows] = useState<RabRow[]>([]);
-  const [volumes, setVolumes] = useState<Record<string, number>>({});
-  const [unitPrices, setUnitPrices] = useState<Record<string, number>>({});
+  const [rows, setRows] = useState<RabRow[]>(recovery?.rows ?? []);
+  const [volumes, setVolumes] = useState<Record<string, number>>(recovery?.volumes ?? {});
+  const [unitPrices, setUnitPrices] = useState<Record<string, number>>(recovery?.unitPrices ?? {});
   const [costRowStatuses, setCostRowStatuses] = useState<Record<string, CostRowStatus>>({});
   const costLoadGenerationRef = useRef(0);
   /**
@@ -537,8 +543,8 @@ export function RabWorkspacePage() {
   const persistedProofGenerationRef = useRef(0);
   const [selectedRowId, setSelectedRowId] = useState('');
   const [isSaving, setIsSaving] = useState(false);
-  const [marginPercent, setMarginPercent] = useState(10);
-  const [ppnPercent, setPpnPercent] = useState(11);
+  const [marginPercent, setMarginPercent] = useState(recovery?.marginPercent ?? 10);
+  const [ppnPercent, setPpnPercent] = useState(recovery?.ppnPercent ?? 11);
   const [statusMessage, setStatusMessage] = useState(projectId ? 'Memuat draft...' : 'Tidak ada project aktif.');
   const [fieldContextLoad, setFieldContextLoad] = useState<
     { phase: 'loading' } | { phase: 'ready'; view: ProjectFieldContextView }
@@ -567,6 +573,15 @@ export function RabWorkspacePage() {
   // Save-and-leave only proceeds after the existing server save reports success.
   const exitAfterSaveRef = useRef(false);
   // Standard data-router blocker covers menu links, Back and cross-project routes.
+  // Browser-session recovery only; never a canonical Project/BOQ save.
+  useEffect(() => {
+    if (!isProvisional || !pendingProject || firstSaveVerifiedRef.current) return;
+    writeRabRecovery(account?.id, activeWorkspaceId, {
+      preparedProject: pendingProject, rows, volumes, unitPrices,
+      marginPercent, ppnPercent, projectCode: localProjectCode,
+    });
+  }, [account?.id, activeWorkspaceId, isProvisional, pendingProject, rows,
+      volumes, unitPrices, marginPercent, ppnPercent, localProjectCode]);
   const blocker = useBlocker(({ currentLocation, nextLocation }) =>
     !firstSaveVerifiedRef.current && shouldBlockRabLeave({
       draftDirty, saving: isSaving,
@@ -1602,7 +1617,7 @@ export function RabWorkspacePage() {
     setCalculationAsOfDate(value);
   };
 
-  const canEditDraft = capabilityState.kind === 'ready' && capabilityState.canEditDraft;
+  const canEditDraft = capabilityState.kind === 'ready' && capabilityState.canEditDraft && !(isProvisional && isSaving);
   // Existing Gate-2A lifecycle: a terminal stored price has no working occurrence to persist.
   // Only a new, explicit AHSP/Region selection can open a new calculation journey.
   const selectedPriceAlreadyStored = selectedItem ? isTerminalPersistedKernelRow(selectedItem) : false;
@@ -1648,6 +1663,11 @@ export function RabWorkspacePage() {
       return;
     }
     if (isSaving || firstSaveUncertainRef.current) return;
+    if (isProvisional && !localProjectCode.trim()) {
+      exitAfterSaveRef.current = false;
+      setStatusMessage('Kode Proyek tidak boleh kosong. Perbaiki kode sebelum menyimpan.');
+      return;
+    }
 
     // Capture the exact local revision being submitted; a later edit must not be
     // mistaken for part of this server acknowledgment.
@@ -1688,7 +1708,7 @@ export function RabWorkspacePage() {
           const response = await apiFetch('/projects', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...pendingProject, initialDraft: payload }),
+            body: JSON.stringify({ ...pendingProject, code: localProjectCode.trim(), initialDraft: payload }),
           });
           if (!response.ok) {
             if (response.status >= 400 && response.status < 500) {
@@ -1742,6 +1762,7 @@ export function RabWorkspacePage() {
             throw new Error('FIRST_SAVE_LOCAL_REVISION_DRIFT');
           }
           firstSaveVerifiedRef.current = true;
+          clearRabRecovery(account?.id, activeWorkspaceId);
           setDraftDirty(false);
           exitAfterSaveRef.current = false;
           if (blocker.state === 'blocked') {
@@ -2357,6 +2378,15 @@ export function RabWorkspacePage() {
                 ? `Project: ${projectId}. Ruang kerja RAB terkunci — baca dan telusuri hasil RAB.`
                 : `Project: ${projectId}. Ruang kerja draft RAB — edit dan simpan sebelum baseline resmi.`}
             </p>
+            {isProvisional ? (
+              <label style={{ display: 'flex', flexDirection: 'column', maxWidth: 340, gap: 4, margin: '0.5rem 0' }}>
+                <span>Kode Proyek / Kode RAB (dapat dikoreksi sebelum simpan)</span>
+                <input aria-label="Kode Proyek RAB Baru" value={localProjectCode}
+                  disabled={isSaving} maxLength={120}
+                  onChange={(e) => setLocalProjectCode(e.target.value)}
+                  style={{ padding: '0.5rem', border: '1px solid #cbd5e1', borderRadius: 6 }} />
+              </label>
+            ) : null}
             <p aria-live="polite">
               {fieldContextLoad.phase === 'loading'
                 ? 'Memuat keterangan proyek.'
@@ -2520,7 +2550,10 @@ export function RabWorkspacePage() {
               >{isSaving ? 'Menyimpan...' : 'Simpan Draft dan Keluar'}</button>
               <button
                 disabled={isSaving}
-                onClick={() => { if (blocker.state === 'blocked') blocker.proceed(); }}
+                onClick={() => {
+                  if (isProvisional) clearRabRecovery(account?.id, activeWorkspaceId);
+                  if (blocker.state === 'blocked') blocker.proceed();
+                }}
               >Buang Perubahan Lokal dan Keluar</button>
               <button
                 autoFocus

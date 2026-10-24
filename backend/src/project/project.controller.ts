@@ -290,6 +290,11 @@ export class ProjectController {
       if (!effective?.permissions.includes(PERMISSIONS.RAB_DRAFT_EDIT)) {
         throw new ForbiddenException('RAB_DRAFT_EDIT permission is required for first Save Draft');
       }
+      // The first-save contract verifies canonical BOQ via RAB_VIEW GET.
+      // Refuse before mutation when readback is not authorized.
+      if (!effective.permissions.includes(PERMISSIONS.RAB_VIEW)) {
+        throw new ForbiddenException('RAB_VIEW permission is required for first Save Draft readback');
+      }
     }
     return this.projectService.create(
       createProjectDto,

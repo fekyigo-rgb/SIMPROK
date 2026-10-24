@@ -102,8 +102,15 @@ describe('First-save PROJECT_CREATE + RAB_DRAFT_EDIT authority', () => {
     })).rejects.toThrow('RAB_DRAFT_EDIT permission is required');
     expect(h.fakeService.create).not.toHaveBeenCalled();
   });
-  it('accepts both permissions and reuses the existing ProjectService.create', async () => {
+  it('denies first save lacking RAB_VIEW before any Project mutation', async () => {
     const h = controllerHarness(['PROJECT_CREATE', 'RAB_DRAFT_EDIT']);
+    await expect(h.controller.create(h.request as any, {
+      name: 'RAB', code: 'RAB-NO-READ', initialDraft: { rows: firstRows } as any,
+    })).rejects.toThrow('RAB_VIEW permission is required');
+    expect(h.fakeService.create).not.toHaveBeenCalled();
+  });
+  it('accepts all required permissions and reuses the existing ProjectService.create', async () => {
+    const h = controllerHarness(['PROJECT_CREATE', 'RAB_DRAFT_EDIT', 'RAB_VIEW']);
     await h.controller.create(h.request as any, {
       name: 'RAB', code: 'RAB-SECURE', initialDraft: { rows: firstRows } as any,
     });

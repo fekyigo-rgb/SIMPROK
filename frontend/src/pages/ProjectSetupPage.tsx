@@ -5,6 +5,7 @@ import { ProjectIntakeClassificationFields } from '../components/project/Project
 import { ProjectIntakeLocationFields } from '../components/project/ProjectIntakeLocationFields';
 import type { ProjectVocabularyPath } from '../utils/projectIntakeVocabulary';
 import { composeDraftDescription, fieldContextAcknowledgement } from '../utils/projectIntakeSelection';
+import { readRabRecovery } from '../utils/rabProvisionalRecovery';
 import { ArrowRight, MapPin, Sparkles, X } from 'lucide-react';
 
 const requiredPreparationFields = [
@@ -15,7 +16,9 @@ const requiredPreparationFields = [
 
 export function ProjectSetupPage() {
   const navigate = useNavigate();
-  const { token, activeWorkspaceId } = useAuth();
+  const { token, activeWorkspaceId, account } = useAuth();
+  // Visible only to the same account and workspace after a 401/session expiry.
+  const recoverableRab = readRabRecovery<unknown>(account?.id, activeWorkspaceId);
   const [interactionText, setInteractionText] = useState('');
   const [interactionStatus, setInteractionStatus] = useState('Engine belum aktif');
   const [classificationNodeIds, setClassificationNodeIds] = useState<string[] | null>(null);
@@ -152,6 +155,12 @@ export function ProjectSetupPage() {
           </div>
           <h1>Persiapan RAB</h1>
           <p>Lengkapi data pekerjaan dan konteks lapangan sebelum masuk ke Ruang Kerja RAB.</p>
+          {recoverableRab ? (
+            <button type="button" onClick={() => navigate('/project/new/rab/workspace')}
+              aria-label="Lanjutkan RAB Lokal Belum Disimpan">
+              Lanjutkan RAB belum disimpan: {recoverableRab.preparedProject.name}
+            </button>
+          ) : null}
         </div>
         <div className="simprok-rab-prep__status" title="Ruang Transisi RAB" aria-label="Ruang Transisi RAB">
           Ruang Transisi RAB
