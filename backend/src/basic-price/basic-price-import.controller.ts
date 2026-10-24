@@ -35,6 +35,7 @@ import {
   ConfirmBasicPriceImportRowCategoryDto,
   RejectBasicPriceImportRowDto,
   CompensateBasicPriceImportRowDto,
+  ReopenRejectedBasicPriceImportRowDto,
   ClarifyBasicPriceRowUnitReasonDto,
 } from './dto/resolve-basic-price-import-row.dto';
 import {
@@ -430,6 +431,24 @@ export class BasicPriceImportController {
     return this.resolutionService.admitSafeNewResources(
       request.workspaceContext.workspaceId,
       batchId,
+      request.user.id,
+      dto,
+    );
+  }
+
+  /** BP-C1: reverse an unsubmitted rejected review row, never erase its decision. */
+  @Post(':batchId/rows/:rowId/reopen-rejected')
+  @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)
+  async reopenRejectedRow(
+    @Req() request: RequestIdentity,
+    @Param('batchId') batchId: string,
+    @Param('rowId') rowId: string,
+    @Body() dto: ReopenRejectedBasicPriceImportRowDto,
+  ) {
+    return this.resolutionService.reopenRejectedRow(
+      request.workspaceContext.workspaceId,
+      batchId,
+      rowId,
       request.user.id,
       dto,
     );

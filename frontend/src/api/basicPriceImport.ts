@@ -365,6 +365,30 @@ export async function clarifyBasicPriceRowUnitReason(
   if (!response.ok) throw new ImportRequestError(response.status, await response.text());
 }
 
+/** BP-C1: audited reopening of a rejected, unsubmitted row. */
+export async function reopenRejectedBasicPriceImportRow(
+  batchId: string, rowId: string, version: number, reason: string,
+): Promise<void> {
+  const response = await apiFetch(`/basic-price-imports/${batchId}/rows/${rowId}/reopen-rejected`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version, reason }),
+  });
+  if (!response.ok) throw new ImportRequestError(response.status, await response.text());
+}
+
+/** Reuse the existing narrow, append-only compensation authority. */
+export async function compensateOwnBasicPriceImportDecision(
+  batchId: string, rowId: string, version: number, reason: string,
+): Promise<void> {
+  const response = await apiFetch(`/basic-price-imports/${batchId}/rows/${rowId}/compensate-own-decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version, reason }),
+  });
+  if (!response.ok) throw new ImportRequestError(response.status, await response.text());
+}
+
 export async function rejectBasicPriceImportRow(
   batchId: string,
   rowId: string,

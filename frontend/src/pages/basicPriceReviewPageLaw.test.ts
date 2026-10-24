@@ -34,6 +34,18 @@ const body = page.slice(page.indexOf("export function BasicPriceReviewPage"));
  *  keeps a guard from failing on the very sentence that explains it. */
 const renderable = body.replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
 
+test("BP-C1: review correction reuses existing compensation and audited rejection reopening", () => {
+  assert.match(page, /reopenRejectedBasicPriceImportRow,/);
+  assert.match(page, /compensateOwnBasicPriceImportDecision,/);
+  assert.match(body, /row\.status === 'REJECTED'/);
+  assert.match(body, /row\.status === 'READY_FOR_SUBMISSION'/);
+  assert.match(renderable, /Tinjau Ulang Keputusan/);
+  assert.match(renderable, /Alasan meninjau ulang \(wajib\)/);
+  assert.match(body, /await loadBatch\(false\)/);
+  assert.match(body, /setRowNotice\(\{ rowId: row\.id, text: message \}\)/);
+  assert.doesNotMatch(body, /deleteResourceCatalog|resetIdentityKernel|deleteImportRow/);
+});
+
 test("HS-1. the page never reads an authority's internal explanation", () => {
   assert.doesNotMatch(
     renderable,

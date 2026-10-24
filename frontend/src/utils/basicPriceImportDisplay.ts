@@ -2423,7 +2423,9 @@ export const rowNoteLines = (row: BasicPriceImportRowSummary): RowNoteLines => {
   for (const code of row.reasonCodes) {
     if (code.startsWith(REJECTED_PREFIX)) {
       const reason = code.slice(REJECTED_PREFIX.length).trim();
-      human.push(reason === '' ? 'Baris ini ditolak.' : `Ditolak: ${reason}`);
+      human.push(row.status === 'REJECTED'
+        ? (reason === '' ? 'Baris ini ditolak.' : `Ditolak: ${reason}`)
+        : (reason === '' ? 'Riwayat: pernah ditolak.' : `Riwayat penolakan sebelumnya: ${reason}`));
       continue;
     }
     if (code === 'SECTION_DECLARED_BY_UPLOADER') {

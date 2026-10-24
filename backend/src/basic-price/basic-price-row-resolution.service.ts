@@ -14,6 +14,7 @@ import {
   ResolveBasicPriceImportRowDto,
   ConfirmBasicPriceImportRowCategoryDto,
   CompensateBasicPriceImportRowDto,
+  ReopenRejectedBasicPriceImportRowDto,
   ClarifyBasicPriceRowUnitReasonDto,
 } from './dto/resolve-basic-price-import-row.dto';
 import {
@@ -2084,6 +2085,81 @@ export class BasicPriceRowResolutionService {
   }
 
   /** Human rejection (state machine B, reason required, no automatic path). */
+  async reopenRejectedRow(
+    workspaceId: string,
+    batchId: string,
+    rowId: string,
+    actorAccountId: string,
+    dto: ReopenRejectedBasicPriceImportRowDto,
+  ) {
+    const reason = dto.reason?.trim();
+    if (!reason || reason.length < 10 || reason.length > 1200 || reason !== dto.reason) {
+      throw new BadRequestException('REOPEN_REASON_REQUIRED');
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const batch = await tx.basicPriceImportBatch.findUnique({
+        where: { id: batchId },
+      });
+      if (!batch || batch.workspaceId !== workspaceId) {
+        throw new NotFoundException('Batch not found');
+      }
+      assertBatchOwnedByCaller(batch, actorAccountId, 'Batch not found');
+      if (batch.status !== 'NEEDS_REVIEW' && batch.status !== 'READY_FOR_REVIEW') {
+        throw new ConflictException('BATCH_NOT_MUTABLE');
+      }
+      const locks = await tx.$queryRaw<Array<{ id: string }>>(
+        Prisma.sql`SELECT "id" FROM "basic_price_import_rows"
+          WHERE "id" = ${rowId}::uuid AND "batchId" = ${batchId}::uuid FOR UPDATE`,
+      );
+      if (locks.length !== 1) throw new NotFoundException('Row not found');
+      const row = await tx.basicPriceImportRow.findUniqueOrThrow({
+        where: { id: rowId },
+        include: { privateBasicPrice: { select: { id: true } } },
+      });
+      if (row.batchId !== batchId) throw new NotFoundException('Row not found');
+      if (row.version !== dto.version) throw new ConflictException('ROW_VERSION_STALE');
+      if (
+        row.status !== 'REJECTED' ||
+        row.resolutionStatus !== 'UNRESOLVED' ||
+        row.privateBasicPrice !== null ||
+        row.priceSubmissionId !== null ||
+        row.resourceCatalogId !== null ||
+        row.unitDefinitionId !== null
+      ) {
+        throw new ConflictException('REJECTED_ROW_NOT_REOPENABLE');
+      }
+      // Keep the source's original rejection wording in place; do not
+      // redefine the mapping, price, identity or raw source during this action.
+      const previousReason = [...row.reasonCodes].reverse().find(
+        (code) => code.startsWith('REJECTED:'),
+      );
+      if (!previousReason) throw new ConflictException('REJECTION_AUDIT_MISSING');
+      const changed = await tx.basicPriceImportRow.updateMany({
+        where: { id: rowId, batchId, version: row.version, status: 'REJECTED' },
+        data: {
+          status: 'NEEDS_REVIEW',
+          resolvedByAccountId: null,
+          resolvedAt: null,
+          version: { increment: 1 },
+        },
+      });
+      if (changed.count !== 1) throw new ConflictException('ROW_VERSION_STALE');
+      // Append-only, one event per prior version. A concurrent caller
+      // cannot turn the same rejection into two reopened decisions.
+      await tx.$executeRaw(Prisma.sql`
+        INSERT INTO "basic_price_import_row_rejected_review_reopens"
+          ("id","workspaceId","rowId","actorAccountId","reason",
+           "priorRowVersion","newRowVersion","previousReason","reopenedAt")
+        VALUES (gen_random_uuid(), ${workspaceId}::uuid, ${rowId}::uuid,
+          ${actorAccountId}::uuid, ${reason}, ${row.version},
+          ${row.version + 1}, ${previousReason}, CURRENT_TIMESTAMP)`);
+      await this.recomputeBatchStatus(tx, batchId);
+      return { batchId, rowId, priorRowVersion: row.version,
+        newRowVersion: row.version + 1, status: 'NEEDS_REVIEW' as const };
+    }, { timeout: 20_000, maxWait: 20_000, isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  /** Original rejection remains auditable even after a lawful reopening. */
   async rejectRow(
     workspaceId: string,
     batchId: string,
@@ -2108,6 +2184,7 @@ export class BasicPriceRowResolutionService {
           data: {
             status: 'REJECTED',
             reasonCodes: { push: `REJECTED:${dto.reason}` },
+            resolvedByAccountId: currentAccountId,
             resolvedAt: new Date(),
             version: { increment: 1 },
           },

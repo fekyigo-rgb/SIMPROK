@@ -1245,6 +1245,17 @@ test("a rejected row shows its own reason as a sentence, not as a code with a co
   assert.equal(notes.technicalNotice, null);
 });
 
+test("a lawfully reopened rejection is history, not a current rejection", () => {
+  const row = baseRow({
+    status: "NEEDS_REVIEW",
+    reasonCodes: ["REJECTED:harga semula disangka salah"],
+  });
+  const notes = rowNoteLines(row);
+  assert.deepEqual(notes.human, ["Riwayat penolakan sebelumnya: harga semula disangka salah"]);
+  assert.equal(notes.untranslatedCount, 0);
+  assert.doesNotMatch(notes.human.join(" "), /^Ditolak:/);
+});
+
 test("a row with no notes produces no note lines and no technical disclosure", () => {
   const notes = rowNoteLines(baseRow({ reasonCodes: [] }));
   assert.deepEqual(notes.human, []);
