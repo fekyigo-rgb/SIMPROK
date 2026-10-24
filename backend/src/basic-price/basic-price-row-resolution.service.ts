@@ -543,7 +543,15 @@ export class BasicPriceRowResolutionService {
     // already resolved, and a row a human is still editing in the browser are
     // all excluded here rather than being refused later.
     const rows = await this.prisma.basicPriceImportRow.findMany({
-      where: { batchId, status: 'NEEDS_REVIEW' },
+      // BP-C2: a reviewer-compensated mapping is an EXPLICIT withdrawal of
+      // consent, even when the identity kernel can still propose its catalog.
+      // Never let a later bulk "Simpan & Gunakan" silently make that same
+      // decision again. The user can still inspect and explicitly resolve it.
+      where: {
+        batchId,
+        status: 'NEEDS_REVIEW',
+        resolutionCompensations: { none: {} },
+      },
       orderBy: { sourceRowNumber: 'asc' },
       select: {
         id: true,

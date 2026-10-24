@@ -1431,7 +1431,7 @@ export function BasicPriceReviewPage() {
         {visibleRows.map((row) => {
           const draft = draftFor(row.id);
           const mutable = isRowMutable(row);
-          const proven = row.machineProposal?.identityPairProven === true;
+          const proven = row.machineProposal?.identityPairProven === true && row.hasCompensatedDecision !== true;
           const reviewCompass = basicPriceReviewCompass(row);
           const guidedCandidates = guidedIdentityCandidates(row);
           const guidedCount = guidedCandidates.prior.length + guidedCandidates.other.length;
@@ -1576,11 +1576,13 @@ export function BasicPriceReviewPage() {
                         : undefined
                     }
                   >
-                    {reviewRowBucket(row) === 'DECIDED'
+                    {row.hasCompensatedDecision && row.status === 'NEEDS_REVIEW'
                       ? rowStateLabel(row)
-                      : proven
-                        ? 'Dikenali otomatis'
-                        : 'Perlu Tinjauan'}
+                      : reviewRowBucket(row) === 'DECIDED'
+                        ? rowStateLabel(row)
+                        : proven
+                          ? 'Dikenali otomatis'
+                          : 'Perlu Tinjauan'}
                   </span>
                 </div>
                 <div className="bp-rowcard__summary-actions">
@@ -1597,6 +1599,11 @@ export function BasicPriceReviewPage() {
                 {rowNotice?.rowId === row.id ? (
                   <p className="bp-note bp-note--info bp-rowcard__notice" role="status" aria-live="polite">
                     {rowNotice.text}
+                  </p>
+                ) : null}
+                {row.status === 'NEEDS_REVIEW' && row.hasCompensatedDecision === true ? (
+                  <p className="bp-note bp-note--info bp-rowcard__notice" role="note">
+                    Keputusan Terima sebelumnya sudah dibatalkan. SIMPROK mungkin masih menemukan kandidat yang sama, tetapi baris ini tidak akan otomatis disimpan lagi. Periksa item dan spesifikasinya, lalu pilih secara sadar.
                   </p>
                 ) : null}
               </div>

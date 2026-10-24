@@ -1289,6 +1289,8 @@ export class BasicPriceImportService {
           recordedAt: Date;
         } | null;
       }>;
+      /** Recorded accepted-mapping compensations, loaded only for review GET. */
+      resolutionCompensations?: Array<{ id: string }>;
       /** Loaded for review GET only; the saved canonical unit is not a draft. */
       unitDefinition?: { code: string; displayName: string; symbol: string } | null;
       rawUnitText?: string | null;
@@ -1354,7 +1356,7 @@ export class BasicPriceImportService {
       ? privatePriceByRowId.size
       : undefined;
     const machineRows = rows.filter(
-      (r) => proposals?.get(r.id)?.identityPairProven === true,
+      (r) => !r.resolutionCompensations?.length && proposals?.get(r.id)?.identityPairProven === true,
     ).length;
     const readyForSubmissionRows = rows.filter(
       (r) => r.status === 'READY_FOR_SUBMISSION',
@@ -1569,6 +1571,8 @@ export class BasicPriceImportService {
         unitDefinitionId: r.unitDefinitionId ?? null,
         reasonCodes: r.reasonCodes ?? [],
         version: r.version ?? 0,
+        /** Previous human acceptance was compensated: never claim bulk-ready. */
+        hasCompensatedDecision: (r.resolutionCompensations?.length ?? 0) > 0,
         /**
          * What the canonical authorities proved about THIS row, or null when
          * they were not consulted (every non-review path, and every row that is
@@ -2603,6 +2607,8 @@ export class BasicPriceImportService {
       orderBy: { sourceRowNumber: 'asc' },
       include: {
         resourceCatalog: { select: { name: true } },
+        // Reuse the append-only compensation ledger; no second state machine.
+        resolutionCompensations: { select: { id: true }, take: 1 },
         resourceMappings: {
           orderBy: [{ decidedAt: 'desc' }, { id: 'desc' }],
           take: 1,

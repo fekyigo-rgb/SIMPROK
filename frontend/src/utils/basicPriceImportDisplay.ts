@@ -189,6 +189,8 @@ export interface BasicPriceImportRowSummary {
   unitDefinitionId: string | null;
   reasonCodes: string[];
   version: number;
+  /** Read-only audit projection: a prior accepted mapping was withdrawn. */
+  hasCompensatedDecision?: boolean;
   /**
    * Does a WORKSPACE_PRIVATE price already exist for this row? The row status
    * cannot express it — a stored row stays READY_FOR_SUBMISSION forever — so
@@ -619,6 +621,9 @@ export const reviewRowBucket = (row: BasicPriceImportRowSummary): ReviewRowBucke
     row.status === 'REJECTED' ||
     row.status === 'SUBMISSION_CREATED'
   ) return 'DECIDED';
+  // A withdrawn human decision outranks a fresh machine recommendation.
+  // The proposal remains visible as evidence, but bulk use needs new consent.
+  if (row.hasCompensatedDecision === true) return 'NEEDS_REVIEW';
   if (row.machineProposal?.identityPairProven === true) return 'RECOGNIZED';
   return 'NEEDS_REVIEW';
 };
@@ -689,10 +694,13 @@ const HUMAN_TERMINAL_ROW_STATUSES: ReadonlySet<
 export const rowStateLabel = (
   row: Pick<
     BasicPriceImportRowSummary,
-    'status' | 'savedAsPrivatePrice' | 'machineProposal'
+    'status' | 'savedAsPrivatePrice' | 'machineProposal' | 'hasCompensatedDecision'
   >,
 ): string => {
   if (row.savedAsPrivatePrice) return ROW_SAVED_PRIVATE_LABEL;
+  if (row.status === 'NEEDS_REVIEW' && row.hasCompensatedDecision === true) {
+    return 'Perlu keputusan ulang';
+  }
   // Read through the SAME table the fallback uses, so `Ditolak` and `Sudah
   // diusulkan ke SIMPROK` keep exactly one spelling each. This branch decides
   // WHICH fact wins; it does not get a vocabulary of its own.
@@ -1700,6 +1708,9 @@ export type RowMachineState = 'PROVEN' | 'ATTENTION' | 'UNKNOWN' | 'NOT_ASKED';
 export const rowMachineState = (row: BasicPriceImportRowSummary): RowMachineState => {
   const proposal = row.machineProposal;
   if (!proposal) return 'NOT_ASKED';
+  // Machine proof remains evidence, but a compensated prior acceptance
+  // requires a fresh human decision before it may be used again.
+  if (row.status === 'NEEDS_REVIEW' && row.hasCompensatedDecision === true) return 'ATTENTION';
   if (proposal.identityPairProven) return 'PROVEN';
   // Something to look at is a different invitation from nothing at all: one
   // asks the reviewer to choose, the other asks them to supply.
@@ -2001,6 +2012,9 @@ export interface MachinePickedUnit {
 export const machinePickedResource = (
   row: BasicPriceImportRowSummary,
 ): MachinePickedResource | null => {
+  // A prior accepted mapping was withdrawn; never pre-fill the same choice.
+  // Keep the canonical suggestion visible for deliberate manual review.
+  if (row.hasCompensatedDecision === true) return null;
   const resource = row.machineProposal?.resource;
   // BOTH conditions, and they are different questions. `status === 'RESOLVED'`
   // is the shared authority saying it knows which catalog row this is;
