@@ -27,7 +27,7 @@ describe('BP-ROW-COMPENSATION-01 — append-only governed self-compensation', ()
       rawResourceNameText: NAME, sourceRowNumber: 8,
       sourceNameCellAddress: 'B8',
       resourceMappings: [oldMapping],
-      batch: { id: BATCH, workspaceId: W, uploadedByAccountId: ACTOR, sourceSha256: SOURCE },
+      batch: { id: BATCH, workspaceId: W, uploadedByAccountId: ACTOR, sourceSha256: SOURCE, status: 'NEEDS_REVIEW' },
     };
     const counts = () => ({ count: jest.fn().mockResolvedValue(0) });
     const tx = {
@@ -136,22 +136,65 @@ describe('BP-ROW-COMPENSATION-01 — append-only governed self-compensation', ()
     expect(tx.basicPriceImportRowResolutionCompensation.create).not.toHaveBeenCalled();
   });
 
-  it('refuses a catalog consumed by any other price, AHSP or row', async () => {
+  it('reopens the reviewed row while preserving a shared catalog consumed by AHSP', async () => {
     const { tx, perform } = build();
     tx.projectAhspResourceResolution.count.mockResolvedValue(1);
-    await expect(perform()).rejects.toThrow('COMPENSATION_CATALOG_IN_USE');
-    expect(tx.basicPriceImportRowResolutionCompensation.create).not.toHaveBeenCalled();
+    const result = await perform();
+    expect(result).toMatchObject({
+      rowId: ROW, status: 'NEEDS_REVIEW', retiredResourceCatalogId: null,
+    });
+    expect(tx.basicPriceImportRowResolutionCompensation.create).toHaveBeenCalledTimes(1);
+    expect(tx.resourceCatalog.updateMany).not.toHaveBeenCalled();
+    expect(tx.basicPriceImportRow.updateMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('reopens against an existing catalog with multiple source sightings without retiring it', async () => {
+    const { tx, perform } = build();
+    tx.resourceSourceIdentity.findMany.mockResolvedValue([
+      { sourceSha256: SOURCE, rawName: NAME, sourceRowNumber: 8 },
+      { sourceSha256: 'other-source', rawName: NAME, sourceRowNumber: 9 },
+    ]);
+    const result = await perform();
+    expect(result.retiredResourceCatalogId).toBeNull();
     expect(tx.resourceCatalog.updateMany).not.toHaveBeenCalled();
   });
 
-  it('refuses when the source sighting no longer matches immutable workbook evidence', async () => {
+  it('never retires a global catalog when correcting one private row mapping', async () => {
+    const { tx, perform } = build();
+    tx.resourceCatalog.findUniqueOrThrow.mockResolvedValue({
+      id: CATALOG, workspaceId: null, status: 'ACTIVE', name: NAME,
+    });
+    const result = await perform();
+    expect(result.retiredResourceCatalogId).toBeNull();
+    expect(tx.resourceCatalog.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for an existing catalog owned by another workspace', async () => {
+    const { tx, perform } = build();
+    tx.resourceCatalog.findUniqueOrThrow.mockResolvedValue({
+      id: CATALOG, workspaceId: 'other-workspace', status: 'ACTIVE', name: NAME,
+    });
+    await expect(perform()).rejects.toThrow('COMPENSATION_CATALOG_NOT_OWNED_ACTIVE');
+    expect(tx.basicPriceImportRowResolutionCompensation.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses to change an accepted decision after its batch was submitted', async () => {
+    const { tx, row, perform } = build();
+    row.batch.status = 'SUBMITTED';
+    await expect(perform()).rejects.toThrow('BATCH_NOT_MUTABLE');
+    expect(tx.basicPriceImportRowResolutionCompensation.create).not.toHaveBeenCalled();
+  });
+
+  it('a source mismatch blocks retirement but does not block correcting the own row', async () => {
     const { tx, perform } = build();
     tx.resourceSourceIdentity.findMany.mockResolvedValue([{
       id: 'source-001', workspaceId: W, sourceSha256: SOURCE,
       sourceRowNumber: 8, rawName: 'some other original', sourceNameCellAddress: 'B8',
     }]);
-    await expect(perform()).rejects.toThrow('COMPENSATION_SOURCE_NOT_EXCLUSIVE');
-    expect(tx.basicPriceImportRowResolutionCompensation.create).not.toHaveBeenCalled();
+    const result = await perform();
+    expect(result.retiredResourceCatalogId).toBeNull();
+    expect(tx.basicPriceImportRowResolutionCompensation.create).toHaveBeenCalledTimes(1);
+    expect(tx.resourceCatalog.updateMany).not.toHaveBeenCalled();
   });
 
   it('refuses an already compensated decision rather than performing a second compensation', async () => {

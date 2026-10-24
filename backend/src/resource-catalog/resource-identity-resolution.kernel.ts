@@ -186,6 +186,8 @@ export interface ReviewedMappingEvidence {
   readonly unitDefinitionId?: string;
   /** Rows subsequently rejected or bearing separate source specifications cannot teach. */
   readonly originatingRowStatus?: string;
+  /** Canceled append-only mapping: retained as conflicting history, never positive evidence. */
+  readonly isCompensated?: boolean;
   readonly hasAuditedSourceSpecifications?: boolean;
   /** Prior receipt; not an identity or category decision by itself. */
   readonly sourceSha256?: string;
@@ -1135,6 +1137,7 @@ export function categoryProvenByExactPriorReview(
   return new Set(history.map(item => item.resourceType)).size === 1 &&
     new Set(history.map(item => item.resourceCatalogId)).size === 1 &&
     history.every(item =>
+      item.isCompensated !== true &&
       item.resourceType === question.resourceType &&
       item.priorCategoryConfirmed === true &&
       item.priorCategoryHistoryConflicted === false &&
@@ -1158,6 +1161,7 @@ export function reuseExactPrivateReviewedMapping(
     return verdict;
   }
   const exact = reviewedMappings.filter(mapping =>
+    mapping.isCompensated !== true &&
     mapping.rawName === reference.rawName &&
     mapping.rawCode === reference.rawCode &&
     mapping.rawUnit === reference.rawUnit &&
@@ -1387,7 +1391,7 @@ function resolveByMachineEvidence(
    */
   const priorDecisionFor = (catalogId: string): PriorHumanDecision | null => {
     const matching = reviewedMappings.filter(
-      (mapping) => mapping.resourceCatalogId === catalogId,
+      (mapping) => mapping.resourceCatalogId === catalogId && mapping.isCompensated !== true,
     );
     if (matching.length === 0) return null;
     const latest = matching.reduce((newest, mapping) => {
@@ -1912,7 +1916,10 @@ function resolveByMachineEvidence(
       typeMatches(mapping.resourceType, type),
   );
   for (const mapping of sameNameMappings) {
-    note(mapping.resourceCatalogId, 'REVIEWED_MAPPING_NAME_MATCH');
+    // A compensated decision remains in conflict history, never a positive match.
+    if (mapping.isCompensated !== true) {
+      note(mapping.resourceCatalogId, 'REVIEWED_MAPPING_NAME_MATCH');
+    }
   }
   const conflictingPriorDecisions =
     new Set(sameNameMappings.map((mapping) => mapping.resourceCatalogId)).size > 1;
@@ -1928,6 +1935,7 @@ function resolveByMachineEvidence(
     }
     for (const mapping of reviewedMappings) {
       if (
+        mapping.isCompensated !== true &&
         normalizeResourceCode(mapping.rawCode) === normalizedCode &&
         typeMatches(mapping.resourceType, type)
       ) {
