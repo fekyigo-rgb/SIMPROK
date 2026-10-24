@@ -10,6 +10,13 @@ const SPEC_KEYS: Record<string, string> = {
   ukuran: 'ukuran', dimensi: 'dimensi', diameter: 'diameter',
   warna: 'warna', mutu: 'mutu', standar: 'standar', standard: 'standar',
   kapasitas: 'kapasitas',
+  // Confirmed, explicit use/function context. These remain qualitative facts;
+  // unlike definitive types/brands, different wording alone cannot prove
+  // a technical conflict or permit silent re-identification.
+  lingkungan: 'lingkungan', kondisi: 'kondisi',
+  penggunaan: 'penggunaan', peruntukan: 'peruntukan',
+  fungsi: 'fungsi', metode: 'metode', kompetensi: 'kompetensi',
+  penempatan: 'penempatan', ketahanan: 'ketahanan',
 };
 
 export type ConfirmedResourceSpecifications = Record<string, string>;
@@ -54,7 +61,11 @@ export function compareConfirmedSpecifications(
           Number(a[2].replace(',', '.')) !== Number(b[2].replace(',', '.'))) return 'CONFLICT';
       return 'UNKNOWN';
     }
-    if (key === 'diameter' || key === 'kapasitas') return 'UNKNOWN';
+    if (key === 'diameter' || key === 'kapasitas' ||
+        key === 'lingkungan' || key === 'kondisi' ||
+        key === 'penggunaan' || key === 'peruntukan' ||
+        key === 'fungsi' || key === 'metode' || key === 'kompetensi' ||
+        key === 'penempatan' || key === 'ketahanan') return 'UNKNOWN';
     return 'CONFLICT';
   }
   if (Object.keys(source).length === Object.keys(known).length &&

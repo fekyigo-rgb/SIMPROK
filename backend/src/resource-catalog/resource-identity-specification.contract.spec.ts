@@ -28,6 +28,23 @@ describe('PR205 specification authority contract — optional, symmetric and fai
     expect(compareConfirmedSpecifications({ ukuran: '5/7 cm' }, { dimensi: '50x70 mm' })).toBe('UNKNOWN');
     expect(compareConfirmedSpecifications({ merek: 'Shimizu' }, { merek: 'Shimizu', tipe: 'PS-128' })).toBe('UNKNOWN');
   });
+  it('BP-C2: confirmed use-context has controlled vocabulary but cannot claim conflict by wording alone', () => {
+    expect(confirmedSpecifications({
+      lingkungan: 'di dalam air', kompetensi: 'penyelam',
+      metode: 'tremie', peruntukan: 'pekerjaan laut',
+    })).toEqual({
+      kompetensi: 'penyelam', lingkungan: 'di dalam air',
+      metode: 'tremie', peruntukan: 'pekerjaan laut',
+    });
+    expect(compareConfirmedSpecifications(
+      { lingkungan: 'air laut' }, { lingkungan: 'perairan laut' },
+    )).toBe('UNKNOWN');
+    expect(compareConfirmedSpecifications(
+      { kompetensi: 'penyelam' }, { kompetensi: 'pekerja bawah air' },
+    )).toBe('UNKNOWN');
+    expect(confirmedSpecifications({ komentar: 'new identity please' })).toBeNull();
+  });
+
   it('SPEC-E: never admit unsupported fields, structural values, empty values or contradictory aliases', () => {
     expect(confirmedSpecifications({ status: 'APPROVED' })).toBeNull();
     expect(confirmedSpecifications({ merek: { text: 'A' } })).toBeNull();

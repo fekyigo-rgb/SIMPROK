@@ -1072,6 +1072,19 @@ export function isEvidenceBoundSpecificVariantOfGeneral(
     mutu: ['segala mutu', 'semua mutu', 'berbagai mutu'],
     diameter: ['segala diameter', 'semua diameter', 'berbagai diameter'],
     kapasitas: ['segala kapasitas', 'semua kapasitas', 'berbagai kapasitas'],
+    // Product-law: a confirmed, explicitly named functional qualifier can
+    // distinguish materials, equipment OR labor from a broader catalog row.
+    // Unlike a synonym dictionary, only exact positive source attributes
+    // whose removal leaves the catalog designation may open human examination.
+    lingkungan: [],
+    kondisi: [],
+    penggunaan: [],
+    peruntukan: [],
+    fungsi: [],
+    metode: [],
+    kompetensi: [],
+    penempatan: [],
+    ketahanan: [],
   };
   return Object.entries(source).some(([key, rawValue]) => {
     if (!Object.hasOwn(genericWords, key)) return false;
