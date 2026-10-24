@@ -1,4 +1,4 @@
-\# SIMPROK AGENTS.md
+# SIMPROK AGENTS.md
 
 ## Faith Identity
 In the Name of the Lord Jesus Christ.
@@ -9,7 +9,7 @@ Working phrase: "Dalam Tuhan Yesus Kristus ada kemenangan."
 
 
 
-\## Role
+## Role
 
 
 
@@ -53,7 +53,7 @@ Local multi-agent command center when used.
 
 
 
-\## SIMPROK Identity
+## SIMPROK Identity
 
 
 
@@ -81,7 +81,7 @@ Humans decide.
 
 
 
-\## Current Focus
+## Current Focus
 
 
 
@@ -111,7 +111,7 @@ HOLD until Owner explicitly reopens it.
 
 
 
-\## Working Laws
+## Working Laws
 
 
 
@@ -135,7 +135,7 @@ Do not touch PASS/LOCKED rooms unless explicitly authorized.
 
 
 
-\## Work Pattern
+## Work Pattern
 
 
 
@@ -153,7 +153,7 @@ Do not mix multiple unrelated fixes in one slice.
 
 
 
-\## Git Safety
+## Git Safety
 
 
 
@@ -185,7 +185,7 @@ After Owner PASS:
 
 
 
-\## Current Dirty Files To Protect
+## Current Dirty Files To Protect
 
 
 
@@ -203,7 +203,7 @@ Do not stage unless Owner explicitly authorizes:
 
 
 
-\## Proyek Saya Product Law
+## Proyek Saya Product Law
 
 
 
@@ -239,7 +239,7 @@ Monitoring:
 
 
 
-\## Output Format For Codex Reports
+## Output Format For Codex Reports
 
 
 
@@ -284,6 +284,18 @@ The canonical document status and version determine whether the law is still DRA
 Do not duplicate or reinterpret the full law in AGENTS.md, CLAUDE.md, prompts, or Project Memory. Use pointers only.
 
 If repository reality conflicts with locked law, report the gap. Do not silently change the law or repository evidence.
+
+---
+
+## Construction Classification Law Pointer — OWNER LOCKED 2026-09-02
+
+Before any architecture, audit, implementation, taxonomy, AHSP discovery, BOQ classification, or construction-classification work, read:
+
+`docs/project-memory/SIMPROK_CONSTRUCTION_CLASSIFICATION_LAW.md`
+
+Core rule: SIMPROK uses a **MULTIDIMENSIONAL + AUTHORITY-AWARE + CONTEXT-AWARE** construction classification model. Do NOT create a universal `Bidang → Domain → Subcategory → Division` tree. Official PUPR/KBLI classifications remain external authorities; SIMPROK provides a canonical crosswalk/work-identity layer; Division is project/document/specification/work-breakdown context; Work Type and technical AHSP identity remain distinct. Formation Knowledge remains deferred.
+
+This pointer does not authorize implementation. Exact current repository reality and bounded Owner/PM implementation gates remain mandatory.
 
 Soli Deo Gloria. Haleluya. Amin.
 
