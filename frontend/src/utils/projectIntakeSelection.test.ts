@@ -10,6 +10,7 @@ import {
   fieldContextAcknowledgement,
   projectFieldContextView,
   readSavedFieldContext,
+  readDraftPreparationFields,
   intakeContextMatches,
   intakeLocationRegionIds,
   intakeLocationSummary,
@@ -727,4 +728,42 @@ test('Ruang Persiapan uses the canonical intake doors and no competing taxonomy'
   assert.doesNotMatch(wiring, /Bidang Bina Marga/);
   assert.doesNotMatch(wiring, /JENIS_PENGADAAN_OPTIONS/);
   assert.doesNotMatch(wiring, /JENIS_PEKERJAAN/);
+});
+
+test('Backflow restores multiline address containing generated-looking labels without truncation',()=>{
+  const address = [
+    'Jalan Merdeka blok 9',
+    'Nama Proyek: alamat ini bukan nama proyek',
+    'Tahun Anggaran / Tahun Harga: 1999',
+    'Pemilik / Instansi: BUKAN PEMILIK',
+    'Konteks Lapangan: 9',
+    'Alamat Detail: Gedung A',
+  ].join('\n');
+  const context = 'Narasi lokasi\nNama Proyek: Uji di dalam konteks';
+  const description = composeDraftDescription({
+    address, fieldContext: context,
+    preparationLines: [
+      'Nama Proyek: RAB BENAR',
+      'Tahun Anggaran / Tahun Harga: 2026',
+      'Pemilik / Instansi: TIM SIMPROK',
+    ],
+  });
+  assert.deepEqual(readDraftPreparationFields(description),{
+    year:'2026',owner:'TIM SIMPROK',address,
+  });
+  assert.deepEqual(readSavedFieldContext(description),{state:'present',text:context});
+});
+test('Backflow preserves no-address and fails closed on unparseable descriptive data',()=>{
+  const noAddress = composeDraftDescription({
+    address: null, fieldContext: null,
+    preparationLines: [
+      'Nama Proyek: Uji',
+      'Tahun Anggaran / Tahun Harga: 2026',
+      'Pemilik / Instansi: Simprok',
+    ],
+  });
+  assert.deepEqual(readDraftPreparationFields(noAddress),{
+    year:'2026',owner:'Simprok',address:'',
+  });
+  assert.equal(readDraftPreparationFields(noAddress.replace('Pemilik / Instansi: Simprok','Pemilik Instansi: Simprok')),null);
 });

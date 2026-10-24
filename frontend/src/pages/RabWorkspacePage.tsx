@@ -522,8 +522,11 @@ export function RabWorkspacePage() {
   const projectId = routeProjectId ?? null;
   const preparedFromRoute = projectId ? null : readRabPreparedProject(location.state);
   // Recover only this account's browser-session draft after an auth redirect.
-  const recovery = !projectId && !preparedFromRoute
-    ? readRabRecovery<RabRow>(account?.id, activeWorkspaceId) : null;
+  const sessionRecovery = !projectId ? readRabRecovery<RabRow>(account?.id, activeWorkspaceId) : null;
+  // Never attach an unrelated saved draft to an explicit preparation route.
+  const recovery = sessionRecovery && (!preparedFromRoute ||
+    JSON.stringify(sessionRecovery.preparedProject) === JSON.stringify(preparedFromRoute))
+    ? sessionRecovery : null;
   const pendingProject = preparedFromRoute ?? recovery?.preparedProject ?? null;
   const isProvisional = Boolean(pendingProject && activeWorkspaceId === pendingProject.workspaceId);
   const [localProjectCode, setLocalProjectCode] = useState(recovery?.projectCode ?? pendingProject?.code ?? '');
@@ -573,6 +576,7 @@ export function RabWorkspacePage() {
   const firstSaveVerifiedRef = useRef(false);
   // Save-and-leave only proceeds after the existing server save reports success.
   const exitAfterSaveRef = useRef(false);
+  const backflowVerifiedRef = useRef(false);
   // Standard data-router blocker covers menu links, Back and cross-project routes.
   // Browser-session recovery only; never a canonical Project/BOQ save.
   useEffect(() => {
@@ -585,7 +589,7 @@ export function RabWorkspacePage() {
   }, [account?.id, activeWorkspaceId, isProvisional, pendingProject, rows,
       volumes, unitPrices, marginPercent, ppnPercent, localProjectCode]);
   const blocker = useBlocker(({ currentLocation, nextLocation }) =>
-    !firstSaveVerifiedRef.current && shouldBlockRabLeave({
+    !backflowVerifiedRef.current && !firstSaveVerifiedRef.current && shouldBlockRabLeave({
       draftDirty, saving: isSaving,
       currentPath: currentLocation.pathname, nextPath: nextLocation.pathname,
     }),
@@ -1619,6 +1623,31 @@ export function RabWorkspacePage() {
     setCalculationAsOfDate(value);
   };
 
+  const handleReturnToPreparation = () => {
+    if (!isProvisional || !pendingProject || isSaving || firstSaveUncertainRef.current) {
+      setShowBackflowWarning(true);
+      setStatusMessage('Perubahan data persiapan hanya tersedia untuk RAB lokal yang aman; draft tersimpan menggunakan tata kelola proyek.');
+      return;
+    }
+    // Use the existing account/workspace-scoped session recovery. No Project POST.
+    const saved = writeRabRecovery(account?.id, activeWorkspaceId, {
+      preparedProject: pendingProject, rows, volumes, unitPrices,
+      marginPercent, ppnPercent, projectCode: localProjectCode,
+    });
+    const readback = saved ? readRabRecovery<RabRow>(account?.id, activeWorkspaceId) : null;
+    if (!readback ||
+        JSON.stringify(readback.preparedProject) !== JSON.stringify(pendingProject) ||
+        JSON.stringify(readback.rows) !== JSON.stringify(rows) ||
+        JSON.stringify(readback.volumes) !== JSON.stringify(volumes) ||
+        JSON.stringify(readback.unitPrices) !== JSON.stringify(unitPrices)) {
+      setRecoveryWarning(true);
+      setStatusMessage('Tidak dapat memastikan pemulihan RAB lokal. Tetap di Ruang Kerja; tidak ada data yang dibuang.');
+      return;
+    }
+    backflowVerifiedRef.current = true;
+    navigate('/project/new', { state: { rabBackflow: true } });
+  };
+
   const canEditDraft = capabilityState.kind === 'ready' && capabilityState.canEditDraft && !(isProvisional && isSaving);
   // Existing Gate-2A lifecycle: a terminal stored price has no working occurrence to persist.
   // Only a new, explicit AHSP/Region selection can open a new calculation journey.
@@ -2347,7 +2376,7 @@ export function RabWorkspacePage() {
           <button onClick={() => navigate('/')} title="Kembali ke Beranda" aria-label="Kembali ke Beranda" data-route="/">
             <ArrowLeft size={17} /> Kembali
           </button>
-          <button onClick={() => setShowBackflowWarning(!showBackflowWarning)} title="Ubah Data Pekerjaan" aria-label="Ubah Data Pekerjaan" className="simprok-rab-nav-secondary">
+          <button onClick={handleReturnToPreparation} title="Kembali ke Persiapan RAB tanpa kehilangan pekerjaan lokal" aria-label="Ubah Data Pekerjaan" className="simprok-rab-nav-secondary">
             Ubah Data Pekerjaan
           </button>
           <button onClick={() => layoutContext?.toggleSidebar()} title="Tampilkan atau sembunyikan menu" aria-label="Tampilkan atau sembunyikan menu" data-route="/?ruang=ruang-kerja-rab">
@@ -2578,7 +2607,7 @@ export function RabWorkspacePage() {
           <strong>Peringatan Navigasi (Draft Lokal)</strong>
           <p>Perubahan data pekerjaan dapat memengaruhi rekomendasi AHSP, Basic Price, Execution Factor, dan total RAB. Item RAB yang sudah dibuat tetap dipertahankan.</p>
           <p>
-            <em>Navigasi kembali ke Persiapan RAB ditahan sementara agar isi RAB lokal tidak hilang. Backflow penuh menunggu penyimpanan draft/persistence siap.</em>
+            <em>Untuk RAB lokal, Persiapan RAB dapat dibuka setelah salinan pemulihan terbukti aman. RAB tersimpan mengikuti aturan perubahan konteks proyek.</em>
           </p>
           <button onClick={() => setShowBackflowWarning(false)} className="simprok-rab-action simprok-rab-action--secondary" style={{ marginTop: '10px' }}>
             Tutup Peringatan

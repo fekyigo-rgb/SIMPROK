@@ -47,7 +47,7 @@ export function readRabRecovery<T>(accountId: string | null | undefined, workspa
   } catch { return null; }
 }
 
-export function writeRabRecovery<T>(accountId: string | null | undefined, workspaceId: string | null | undefined, state: Recovery<T>): boolean {
+export function writeRabRecovery<T>(accountId: string | null | undefined, workspaceId: string | null | undefined, state: Recovery<T>, expectedPreparedProject?: RabPreparedProject): boolean {
   if (!accountId || !workspaceId || state.preparedProject.workspaceId !== workspaceId) return false;
   try {
     const key = storageKey(accountId, workspaceId);
@@ -58,14 +58,21 @@ export function writeRabRecovery<T>(accountId: string | null | undefined, worksp
     });
     if (!parseRecoveryPayload<T>(serialized, workspaceId)) return false;
     const previous = sessionStorage.getItem(key);
-    if (previous !== null) {
-      const existing = readRabRecovery<T>(accountId, workspaceId);
-      // Preserve a valid different draft, but never let an unreadable stale key block all future backups.
-      if (existing && JSON.stringify(existing.preparedProject) !== JSON.stringify(state.preparedProject)) return false;
-    }
+    const existing = previous !== null ? readRabRecovery<T>(accountId, workspaceId) : null;
+    // A backflow edit requires the exact original snapshot. No cross-draft
+    // replacement and no "recreate" if another tab already discarded it.
+    if (expectedPreparedProject &&
+        (!existing || JSON.stringify(existing.preparedProject) !== JSON.stringify(expectedPreparedProject))) return false;
+    // Ordinary backup must never overwrite another recoverable RAB.
+    if (existing && !expectedPreparedProject &&
+        JSON.stringify(existing.preparedProject) !== JSON.stringify(state.preparedProject)) return false;
     sessionStorage.setItem(key, serialized);
     const readback = sessionStorage.getItem(key);
-    return readback === serialized && parseRecoveryPayload<T>(readback, workspaceId) !== null;
+    const valid = readback === serialized && parseRecoveryPayload<T>(readback, workspaceId) !== null;
+    if (!valid && previous !== null) {
+      try { sessionStorage.setItem(key, previous); } catch { /* fail closed; caller sees failure */ }
+    }
+    return valid;
   } catch { return false; }
 }
 

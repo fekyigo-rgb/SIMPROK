@@ -38,6 +38,7 @@ const PARENT_LEVEL: Record<IntakeMultiLevel, 'COUNTRY' | IntakeMultiLevel> = {
 };
 
 type ProjectIntakeLocationFieldsProps = {
+  initialRegionIds?: string[];
   onChange: (state: {
     locationRegionIds: string[];
     blockedReason: string | null;
@@ -46,12 +47,14 @@ type ProjectIntakeLocationFieldsProps = {
 
 export function ProjectIntakeLocationFields({
   onChange,
+  initialRegionIds,
 }: ProjectIntakeLocationFieldsProps) {
   const [selection, setSelection] = useState<IntakeRegionSelection>(emptyIntakeRegionSelection());
   const [countries, setCountries] = useState<RegionLookupItem[]>([]);
   const [options, setOptions] = useState(emptyOptions());
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [restoring, setRestoring] = useState(Boolean(initialRegionIds?.length));
   const [phase, setPhase] = useState(idlePhase);
   const request = useRef(0);
   const childRequest = useRef<Record<IntakeMultiLevel, number>>({
@@ -152,8 +155,45 @@ export function ProjectIntakeLocationFields({
       }
       if (ticket !== request.current) return;
       setCountries(items);
-      setSelection(emptyIntakeRegionSelection());
       setOptions(emptyOptions());
+      if (initialRegionIds?.length) {
+        // Resolve ONLY the previous canonical IDs and their ancestors. No new
+        // selection, guessing, or catalog rewrite when returning to Preparation.
+        const selectedIds = [...new Set(initialRegionIds)];
+        const resolved = new Map<string, { id: string; name: string; parentId: string | null; administrativeLevel: string }>();
+        // Existing intake permits large multi-selects. Reuse the same bounded
+        // read endpoint in batches, never truncate the original choices.
+        for (let offset = 0; offset < selectedIds.length; offset += 25) {
+          const response = await apiFetch('/project-intake/regions/selected-lineage?ids=' +
+            encodeURIComponent(selectedIds.slice(offset, offset + 25).join(',')));
+          if (!response.ok) throw new Error('Wilayah sebelumnya tidak dapat dipulihkan dari katalog resmi.');
+          const body = await response.json() as { nodes?: Array<{ id: string; name: string; parentId: string | null; administrativeLevel: string }> };
+          if (!Array.isArray(body.nodes)) throw new Error('Data wilayah sebelumnya tidak valid.');
+          for (const node of body.nodes) resolved.set(node.id, node);
+        }
+        const resolvedNodes = [...resolved.values()];
+        const country = resolvedNodes.find((node) => node.administrativeLevel === 'COUNTRY' &&
+          items.some((item) => item.id === node.id));
+        if (!country) throw new Error('Negara awal tidak ditemukan; lokasi belum boleh diubah otomatis.');
+        const order = INTAKE_MULTI_LEVELS;
+        const picks = resolvedNodes.filter((node): node is typeof node & { administrativeLevel: IntakeMultiLevel } =>
+          order.includes(node.administrativeLevel as IntakeMultiLevel) &&
+          !!node.parentId && isCanonicalRegionId(node.id) && isCanonicalRegionId(node.parentId));
+        const restored: IntakeRegionSelection = {
+          country: { id: country.id, name: country.name },
+          picks: picks.sort((a,b)=>order.indexOf(a.administrativeLevel)-order.indexOf(b.administrativeLevel))
+            .map((node)=>({id:node.id,name:node.name,parentId:node.parentId as string,level:node.administrativeLevel})),
+        };
+        const restoredIds = intakeLocationRegionIds(restored);
+        if (restoredIds.length !== initialRegionIds.length ||
+            !initialRegionIds.every((id) => restoredIds.includes(id))) {
+          throw new Error('Lokasi awal belum terverifikasi. Pilihan lama tetap dilindungi.');
+        }
+        setSelection(restored);
+        setRestoring(false);
+      } else {
+        setSelection(emptyIntakeRegionSelection());
+      }
       if (items.length === 0) setError('Wilayah resmi belum tersedia.');
     } catch (cause) {
       if (ticket !== request.current) return;
@@ -201,9 +241,9 @@ export function ProjectIntakeLocationFields({
   useEffect(() => {
     onChange({
       locationRegionIds: intakeLocationRegionIds(selection),
-      blockedReason: error ?? (loading ? 'Memuat wilayah resmi.' : null),
+      blockedReason: error ?? (loading || restoring ? 'Memuat wilayah resmi dan pemulihan lokasi.' : null),
     });
-  }, [error, loading, onChange, selection]);
+  }, [error, loading, restoring, onChange, selection]);
 
   async function chooseAll(level: IntakeMultiLevel) {
     const parents = intakeParentIds(selection, level);

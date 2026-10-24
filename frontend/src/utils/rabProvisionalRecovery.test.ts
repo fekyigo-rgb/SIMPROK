@@ -53,6 +53,29 @@ test('write never reports success for an unreadable snapshot and never damages a
   assert.deepEqual(readRabRecovery('actor-a',workspaceId),snapshot);
   clearRabRecovery('actor-a',workspaceId);
 });
+test('backflow revises only its own prepared context without discarding any RAB rows or prices',()=>{
+  clearRabRecovery('actor-a',workspaceId);
+  assert.equal(writeRabRecovery('actor-a',workspaceId,snapshot),true);
+  const editedContext = {...snapshot, preparedProject: {
+    ...snapshot.preparedProject, name:'Jembatan Baru', description:'Alamat Detail: Jalan Uji',
+    classificationVocabularyPaths:[{kategori:'Cipta Karya'}],
+  }};
+  assert.equal(writeRabRecovery('actor-a',workspaceId,editedContext),false);
+  assert.equal(writeRabRecovery('actor-a',workspaceId,editedContext,snapshot.preparedProject),true);
+  assert.deepEqual(readRabRecovery('actor-a',workspaceId),editedContext);
+  assert.equal(writeRabRecovery('actor-a',workspaceId,snapshot,snapshot.preparedProject),false);
+  assert.deepEqual(readRabRecovery('actor-a',workspaceId),editedContext);
+  clearRabRecovery('actor-a',workspaceId);
+  assert.equal(writeRabRecovery('actor-a',workspaceId,editedContext,snapshot.preparedProject),false);
+});
+test('backflow declines replacing another recoverable draft, including after a stale first-read',()=>{
+  clearRabRecovery('actor-a',workspaceId);
+  assert.equal(writeRabRecovery('actor-a',workspaceId,snapshot),true);
+  const unrelated = {...snapshot, preparedProject:{...snapshot.preparedProject,name:'Other Project'}};
+  assert.equal(writeRabRecovery('actor-a',workspaceId,unrelated,unrelated.preparedProject),false);
+  assert.deepEqual(readRabRecovery('actor-a',workspaceId),snapshot);
+  clearRabRecovery('actor-a',workspaceId);
+});
 test('unreadable stale backup does not poison subsequent legitimate recovery',()=>{
   clearRabRecovery('actor-a',workspaceId);
   const key = 'simprok-rab-provisional-v1:actor-a:'+workspaceId;

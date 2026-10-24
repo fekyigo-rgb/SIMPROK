@@ -1,11 +1,11 @@
 import { type FormEvent, useCallback, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { ProjectIntakeClassificationFields } from '../components/project/ProjectIntakeClassificationFields';
 import { ProjectIntakeLocationFields } from '../components/project/ProjectIntakeLocationFields';
 import type { ProjectVocabularyPath } from '../utils/projectIntakeVocabulary';
-import { composeDraftDescription, fieldContextAcknowledgement } from '../utils/projectIntakeSelection';
-import { readRabRecovery } from '../utils/rabProvisionalRecovery';
+import { composeDraftDescription, fieldContextAcknowledgement, readSavedFieldContext, readDraftPreparationFields } from '../utils/projectIntakeSelection';
+import { readRabRecovery, writeRabRecovery } from '../utils/rabProvisionalRecovery';
 import { ArrowRight, MapPin, Sparkles, X } from 'lucide-react';
 
 const requiredPreparationFields = [
@@ -16,20 +16,33 @@ const requiredPreparationFields = [
 
 export function ProjectSetupPage() {
   const navigate = useNavigate();
+  const location = useLocation();
   const { token, activeWorkspaceId, account } = useAuth();
   // Visible only to the same account and workspace after a 401/session expiry.
   const recoverableRab = readRabRecovery<unknown>(account?.id, activeWorkspaceId);
-  const [interactionText, setInteractionText] = useState('');
+  const backflowRequested = (location.state as { rabBackflow?: unknown } | null)?.rabBackflow === true;
+  const backflowProject = backflowRequested ? recoverableRab?.preparedProject ?? null : null;
+  const savedContext = backflowProject ? readSavedFieldContext(backflowProject.description) : null;
+  // Recover generated fields only from the unambiguous final form block.
+  // Never infer labels from unrestricted multiline address text.
+  const restoredFields = backflowProject ? readDraftPreparationFields(backflowProject.description) : null;
+  const [interactionText, setInteractionText] = useState(savedContext?.state === 'present' ? savedContext.text : '');
   const [interactionStatus, setInteractionStatus] = useState('Engine belum aktif');
   const [classificationNodeIds, setClassificationNodeIds] = useState<string[] | null>(null);
   const [classificationVocabularyPaths, setClassificationVocabularyPaths] = useState<ProjectVocabularyPath[]>([]);
   const [classificationBlocked, setClassificationBlocked] = useState<string | null>('Memuat klasifikasi resmi.');
+  const [classificationChangeAcknowledged, setClassificationChangeAcknowledged] = useState(false);
   const [selectedLocationRegionIds, setSelectedLocationRegionIds] = useState<string[]>([]);
   const [locationBlocked, setLocationBlocked] = useState<string | null>('Memuat wilayah resmi.');
-  const [preparationData, setPreparationData] = useState<Record<string, string>>({});
-  const [projectCode, setProjectCode] = useState('');
-  const [budgetCeiling, setBudgetCeiling] = useState('');
-  const [mainMaterialSpec, setMainMaterialSpec] = useState('');
+  const [preparationData, setPreparationData] = useState<Record<string, string>>(() => backflowProject ? ({
+    'Nama Proyek': backflowProject.name,
+    'Tahun Anggaran / Tahun Harga': restoredFields?.year ?? '',
+    'Pemilik / Instansi': restoredFields?.owner ?? '',
+    'Alamat Detail': restoredFields?.address ?? '',
+  }) : ({} as Record<string, string>));
+  const [projectCode, setProjectCode] = useState(backflowProject ? (recoverableRab?.projectCode ?? backflowProject.code) : '');
+  const [budgetCeiling, setBudgetCeiling] = useState(backflowProject?.budgetBaseline ?? '');
+  const [mainMaterialSpec, setMainMaterialSpec] = useState(backflowProject?.mainMaterialSpec ?? '');
   const [inputError, setInputError] = useState('');
 
   const handleClassificationChange = useCallback(
@@ -37,6 +50,7 @@ export function ProjectSetupPage() {
       setClassificationNodeIds(state.classificationNodeIds);
       setClassificationVocabularyPaths(state.classificationVocabularyPaths);
       setClassificationBlocked(state.blockedReason);
+      setClassificationChangeAcknowledged(false);
     },
     [],
   );
@@ -95,17 +109,30 @@ export function ProjectSetupPage() {
     return { value: trimmed };
   };
 
+  const sameIds = (a: string[], b: string[]) =>
+    JSON.stringify([...new Set(a)].sort()) === JSON.stringify([...new Set(b)].sort());
+  const samePaths = (a: ProjectVocabularyPath[], b: ProjectVocabularyPath[]) =>
+    JSON.stringify(a.map((value) => JSON.stringify(value)).sort()) ===
+    JSON.stringify(b.map((value) => JSON.stringify(value)).sort());
+  const classificationChanged = Boolean(backflowProject && classificationNodeIds &&
+    (!sameIds(classificationNodeIds, backflowProject.classificationNodeIds) ||
+      !samePaths(classificationVocabularyPaths, backflowProject.classificationVocabularyPaths)));
+
   const validateDraftInput = () => {
     const workspaceId = getRequestWorkspaceId(activeWorkspaceId);
     if (!token || !workspaceId) {
       return 'Sesi atau workspace belum aktif. Silakan login dan pilih workspace kembali.';
     }
 
+    if (backflowProject && !restoredFields) return 'Data persiapan lama tidak dapat dibaca dengan pasti. RAB lokal tetap dilindungi; jangan timpa draft ini.';
     const projectName = preparationData['Nama Proyek']?.trim();
     if (!projectName) return 'Nama pekerjaan/proyek wajib diisi.';
     if (classificationBlocked) return classificationBlocked;
     if (!classificationNodeIds) {
       return 'Jenis Pengadaan dan minimal satu Kategori wajib dipilih. Subkategori memperjelas prioritas bila dipilih.';
+    }
+    if (classificationChanged && !classificationChangeAcknowledged) {
+      return 'Sebagian klasifikasi berbeda dari draft awal. Periksa pilihan dan konfirmasikan perubahan klasifikasi terlebih dahulu.';
     }
     if (locationBlocked) return locationBlocked;
     if (selectedLocationRegionIds.length === 0) return 'Pilih minimal satu lokasi resmi.';
@@ -117,7 +144,11 @@ export function ProjectSetupPage() {
 
   // Persiapan RAB is a LOCAL intent, never a database write.
   const handleCreateDraftProject = () => {
-    if (recoverableRab) {
+    if (backflowRequested && !recoverableRab) {
+      setInputError('Konteks RAB lokal tidak dapat dipulihkan. Jangan memulai proyek baru; periksa sesi atau workspace sebelumnya.');
+      return;
+    }
+    if (recoverableRab && !backflowProject) {
       setInputError('Masih ada RAB lokal belum disimpan. Lanjutkan RAB tersebut; jika ingin memulai yang baru, gunakan Buang Perubahan Lokal dan Keluar dari Ruang Kerja RAB terlebih dahulu.');
       return;
     }
@@ -142,6 +173,19 @@ export function ProjectSetupPage() {
         ...(normalizedBudget ? { budgetBaseline: normalizedBudget } : {}),
         ...(normalizedSpec ? { mainMaterialSpec: normalizedSpec } : {}),
       };
+    if (backflowProject && recoverableRab) {
+      // Revise only the matching account/workspace's original draft; keep all rows,
+      // volumes, prices and identity intact. Fail closed on a competing draft.
+      const backupOk = writeRabRecovery(account?.id, activeWorkspaceId,
+        { ...recoverableRab, preparedProject: draftPayload, projectCode: draftPayload.code },
+        backflowProject);
+      const verified = backupOk ? readRabRecovery<unknown>(account?.id, activeWorkspaceId) : null;
+      if (!verified || JSON.stringify(verified.preparedProject) !== JSON.stringify(draftPayload) ||
+          JSON.stringify(verified.rows) !== JSON.stringify(recoverableRab.rows)) {
+        setInputError('Pembaharuan data persiapan belum terverifikasi. RAB lama tetap dilindungi; jangan tinggalkan halaman.');
+        return;
+      }
+    }
     setInputError('');
     navigate('/project/new/rab/workspace', { state: { preparedProject: draftPayload } });
   };
@@ -264,14 +308,25 @@ export function ProjectSetupPage() {
             <section className="simprok-rab-room" aria-label="Klasifikasi Resmi">
               <h3>Klasifikasi Resmi</h3>
               <div className="simprok-rab-form__grid">
-                <ProjectIntakeClassificationFields onChange={handleClassificationChange} />
+                <ProjectIntakeClassificationFields onChange={handleClassificationChange} initialPreparedProject={backflowProject} />
+                {classificationChanged && !classificationBlocked ? (
+                  <div className="simprok-rab-validation-alert" role="alert">
+                    <strong>Klasifikasi berbeda dari draft sebelumnya.</strong>
+                    <p>Periksa kembali kategori dan subkategori yang dipilih. SIMPROK tidak akan membuang pilihan lama secara diam-diam.</p>
+                    <button type="button" onClick={() => setClassificationChangeAcknowledged(true)}
+                      disabled={classificationChangeAcknowledged}
+                      aria-label="Konfirmasi perubahan klasifikasi">
+                      {classificationChangeAcknowledged ? 'Perubahan telah dikonfirmasi' : 'Saya menyetujui perubahan klasifikasi'}
+                    </button>
+                  </div>
+                ) : null}
               </div>
             </section>
 
             <section className="simprok-rab-room" aria-label="Lokasi Resmi">
               <h3>Lokasi Resmi</h3>
               <div className="simprok-rab-form__grid">
-                <ProjectIntakeLocationFields onChange={handleLocationChange} />
+                <ProjectIntakeLocationFields onChange={handleLocationChange} initialRegionIds={backflowProject?.locationRegionIds} />
               </div>
             </section>
 

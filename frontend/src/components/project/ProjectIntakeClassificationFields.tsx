@@ -18,8 +18,10 @@ import {
   type ProjectVocabularyPath,
 } from '../../utils/projectIntakeVocabulary';
 import { isVocabularyOptionId } from '../../utils/ahspBaselineVocabulary';
+import type { RabPreparedProject } from '../../utils/rabPreparedProject';
 
 type ProjectIntakeClassificationFieldsProps = {
+  initialPreparedProject?: RabPreparedProject | null;
   onChange: (state: {
     classificationNodeIds: string[] | null;
     classificationVocabularyPaths: ProjectVocabularyPath[];
@@ -34,6 +36,7 @@ type ChildState = {
 
 export function ProjectIntakeClassificationFields({
   onChange,
+  initialPreparedProject,
 }: ProjectIntakeClassificationFieldsProps) {
   const [roots, setRoots] = useState<ProjectClassificationNode[]>([]);
   const [kategoriOptions, setKategoriOptions] = useState<ProjectClassificationNode[]>([]);
@@ -43,6 +46,8 @@ export function ProjectIntakeClassificationFields({
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const request = useRef(0);
+  const restoredCategoriesRef = useRef(false);
+  const restoredSubsRef = useRef(false);
   const childRequest = useRef<Record<string, number>>({});
 
   async function loadNodes(
@@ -81,8 +86,13 @@ export function ProjectIntakeClassificationFields({
       setRoots(nodes);
       setKategoriOptions([]);
       setChildren({});
-      setSelection(emptyIntakeClassification());
-      if (nodes.length === 0) setError('Klasifikasi resmi belum tersedia.');
+      const restoredRoot = initialPreparedProject
+        ? nodes.find((node) => node.id === initialPreparedProject.classificationNodeIds[0]) : null;
+      setSelection(restoredRoot
+        ? { root: { id: restoredRoot.id, name: restoredRoot.name }, picks: [] }
+        : emptyIntakeClassification());
+      if (initialPreparedProject && !restoredRoot) setError('Jenis pengadaan lama tidak tersedia. Pilih ulang klasifikasi sebelum melanjutkan.');
+      else if (nodes.length === 0) setError('Klasifikasi resmi belum tersedia.');
     } catch (cause) {
       if (ticket !== request.current) return;
       setRoots([]);
@@ -112,6 +122,20 @@ export function ProjectIntakeClassificationFields({
         if (ticket !== request.current) return;
         setKategoriOptions(nodes);
         setKategoriLoaded(true);
+        if (initialPreparedProject && !restoredCategoriesRef.current) {
+          const savedIds = new Set(initialPreparedProject.classificationNodeIds);
+          const savedNames = new Set(initialPreparedProject.classificationVocabularyPaths.map((path) => path.kategori));
+          const selected = nodes.filter((node) => savedIds.has(node.id) || (isVocabularyOptionId(node.id) && savedNames.has(node.name)));
+          // Restore every available choice; parent will detect a partial
+          // restoration and require an explicit Owner acknowledgement.
+          restoredCategoriesRef.current = true;
+          setSelection((current) => ({
+            ...current,
+            picks: selected.map((node) => ({
+              id: node.id, name: node.name, parentId: rootId, level: 'KATEGORI' as const,
+            })),
+          }));
+        }
       })
       .catch((cause) => {
         if (ticket !== request.current) return;
@@ -147,6 +171,24 @@ export function ProjectIntakeClassificationFields({
     // children is intentionally read as a cache. The kategori key owns the reload.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [kategoriKey]);
+
+  useEffect(() => {
+    if (!initialPreparedProject || restoredSubsRef.current || !restoredCategoriesRef.current) return;
+    const categories = selection.picks.filter((pick) => pick.level === 'KATEGORI');
+    if (categories.length === 0 || categories.some((cat) => !children[cat.id]?.loaded)) return;
+    const savedIds = new Set(initialPreparedProject.classificationNodeIds);
+    const savedPaths = initialPreparedProject.classificationVocabularyPaths;
+    const subs = categories.flatMap((cat) => (children[cat.id]?.nodes ?? []).filter((node) =>
+      savedIds.has(node.id) || (isVocabularyOptionId(node.id) &&
+        savedPaths.some((path) => path.kategori === cat.name && path.subkategori === node.name)),
+    ).map((node) => ({
+      id: node.id, name: node.name, parentId: cat.id, level: 'SUBKATEGORI' as const,
+    })));
+    restoredSubsRef.current = true;
+    void Promise.resolve().then(() => {
+      setSelection((current) => ({ ...current, picks: [...current.picks, ...subs] }));
+    });
+  }, [children, initialPreparedProject, selection.picks]);
 
   const prepared = projectClassificationCreateSelection(selection, children);
   const idKey = prepared.classificationNodeIds?.join('|') ?? '';
