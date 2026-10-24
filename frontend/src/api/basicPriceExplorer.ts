@@ -109,6 +109,34 @@ export const searchExplorerRegions = async (q?: string, signal?: AbortSignal): P
   return page.items;
 };
 
+/** BP-C3 read-only impact preview for an ACTIVE workspace ResourceCatalog. No rename. */
+export interface CatalogNameImpact {
+  currentName: string;
+  proposedName: string;
+  resourceType: string;
+  resourceCode: string | null;
+  baseUnit: string;
+  hasSpecifications: boolean;
+  observedVersion: string;
+  impact: {
+    basicPrices: number;
+    projectAhspResolutions: number;
+    importRows: number;
+    sourceIdentityRecords: number;
+    conversionRules: number;
+  };
+  conflictingSameTypeNames: number;
+  verdict: 'IDENTITY_CONFLICT_REVIEW_REQUIRED' | 'SPELLING_ONLY_PREVIEW' | 'NO_CHANGE' | 'IDENTITY_REVIEW_REQUIRED';
+  writable: false;
+  message: string;
+}
+export const previewCatalogNameImpact = (
+  resourceCatalogId: string, proposedName: string,
+): Promise<CatalogNameImpact> =>
+  requestJson<CatalogNameImpact>(
+    withQuery('/basic-prices/catalog-name-impact/' + encodeURIComponent(resourceCatalogId), { proposedName }),
+  );
+
 // BP-MULTI-ACTION-01 — a private owner's governed withdrawal, not physical delete.
 // Reuses the canonical BasicPrice writer/authority and existing API credentials.
 export const removeOwnBasicPrice = async (

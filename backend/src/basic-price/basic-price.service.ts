@@ -253,6 +253,78 @@ export class BasicPriceService {
   ) {}
 
   /**
+   * BP-C3 — non-mutating preflight for a proposed name correction.
+   * Before anyone can edit a live ResourceCatalog, we must show its readers,
+   * identity collision risk and provenance. This is NOT rename authority.
+   * Only the exact active workspace-owned ResourceCatalog may be inspected.
+   */
+  async previewCatalogNameCorrection(
+    workspaceId: string,
+    resourceId: string,
+    proposedName: string,
+  ) {
+    // Reject control characters BEFORE whitespace normalization can erase them.
+    if (/[\x00-\x1f]/.test(proposedName)) {
+      throw new BadRequestException('RESOURCE_CATALOG_NAME_PROPOSAL_INVALID');
+    }
+    const proposal = proposedName.trim().replace(/\s+/g, ' ');
+    if (proposal.length < 3 || proposal.length > 180 || /[\x00-\x1f]/.test(proposal)) {
+      throw new BadRequestException('RESOURCE_CATALOG_NAME_PROPOSAL_INVALID');
+    }
+    const resource = await this.prisma.resourceCatalog.findFirst({
+      where: { id: resourceId, workspaceId, status: 'ACTIVE' },
+      select: { id: true, name: true, code: true, type: true, baseUnit: true, specifications: true, updatedAt: true },
+    });
+    if (!resource) throw new NotFoundException('RESOURCE_CATALOG_NOT_FOUND');
+    const [basicPriceCount, ahspResolutionCount, importRowCount, sourceIdentityCount, conversionRuleCount, neighbors] =
+      await Promise.all([
+        this.prisma.basicPrice.count({ where: { workspaceId, resourceId } }),
+        this.prisma.projectAhspResourceResolution.count({ where: { resourceCatalogId: resourceId } }),
+        this.prisma.basicPriceImportRow.count({ where: { resourceCatalogId: resourceId } }),
+        this.prisma.resourceSourceIdentity.count({ where: { workspaceId, resourceCatalogId: resourceId } }),
+        this.prisma.unitConversionRule.count({ where: { resourceCatalogId: resourceId } }),
+        this.prisma.resourceCatalog.findMany({
+          where: { workspaceId, type: resource.type, status: 'ACTIVE', id: { not: resourceId } },
+          select: { id: true, name: true, baseUnit: true },
+        }),
+      ]);
+    const folded = proposal.toLocaleLowerCase('id-ID');
+    const collisions = neighbors.filter((other) =>
+      other.name.trim().replace(/\s+/g, ' ').toLocaleLowerCase('id-ID') === folded,
+    );
+    const oldTrimmed = resource.name.trim().replace(/\s+/g, ' ');
+    const identicalDisplay = oldTrimmed === proposal;
+    return {
+      currentName: resource.name,
+      proposedName: proposal,
+      resourceType: resource.type,
+      resourceCode: resource.code,
+      baseUnit: resource.baseUnit,
+      hasSpecifications: resource.specifications !== null,
+      // A database timestamp is not an authorization to edit; it is evidence
+      // for a future stale-write guard and is deliberately read-only here.
+      observedVersion: resource.updatedAt.toISOString(),
+      impact: {
+        basicPrices: basicPriceCount,
+        projectAhspResolutions: ahspResolutionCount,
+        importRows: importRowCount,
+        sourceIdentityRecords: sourceIdentityCount,
+        conversionRules: conversionRuleCount,
+      },
+      conflictingSameTypeNames: collisions.length,
+      verdict: collisions.length > 0
+        ? 'IDENTITY_CONFLICT_REVIEW_REQUIRED'
+        : identicalDisplay && resource.name !== proposal
+          ? 'SPELLING_ONLY_PREVIEW'
+          : identicalDisplay
+            ? 'NO_CHANGE'
+            : 'IDENTITY_REVIEW_REQUIRED',
+      writable: false as const,
+      message: 'Pemeriksaan dampak saja. Nama katalog belum diubah; persetujuan identitas dan jurnal koreksi masih diwajibkan.',
+    };
+  }
+
+  /**
    * Existing birth-audit lineage applied to source-name SEARCH, before count
    * and skip/take. The list and Detail already inherit the identical evidence;
    * this query only exposes exact descendants, never approximate same-names.

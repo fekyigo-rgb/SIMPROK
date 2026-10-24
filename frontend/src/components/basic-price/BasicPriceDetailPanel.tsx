@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { previewCatalogNameImpact, type CatalogNameImpact } from '../../api/basicPriceExplorer';
 import { X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { enrichBasicPriceKdn, enrichCatalogBasicPriceKdn, correctPrivateBasicPrice, observePrivateBasicPrice, observePrivateKdn, correctPrivateKdn, submitPrivateBasicPrice, ImportRequestError } from '../../api/basicPriceImport';
@@ -135,6 +136,11 @@ export function BasicPriceDetailPanel({
   const [detailEpoch, setDetailEpoch] = useState(0);
   const [changeOpen, setChangeOpen] = useState(false);
   const [alreadyProposed, setAlreadyProposed] = useState(false);
+  const [nameImpactOpen, setNameImpactOpen] = useState(false);
+  const [nameProposal, setNameProposal] = useState(item.resource.name);
+  const [nameImpactBusy, setNameImpactBusy] = useState(false);
+  const [nameImpactResult, setNameImpactResult] = useState<CatalogNameImpact | null>(null);
+  const [nameImpactError, setNameImpactError] = useState<string | null>(null);
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
   const detail = useBasicPriceDetail(item.basicPriceId, detailEpoch);
@@ -385,6 +391,77 @@ export function BasicPriceDetailPanel({
               <Fact label="Verifikasi ulang pada" value={formatDate(item.reviewDate)} />
             ) : null}
           </dl>
+
+          {/* BP-C3 — catalog name impact preview only, NOT a false Edit writer. */}
+          <div className="bp-note" style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="bp-btn bp-btn--secondary"
+              onClick={() => {
+                setNameImpactOpen((open) => !open);
+                setNameImpactResult(null);
+                setNameImpactError(null);
+              }}
+              aria-expanded={nameImpactOpen}
+            >
+              {nameImpactOpen ? 'Tutup pemeriksaan nama' : 'Periksa usulan nama baku'}
+            </button>
+            {nameImpactOpen ? (
+              <div style={{ paddingTop: 10 }}>
+                <label className="bp-field">
+                  <span className="bp-field__label">Usulan nama yang benar untuk katalog ini</span>
+                  <input
+                    className="bp-input"
+                    value={nameProposal}
+                    maxLength={180}
+                    onChange={(event) => {
+                      setNameProposal(event.target.value);
+                      setNameImpactResult(null);
+                      setNameImpactError(null);
+                    }}
+                  />
+                </label>
+                <p className="bp-field__help">Pemeriksaan hanya membaca dampak nama pada katalog yang sudah aktif. Identitas, harga, satuan, dan catatan sumber tidak berubah.</p>
+                <button
+                  type="button"
+                  className="bp-btn bp-btn--primary"
+                  disabled={nameImpactBusy || nameProposal.trim().length < 3}
+                  onClick={async () => {
+                    setNameImpactBusy(true);
+                    setNameImpactError(null);
+                    setNameImpactResult(null);
+                    try {
+                      const outcome = await previewCatalogNameImpact(item.resource.id, nameProposal);
+                      setNameImpactResult(outcome);
+                    } catch {
+                      setNameImpactError('Dampak belum dapat diperiksa. Tidak ada perubahan data.');
+                    } finally {
+                      setNameImpactBusy(false);
+                    }
+                  }}
+                >
+                  {nameImpactBusy ? 'Memeriksa...' : 'Periksa dampak, tanpa menyimpan'}
+                </button>
+                {nameImpactError ? <p role="alert" className="bp-field__help">{nameImpactError}</p> : null}
+                {nameImpactResult ? (
+                  <div className="bp-note" role="status" aria-live="polite" style={{ marginTop: 10 }}>
+                    <p><strong>{nameImpactResult.currentName}</strong> → <strong>{nameImpactResult.proposedName}</strong></p>
+                    <p>
+                      {nameImpactResult.verdict === 'SPELLING_ONLY_PREVIEW'
+                        ? 'Indikasi koreksi penulisan tanpa perubahan makna; tetap memerlukan otorisasi dan jurnal koreksi.'
+                        : nameImpactResult.verdict === 'NO_CHANGE'
+                          ? 'Tidak ada perubahan nama yang diajukan.'
+                          : nameImpactResult.verdict === 'IDENTITY_CONFLICT_REVIEW_REQUIRED'
+                            ? 'Terdapat nama serupa pada identitas katalog lain. Perlu adjudikasi identitas.'
+                            : 'Perubahan ini dapat mengubah makna identitas. Perlu pemeriksaan teknis.'}
+                    </p>
+                    <p>Terpakai pada {nameImpactResult.impact.basicPrices} harga dasar, {nameImpactResult.impact.projectAhspResolutions} resolusi AHSP proyek, dan {nameImpactResult.impact.importRows} baris impor.</p>
+                    <p className="bp-field__help">Belum disimpan. Nama lama, ID resource, satuan, dan seluruh hubungan tetap utuh.</p>
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
 
           {/*
             GAP-B — THREE SENTENCES, EACH GATED ON THE FACT THAT PROVES IT.
