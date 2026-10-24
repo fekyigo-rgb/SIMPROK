@@ -2733,7 +2733,7 @@ export function RabWorkspacePage() {
             <strong>{rabLocked ? 'RAB Terkunci' : 'Draft RAB'}</strong>
             <span>
               {!projectId
-                ? 'Tidak ada project aktif'
+                ? isProvisional ? 'Belum disimpan — pekerjaan ini hanya di ruang kerja lokal' : 'Tidak ada project aktif'
                 : rabLocked
                 ? 'Tersimpan di server — dapat dibaca dan ditelusuri, tidak dapat diubah'
                 : 'Draft tersimpan di server — edit bebas, simpan kapan saja'}
