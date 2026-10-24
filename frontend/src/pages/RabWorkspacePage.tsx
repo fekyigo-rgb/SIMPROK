@@ -8,7 +8,8 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { useBlocker, useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { isFreshDraftSave, shouldBlockRabLeave, shouldWarnOnBrowserExit } from '../utils/rabUnsavedExit';
 import {
   ArrowDown,
   ArrowLeft,
@@ -550,6 +551,24 @@ export function RabWorkspacePage() {
   const [isImporting, setIsImporting] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
   const [draftDirty, setDraftDirty] = useState(false);
+  // Save-and-leave only proceeds after the existing server save reports success.
+  const exitAfterSaveRef = useRef(false);
+  // Standard data-router blocker covers menu links, Back and cross-project routes.
+  const blocker = useBlocker(({ currentLocation, nextLocation }) =>
+    shouldBlockRabLeave({
+      draftDirty, saving: isSaving,
+      currentPath: currentLocation.pathname, nextPath: nextLocation.pathname,
+    }),
+  );
+  useEffect(() => {
+    if (!shouldWarnOnBrowserExit({ draftDirty, saving: isSaving })) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [draftDirty, isSaving]);
   const [calculationAsOfDate, setCalculationAsOfDate] = useState(() => toLocalDateOnlyString(new Date()));
   const [persistState, setPersistState] = useState<PersistUiState>({ kind: 'idle' });
   /**
@@ -1610,6 +1629,10 @@ export function RabWorkspacePage() {
     }
     if (isSaving) return;
 
+    // Capture the exact local revision being submitted; a later edit must not be
+    // mistaken for part of this server acknowledgment.
+    const saveRevision = draftRevisionRef.current;
+    const saveProjectId = projectId;
     setIsSaving(true);
     setStatusMessage('Menyimpan draft...');
 
@@ -1644,6 +1667,17 @@ export function RabWorkspacePage() {
     })
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((fresh: DraftBoqResponse) => {
+        if (!isFreshDraftSave({
+          submittedProjectId: saveProjectId,
+          currentProjectId: currentProjectIdRef.current,
+          submittedRevision: saveRevision,
+          currentRevision: draftRevisionRef.current,
+        })) {
+          // Keep newer local edits intact even if the server saved an older snapshot.
+          exitAfterSaveRef.current = false;
+          setStatusMessage('Pekerjaan berubah selama penyimpanan. Perubahan terbaru belum tersimpan; gunakan tombol simpan kembali.');
+          return;
+        }
         applyRecap(fresh.recap);
         loadCostCalculations(fresh.items);
         const mappedRows = mapBoqToRows(fresh.items);
@@ -1666,9 +1700,14 @@ export function RabWorkspacePage() {
           '',
         );
         setStatusMessage(`Draft tersimpan — ${new Date().toLocaleTimeString('id-ID')}.`);
+        if (exitAfterSaveRef.current) {
+          exitAfterSaveRef.current = false;
+          if (blocker.state === 'blocked') blocker.proceed();
+        }
       })
       .catch(() => {
-        setStatusMessage('Gagal menyimpan draft. Coba lagi.');
+        exitAfterSaveRef.current = false;
+        setStatusMessage('Gagal menyimpan draft. Perubahan lokal tetap ada; coba lagi.');
       })
       .finally(() => {
         setIsSaving(false);
@@ -2352,6 +2391,36 @@ export function RabWorkspacePage() {
         </div>
       ) : null}
 
+      {blocker.state === 'blocked' ? (
+        <div className="simprok-rab-exit-backdrop">
+          <section className="simprok-rab-exit-dialog" role="alertdialog" aria-modal="true" aria-label="Perubahan RAB belum disimpan">
+            <strong>Perubahan RAB belum disimpan</strong>
+            <p>SIMPROK belum menyimpan perubahan terakhir. Pilih apa yang ingin dilakukan sebelum meninggalkan Ruang Kerja RAB.</p>
+            <div className="simprok-rab-exit-actions">
+              <button
+                className="simprok-rab-confirm__primary"
+                disabled={isSaving || !canEditDraft || hasNegativeValue}
+                onClick={() => {
+                  if (!isSaving && canEditDraft && !hasNegativeValue && projectId) {
+                    exitAfterSaveRef.current = true;
+                    handleSaveDraft();
+                  }
+                }}
+              >{isSaving ? 'Menyimpan...' : 'Simpan Draft dan Keluar'}</button>
+              <button
+                disabled={isSaving}
+                onClick={() => { if (blocker.state === 'blocked') blocker.proceed(); }}
+              >Buang Perubahan Lokal dan Keluar</button>
+              <button
+                autoFocus
+                disabled={isSaving}
+                onClick={() => { if (blocker.state === 'blocked') blocker.reset(); }}
+              >Tetap Mengerjakan</button>
+            </div>
+            <small>Hanya perubahan lokal yang dibuang. Proyek atau draft sebelumnya yang sudah tersimpan tidak dihapus.</small>
+          </section>
+        </div>
+      ) : null}
       {showBackflowWarning ? (
         <div className="simprok-rab-validation-alert simprok-rab-validation-alert--info" role="alert">
           <strong>Peringatan Navigasi (Draft Lokal)</strong>
