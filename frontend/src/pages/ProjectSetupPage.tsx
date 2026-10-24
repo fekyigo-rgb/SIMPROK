@@ -117,6 +117,10 @@ export function ProjectSetupPage() {
 
   // Persiapan RAB is a LOCAL intent, never a database write.
   const handleCreateDraftProject = () => {
+    if (recoverableRab) {
+      setInputError('Masih ada RAB lokal belum disimpan. Lanjutkan RAB tersebut; jika ingin memulai yang baru, gunakan Buang Perubahan Lokal dan Keluar dari Ruang Kerja RAB terlebih dahulu.');
+      return;
+    }
     const validationError = validateDraftInput();
     if (validationError) { setInputError(validationError); return; }
     const workspaceId = getRequestWorkspaceId(activeWorkspaceId);

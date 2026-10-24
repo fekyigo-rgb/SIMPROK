@@ -11,15 +11,14 @@ type Recovery<T> = {
 };
 
 const KEY_PREFIX = 'simprok-rab-provisional-v1:';
+const MAX_RECOVERY_CHARS = 2_000_000;
 const storageKey = (accountId: string, workspaceId: string): string =>
   KEY_PREFIX + accountId + ':' + workspaceId;
 
-/** Session-only recovery, never Project/BOQ canonical persistence. Scoped per account and workspace. */
-export function readRabRecovery<T>(accountId: string | null | undefined, workspaceId: string | null | undefined): Recovery<T> | null {
-  if (!accountId || !workspaceId) return null;
+/** One validation contract for candidate backups and subsequent reads. */
+function parseRecoveryPayload<T>(raw: string | null, workspaceId: string): Recovery<T> | null {
   try {
-    const raw = sessionStorage.getItem(storageKey(accountId, workspaceId));
-    if (!raw || raw.length > 2_000_000) return null;
+    if (!raw || raw.length > MAX_RECOVERY_CHARS) return null;
     const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object') return null;
     const q = parsed as Record<string, unknown>;
@@ -40,10 +39,34 @@ export function readRabRecovery<T>(accountId: string | null | undefined, workspa
   } catch { return null; }
 }
 
+/** Session-only recovery, never Project/BOQ canonical persistence. Scoped per account and workspace. */
+export function readRabRecovery<T>(accountId: string | null | undefined, workspaceId: string | null | undefined): Recovery<T> | null {
+  if (!accountId || !workspaceId) return null;
+  try {
+    return parseRecoveryPayload<T>(sessionStorage.getItem(storageKey(accountId, workspaceId)), workspaceId);
+  } catch { return null; }
+}
+
 export function writeRabRecovery<T>(accountId: string | null | undefined, workspaceId: string | null | undefined, state: Recovery<T>): boolean {
   if (!accountId || !workspaceId || state.preparedProject.workspaceId !== workspaceId) return false;
-  try { sessionStorage.setItem(storageKey(accountId, workspaceId), JSON.stringify(state)); return true; }
-  catch { return false; }
+  try {
+    const key = storageKey(accountId, workspaceId);
+    // Reject numbers JSON would silently coerce to null (NaN / Infinity).
+    const serialized = JSON.stringify(state, (_key, value: unknown) => {
+      if (typeof value === 'number' && !Number.isFinite(value)) throw new Error('NON_FINITE_RECOVERY_NUMBER');
+      return value;
+    });
+    if (!parseRecoveryPayload<T>(serialized, workspaceId)) return false;
+    const previous = sessionStorage.getItem(key);
+    if (previous !== null) {
+      const existing = readRabRecovery<T>(accountId, workspaceId);
+      // Preserve a valid different draft, but never let an unreadable stale key block all future backups.
+      if (existing && JSON.stringify(existing.preparedProject) !== JSON.stringify(state.preparedProject)) return false;
+    }
+    sessionStorage.setItem(key, serialized);
+    const readback = sessionStorage.getItem(key);
+    return readback === serialized && parseRecoveryPayload<T>(readback, workspaceId) !== null;
+  } catch { return false; }
 }
 
 export function clearRabRecovery(accountId: string | null | undefined, workspaceId: string | null | undefined): void {

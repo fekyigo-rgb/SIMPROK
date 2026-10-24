@@ -32,3 +32,50 @@ test('malformed data cannot impersonate another workspace',()=>{
   assert.equal(writeRabRecovery('actor-a','elsewhere',snapshot),false);
   assert.equal(readRabRecovery('actor-a','elsewhere'),null);
 });
+test('a second provisional RAB cannot overwrite the first in the same account/workspace',()=>{
+  clearRabRecovery('actor-a',workspaceId);
+  assert.equal(writeRabRecovery('actor-a',workspaceId,snapshot),true);
+  const second = { ...snapshot, preparedProject: { ...snapshot.preparedProject, name:'Gedung B', code:'LOCAL-002' } };
+  assert.equal(writeRabRecovery('actor-a',workspaceId,second),false);
+  assert.deepEqual(readRabRecovery('actor-a',workspaceId),snapshot);
+  const editedFirst = { ...snapshot, rows:[{ id:'r1', name:'Galian berubah', type:'item' }] };
+  assert.equal(writeRabRecovery('actor-a',workspaceId,editedFirst),true);
+  assert.deepEqual(readRabRecovery('actor-a',workspaceId),editedFirst);
+  clearRabRecovery('actor-a',workspaceId);
+});
+test('write never reports success for an unreadable snapshot and never damages an earlier good one',()=>{
+  clearRabRecovery('actor-a',workspaceId);
+  assert.equal(writeRabRecovery('actor-a',workspaceId,snapshot),true);
+  const tooManyRows = { ...snapshot, rows:Array.from({length:5001},(_,i)=>({id:'row-'+i,name:'Pekerjaan '+i,type:'item'})) };
+  assert.equal(writeRabRecovery('actor-a',workspaceId,tooManyRows),false);
+  assert.equal(writeRabRecovery('actor-a',workspaceId,{ ...snapshot, marginPercent:Infinity }),false);
+  assert.equal(writeRabRecovery('actor-a',workspaceId,{ ...snapshot, volumes:{r1:NaN} }),false);
+  assert.deepEqual(readRabRecovery('actor-a',workspaceId),snapshot);
+  clearRabRecovery('actor-a',workspaceId);
+});
+test('unreadable stale backup does not poison subsequent legitimate recovery',()=>{
+  clearRabRecovery('actor-a',workspaceId);
+  const key = 'simprok-rab-provisional-v1:actor-a:'+workspaceId;
+  memory.set(key,'{"malformed":');
+  assert.equal(readRabRecovery('actor-a',workspaceId),null);
+  assert.equal(writeRabRecovery('actor-a',workspaceId,snapshot),true);
+  assert.deepEqual(readRabRecovery('actor-a',workspaceId),snapshot);
+  clearRabRecovery('actor-a',workspaceId);
+});
+test('backup failures are visible as false and do not silently replace prior data',()=>{
+  clearRabRecovery('actor-a',workspaceId);
+  const oversized = { ...snapshot, rows:[{ id:'r1', name:'A'.repeat(2_000_001), type:'item' }] };
+  assert.equal(writeRabRecovery('actor-a',workspaceId,oversized),false);
+  assert.equal(readRabRecovery('actor-a',workspaceId),null);
+  const originalSetItem = sessionStorage.setItem;
+  try {
+    sessionStorage.setItem = () => { throw new Error('QuotaExceededError'); };
+    assert.equal(writeRabRecovery('actor-a',workspaceId,snapshot),false);
+    assert.equal(readRabRecovery('actor-a',workspaceId),null);
+  } finally {
+    sessionStorage.setItem = originalSetItem;
+  }
+  assert.equal(writeRabRecovery('actor-a',workspaceId,snapshot),true);
+  assert.deepEqual(readRabRecovery('actor-a',workspaceId),snapshot);
+  clearRabRecovery('actor-a',workspaceId);
+});

@@ -543,6 +543,7 @@ export function RabWorkspacePage() {
   const persistedProofGenerationRef = useRef(0);
   const [selectedRowId, setSelectedRowId] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [recoveryWarning, setRecoveryWarning] = useState(false);
   const [marginPercent, setMarginPercent] = useState(recovery?.marginPercent ?? 10);
   const [ppnPercent, setPpnPercent] = useState(recovery?.ppnPercent ?? 11);
   const [statusMessage, setStatusMessage] = useState(projectId ? 'Memuat draft...' : 'Tidak ada project aktif.');
@@ -576,10 +577,11 @@ export function RabWorkspacePage() {
   // Browser-session recovery only; never a canonical Project/BOQ save.
   useEffect(() => {
     if (!isProvisional || !pendingProject || firstSaveVerifiedRef.current) return;
-    writeRabRecovery(account?.id, activeWorkspaceId, {
+    const backupOk = writeRabRecovery(account?.id, activeWorkspaceId, {
       preparedProject: pendingProject, rows, volumes, unitPrices,
       marginPercent, ppnPercent, projectCode: localProjectCode,
     });
+    setRecoveryWarning(!backupOk);
   }, [account?.id, activeWorkspaceId, isProvisional, pendingProject, rows,
       volumes, unitPrices, marginPercent, ppnPercent, localProjectCode]);
   const blocker = useBlocker(({ currentLocation, nextLocation }) =>
@@ -2406,6 +2408,12 @@ export function RabWorkspacePage() {
           </div>
         </header>
       )}
+
+      {isProvisional && recoveryWarning ? (
+        <div className="simprok-rab-validation-alert" role="alert">
+          Salinan pemulihan RAB lokal belum berhasil disimpan di browser. Jangan tutup tab atau keluar dari sesi sebelum menyimpan Draft ke server. Perubahan ini dapat hilang jika sesi berakhir.
+        </div>
+      ) : null}
 
       {/*
         The action toolbar is the third block. Import, Export, Print, Simpan
