@@ -3362,6 +3362,12 @@ export function RabWorkspacePage() {
                                       : ''}
                                   </small>
                                 ) : null}
+                                {component.trust.needsAttention && component.explanation ? (
+                                  <details>
+                                    <summary>Mengapa perlu tinjauan?</summary>
+                                    <p>{component.explanation}</p>
+                                  </details>
+                                ) : null}
                               </td>
                               <td>{component.unit}</td>
                               <td>{component.coefficient}</td>
