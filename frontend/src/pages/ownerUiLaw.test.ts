@@ -457,7 +457,8 @@ test("AFF-D. the table row offers no AHSP write affordance at all", () => {
   );
   assert.match(workspace, /Pilih \/ Ganti AHSP/, "the drawer keeps the capability");
   const drawerPick = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf("Pilih / Ganti AHSP")));
-  assert.match(drawerPick, /disabled=\{!canEditDraft/);
+  // A provisional RAB cannot search project-bound AHSP until its first explicit save.
+  assert.match(drawerPick, /disabled=\{!projectId \|\| !canEditDraft/);
 });
 
 test("AFF-E. AHSP truth remains readable while LOCKED", () => {

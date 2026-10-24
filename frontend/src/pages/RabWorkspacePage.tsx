@@ -1692,6 +1692,7 @@ export function RabWorkspacePage() {
           });
           if (!response.ok) {
             if (response.status >= 400 && response.status < 500) {
+              exitAfterSaveRef.current = false;
               setStatusMessage('Penyimpanan pertama ditolak server (' + response.status +
                 '). Tidak ada keberhasilan yang diklaim. Periksa isian dan kewenangan.');
               return;
@@ -2365,7 +2366,14 @@ export function RabWorkspacePage() {
               <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{fieldContextLoad.view.text}</p>
             ) : null}
           </div>
-          <span className="simprok-rab-workspace__status">{statusMessage}</span>
+          <div>
+            <span className="simprok-rab-workspace__status">{statusMessage}</span>
+            {isProvisional ? (
+              <p className="simprok-rab-workspace__status">
+                Import BOQ dan pencarian AHSP tersedia setelah Simpan Draft pertama, karena membutuhkan proyek tersimpan.
+              </p>
+            ) : null}
+          </div>
         </header>
       )}
 
@@ -2730,7 +2738,7 @@ export function RabWorkspacePage() {
         <section className="simprok-rab-sheet" aria-label="Tabel RAB">
           <div className="simprok-rab-sheet__label">
             {/* Storage is the same either way; freedom to edit is not. */}
-            <strong>{rabLocked ? 'RAB Terkunci' : 'Draft RAB'}</strong>
+            <strong>{rabLocked ? 'RAB Terkunci' : isProvisional ? 'RAB belum disimpan' : 'Draft RAB'}</strong>
             <span>
               {!projectId
                 ? isProvisional ? 'Belum disimpan — pekerjaan ini hanya di ruang kerja lokal' : 'Tidak ada project aktif'
@@ -3629,7 +3637,8 @@ export function RabWorkspacePage() {
                   type="button"
                   className="simprok-ahsp-drawer__primary"
                   onClick={() => { setShowAhspSelection(true); setAhspPage(1); setAhspQuery(''); setDebouncedAhspQuery(''); setAhspPickerOpen(false); setAhspActiveIndex(0); }}
-                  disabled={!canEditDraft || isSelectingAhsp}
+                  disabled={!projectId || !canEditDraft || isSelectingAhsp}
+                  title={!projectId && isProvisional ? 'Simpan Draft pertama untuk mengaktifkan pencarian AHSP berbasis proyek' : 'Pilih / Ganti AHSP'}
                   aria-label="Pilih / Ganti AHSP"
                   aria-expanded={false}
                   aria-controls="simprok-ahsp-change-form"
