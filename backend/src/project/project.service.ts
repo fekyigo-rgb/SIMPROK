@@ -516,6 +516,14 @@ export class ProjectService {
           },
         });
 
+        // New-RAB first save reuses the SAME canonical BOQ transaction writer.
+        // Any row/recap/graph rejection rolls back the whole new Project.
+        if (data.initialDraft) {
+          await this.saveDraftBoqInTransaction(
+            tx, project.id, data.initialDraft, data.initialDraft.rows as unknown[],
+          );
+        }
+
         if (classificationNodeIds.length > 0) {
           await tx.projectClassificationSelection.createMany({
             data: classificationNodeIds.map((classificationNodeId) => ({
@@ -557,7 +565,9 @@ export class ProjectService {
     } catch (error) {
       if (
         error instanceof NotFoundException ||
-        error instanceof BadRequestException
+        error instanceof BadRequestException ||
+        error instanceof ConflictException ||
+        error instanceof ForbiddenException
       ) {
         throw error;
       }
@@ -2135,11 +2145,12 @@ export class ProjectService {
     }));
   }
 
-  async saveDraftBoq(
+  private async saveDraftBoqInTransaction(
+    tx: Prisma.TransactionClient,
     projectId: string,
     dto: SaveDraftBoqDto,
-    rawRows: unknown[] = [],
-  ): Promise<{ structureId: string; items: object[]; recap: object }> {
+    rawRows: unknown[],
+  ) {
     const rawRowAt = (index: number): Record<string, unknown> | undefined => {
       const candidate = rawRows[index];
       return candidate && typeof candidate === 'object'
@@ -2147,7 +2158,7 @@ export class ProjectService {
         : undefined;
     };
 
-    const saved = await this.prisma.$transaction(async (tx) => {
+    return await (async () => {
       const lockedProject = await tx.$queryRaw<
         Array<{ id: string; status: string }>
       >(
@@ -2495,7 +2506,17 @@ export class ProjectService {
         items: insertedItems,
         recap: this.serializeDraftRecap(persistedRecap),
       };
-    });
+    })();
+  }
+
+  async saveDraftBoq(
+    projectId: string,
+    dto: SaveDraftBoqDto,
+    rawRows: unknown[] = [],
+  ): Promise<{ structureId: string; items: object[]; recap: object }> {
+    const saved = await this.prisma.$transaction((tx) =>
+      this.saveDraftBoqInTransaction(tx, projectId, dto, rawRows),
+    );
 
     /**
      * THE SAME ROW MUST NAME THE SAME ANALYSIS IN BOTH ROOMS.

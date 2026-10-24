@@ -413,7 +413,7 @@ test("AFF-B. Save keeps its exact behaviour while the draft is editable", () => 
   const saveTag = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf('className="simprok-rab-toolbar__save"')));
 
   assert.match(saveTag, /onClick=\{handleSaveDraft\}/);
-  assert.match(saveTag, /aria-disabled=\{hasNegativeValue \|\| isSaving \|\| !projectId\}/);
+  assert.match(saveTag, /aria-disabled=\{hasNegativeValue \|\| isSaving \|\| firstSaveUncertainRef\.current\}/);
   assert.match(saveTag, /data-route="\/\?ruang=simpan-draft"/);
   // The command still refuses independently, so the screen is not the only guard.
   assert.match(functionBody(workspace, "handleSaveDraft"), /if \(!canEditDraft\) \{/);
@@ -457,7 +457,8 @@ test("AFF-D. the table row offers no AHSP write affordance at all", () => {
   );
   assert.match(workspace, /Pilih \/ Ganti AHSP/, "the drawer keeps the capability");
   const drawerPick = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf("Pilih / Ganti AHSP")));
-  assert.match(drawerPick, /disabled=\{!canEditDraft/);
+  // A provisional RAB cannot search project-bound AHSP until its first explicit save.
+  assert.match(drawerPick, /disabled=\{!projectId \|\| !canEditDraft/);
 });
 
 test("AFF-E. AHSP truth remains readable while LOCKED", () => {

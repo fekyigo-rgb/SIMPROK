@@ -8,7 +8,11 @@ import {
   useRef,
   useState,
 } from 'react';
-import { useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { useBlocker, useLocation, useNavigate, useOutletContext, useParams } from 'react-router-dom';
+import { isFreshDraftSave, shouldBlockRabLeave, shouldWarnOnBrowserExit } from '../utils/rabUnsavedExit';
+import { readRabPreparedProject } from '../utils/rabPreparedProject';
+import { clearRabRecovery, readRabRecovery, writeRabRecovery } from '../utils/rabProvisionalRecovery';
+import { useAuth } from '../contexts/AuthContext';
 import {
   ArrowDown,
   ArrowLeft,
@@ -511,12 +515,23 @@ const PERSIST_REACHABILITY_TITLE: Record<PersistActionReachability, string> = {
 
 export function RabWorkspacePage() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { account, activeWorkspaceId } = useAuth();
   const { projectId: routeProjectId } = useParams();
   const layoutContext = useOutletContext<DashboardOutletContext | null>();
   const projectId = routeProjectId ?? null;
-  const [rows, setRows] = useState<RabRow[]>([]);
-  const [volumes, setVolumes] = useState<Record<string, number>>({});
-  const [unitPrices, setUnitPrices] = useState<Record<string, number>>({});
+  const preparedFromRoute = projectId ? null : readRabPreparedProject(location.state);
+  // Recover only this account's browser-session draft after an auth redirect.
+  const recovery = !projectId && !preparedFromRoute
+    ? readRabRecovery<RabRow>(account?.id, activeWorkspaceId) : null;
+  const pendingProject = preparedFromRoute ?? recovery?.preparedProject ?? null;
+  const isProvisional = Boolean(pendingProject && activeWorkspaceId === pendingProject.workspaceId);
+  const [localProjectCode, setLocalProjectCode] = useState(recovery?.projectCode ?? pendingProject?.code ?? '');
+  // Never infer a Project from a browser-only draft. Project context and RBAC
+  // are verified by the canonical backend only when the user saves.
+  const [rows, setRows] = useState<RabRow[]>(recovery?.rows ?? []);
+  const [volumes, setVolumes] = useState<Record<string, number>>(recovery?.volumes ?? {});
+  const [unitPrices, setUnitPrices] = useState<Record<string, number>>(recovery?.unitPrices ?? {});
   const [costRowStatuses, setCostRowStatuses] = useState<Record<string, CostRowStatus>>({});
   const costLoadGenerationRef = useRef(0);
   /**
@@ -528,8 +543,9 @@ export function RabWorkspacePage() {
   const persistedProofGenerationRef = useRef(0);
   const [selectedRowId, setSelectedRowId] = useState('');
   const [isSaving, setIsSaving] = useState(false);
-  const [marginPercent, setMarginPercent] = useState(10);
-  const [ppnPercent, setPpnPercent] = useState(11);
+  const [recoveryWarning, setRecoveryWarning] = useState(false);
+  const [marginPercent, setMarginPercent] = useState(recovery?.marginPercent ?? 10);
+  const [ppnPercent, setPpnPercent] = useState(recovery?.ppnPercent ?? 11);
   const [statusMessage, setStatusMessage] = useState(projectId ? 'Memuat draft...' : 'Tidak ada project aktif.');
   const [fieldContextLoad, setFieldContextLoad] = useState<
     { phase: 'loading' } | { phase: 'ready'; view: ProjectFieldContextView }
@@ -542,14 +558,47 @@ export function RabWorkspacePage() {
       failed: false,
     }),
   });
-  const [capabilityState, setCapabilityState] = useState<CapabilityState>(projectId ? { kind: 'loading' } : { kind: 'no-project' });
+  const [capabilityState, setCapabilityState] = useState<CapabilityState>(
+    projectId ? { kind: 'loading' } : isProvisional ? { kind: 'ready', canEditDraft: true } : { kind: 'no-project' },
+  );
   const [retryToken, setRetryToken] = useState(0);
   const [importFile, setImportFile] = useState<File | null>(null);
   const [importPreview, setImportPreview] = useState<BoqImportPreview | null>(null);
   const [importConfirmOpen, setImportConfirmOpen] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const importInputRef = useRef<HTMLInputElement>(null);
-  const [draftDirty, setDraftDirty] = useState(false);
+  const [draftDirty, setDraftDirty] = useState(isProvisional);
+  // First-save result may be uncertain. Never automatically issue a second POST.
+  const firstSaveUncertainRef = useRef(false);
+  const firstSaveVerifiedRef = useRef(false);
+  // Save-and-leave only proceeds after the existing server save reports success.
+  const exitAfterSaveRef = useRef(false);
+  // Standard data-router blocker covers menu links, Back and cross-project routes.
+  // Browser-session recovery only; never a canonical Project/BOQ save.
+  useEffect(() => {
+    if (!isProvisional || !pendingProject || firstSaveVerifiedRef.current) return;
+    const backupOk = writeRabRecovery(account?.id, activeWorkspaceId, {
+      preparedProject: pendingProject, rows, volumes, unitPrices,
+      marginPercent, ppnPercent, projectCode: localProjectCode,
+    });
+    setRecoveryWarning(!backupOk);
+  }, [account?.id, activeWorkspaceId, isProvisional, pendingProject, rows,
+      volumes, unitPrices, marginPercent, ppnPercent, localProjectCode]);
+  const blocker = useBlocker(({ currentLocation, nextLocation }) =>
+    !firstSaveVerifiedRef.current && shouldBlockRabLeave({
+      draftDirty, saving: isSaving,
+      currentPath: currentLocation.pathname, nextPath: nextLocation.pathname,
+    }),
+  );
+  useEffect(() => {
+    if (!shouldWarnOnBrowserExit({ draftDirty, saving: isSaving })) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [draftDirty, isSaving]);
   const [calculationAsOfDate, setCalculationAsOfDate] = useState(() => toLocalDateOnlyString(new Date()));
   const [persistState, setPersistState] = useState<PersistUiState>({ kind: 'idle' });
   /**
@@ -811,6 +860,13 @@ export function RabWorkspacePage() {
     }
 
     if (!projectId) {
+      if (isProvisional) {
+        // New RAB is local-only; no Project, BOQ or RabDocument DB calls yet.
+        setCapabilityState({ kind: 'ready', canEditDraft: true });
+        setDraftDirty(true);
+        setStatusMessage('Belum disimpan. Isi RAB secara lokal, lalu gunakan tombol simpan.');
+        return;
+      }
       costLoadGenerationRef.current += 1;
       setRows([]);
       setVolumes({});
@@ -906,7 +962,7 @@ export function RabWorkspacePage() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, retryToken]);
+  }, [projectId, retryToken, isProvisional]);
 
   useEffect(() => {
     // No unrequested full-catalogue browse. Search starts only with a
@@ -1563,7 +1619,7 @@ export function RabWorkspacePage() {
     setCalculationAsOfDate(value);
   };
 
-  const canEditDraft = capabilityState.kind === 'ready' && capabilityState.canEditDraft;
+  const canEditDraft = capabilityState.kind === 'ready' && capabilityState.canEditDraft && !(isProvisional && isSaving);
   // Existing Gate-2A lifecycle: a terminal stored price has no working occurrence to persist.
   // Only a new, explicit AHSP/Region selection can open a new calculation journey.
   const selectedPriceAlreadyStored = selectedItem ? isTerminalPersistedKernelRow(selectedItem) : false;
@@ -1604,12 +1660,21 @@ export function RabWorkspacePage() {
       setStatusMessage('Simpan diblokir: volume dan harga satuan tidak boleh minus.');
       return;
     }
-    if (!projectId) {
-      setStatusMessage('Tidak ada project aktif — tidak bisa menyimpan.');
+    if (!projectId && !isProvisional) {
+      setStatusMessage('Konteks proyek baru tidak valid; kembali ke Persiapan RAB.');
       return;
     }
-    if (isSaving) return;
+    if (isSaving || firstSaveUncertainRef.current) return;
+    if (isProvisional && !localProjectCode.trim()) {
+      exitAfterSaveRef.current = false;
+      setStatusMessage('Kode Proyek tidak boleh kosong. Perbaiki kode sebelum menyimpan.');
+      return;
+    }
 
+    // Capture the exact local revision being submitted; a later edit must not be
+    // mistaken for part of this server acknowledgment.
+    const saveRevision = draftRevisionRef.current;
+    const saveProjectId = projectId ?? '';
     setIsSaving(true);
     setStatusMessage('Menyimpan draft...');
 
@@ -1637,6 +1702,89 @@ export function RabWorkspacePage() {
       })),
     };
 
+    if (!projectId && pendingProject && isProvisional) {
+      // First Save Draft is the sole transition from local preparation to
+      // canonical Project + Working Draft, both in ONE backend transaction.
+      void (async () => {
+        try {
+          const response = await apiFetch('/projects', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...pendingProject, code: localProjectCode.trim(), initialDraft: payload }),
+          });
+          if (!response.ok) {
+            if (response.status >= 400 && response.status < 500) {
+              exitAfterSaveRef.current = false;
+              setStatusMessage('Penyimpanan pertama ditolak server (' + response.status +
+                '). Tidak ada keberhasilan yang diklaim. Periksa isian dan kewenangan.');
+              return;
+            }
+            throw new Error('FIRST_SAVE_OUTCOME_UNKNOWN');
+          }
+          const created = await response.json() as {
+            id?: string;
+            projectId?: string;
+            classificationNodeIds?: string[];
+          };
+          const newProjectId = created.id ?? created.projectId;
+          if (!newProjectId || !/^[0-9a-f-]{36}$/i.test(newProjectId)) {
+            throw new Error('FIRST_SAVE_ID_UNVERIFIED');
+          }
+          const [contextResponse, draftResponse] = await Promise.all([
+            apiFetch('/projects/' + newProjectId + '/intake-context'),
+            apiFetch('/projects/' + newProjectId + '/boq/draft'),
+          ]);
+          if (!contextResponse.ok || !draftResponse.ok) {
+            throw new Error('FIRST_SAVE_READBACK_UNAVAILABLE');
+          }
+          const context = await contextResponse.json() as {
+            classificationSelections?: Array<{ id: string }>;
+            locationSelections?: Array<{ id: string }>;
+          };
+          const persistedDraft = await draftResponse.json() as {
+            structureId?: string | null;
+            items?: Array<{ name: string; itemType: string }>;
+          };
+          const classificationIds = (context.classificationSelections ?? []).map((x) => x.id);
+          const locationIds = (context.locationSelections ?? []).map((x) => x.id);
+          const expectedClassificationIds = created.classificationNodeIds ?? pendingProject.classificationNodeIds;
+          const classificationMatches = expectedClassificationIds.length > 0 &&
+            expectedClassificationIds.every((id) => classificationIds.includes(id));
+          const locationMatches = pendingProject.locationRegionIds.every((id) => locationIds.includes(id));
+          const rowIdentity = (row: { name: string; itemType: string }) => row.itemType + ':' + row.name;
+          const expectedRows = payload.rows.map(rowIdentity).sort();
+          const actualRows = (persistedDraft.items ?? []).map(rowIdentity).sort();
+          const rowsMatch = persistedDraft.structureId &&
+            JSON.stringify(expectedRows) === JSON.stringify(actualRows);
+          if (!classificationMatches || !locationMatches || !rowsMatch) {
+            throw new Error('FIRST_SAVE_CANONICAL_MISMATCH');
+          }
+          if (draftRevisionRef.current !== saveRevision) {
+            // A new local edit occurred during the request: never discard it.
+            throw new Error('FIRST_SAVE_LOCAL_REVISION_DRIFT');
+          }
+          firstSaveVerifiedRef.current = true;
+          clearRabRecovery(account?.id, activeWorkspaceId);
+          setDraftDirty(false);
+          exitAfterSaveRef.current = false;
+          if (blocker.state === 'blocked') {
+            blocker.proceed();
+          } else {
+            navigate('/project/' + newProjectId + '/rab/workspace', { replace: true });
+          }
+        } catch {
+          // A network failure after POST may still have committed the server
+          // transaction. Fail closed; never blindly create a second project.
+          firstSaveUncertainRef.current = true;
+          exitAfterSaveRef.current = false;
+          setStatusMessage('Hasil penyimpanan pertama belum dapat diverifikasi. Jangan mengulang pembuatan. Periksa Proyek Saya sebelum melanjutkan.');
+        } finally {
+          setIsSaving(false);
+        }
+      })();
+      return;
+    }
+
     apiFetch(`/projects/${projectId}/boq/draft`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -1644,6 +1792,17 @@ export function RabWorkspacePage() {
     })
       .then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
       .then((fresh: DraftBoqResponse) => {
+        if (!isFreshDraftSave({
+          submittedProjectId: saveProjectId,
+          currentProjectId: currentProjectIdRef.current,
+          submittedRevision: saveRevision,
+          currentRevision: draftRevisionRef.current,
+        })) {
+          // Keep newer local edits intact even if the server saved an older snapshot.
+          exitAfterSaveRef.current = false;
+          setStatusMessage('Pekerjaan berubah selama penyimpanan. Perubahan terbaru belum tersimpan; gunakan tombol simpan kembali.');
+          return;
+        }
         applyRecap(fresh.recap);
         loadCostCalculations(fresh.items);
         const mappedRows = mapBoqToRows(fresh.items);
@@ -1666,9 +1825,14 @@ export function RabWorkspacePage() {
           '',
         );
         setStatusMessage(`Draft tersimpan — ${new Date().toLocaleTimeString('id-ID')}.`);
+        if (exitAfterSaveRef.current) {
+          exitAfterSaveRef.current = false;
+          if (blocker.state === 'blocked') blocker.proceed();
+        }
       })
       .catch(() => {
-        setStatusMessage('Gagal menyimpan draft. Coba lagi.');
+        exitAfterSaveRef.current = false;
+        setStatusMessage('Gagal menyimpan draft. Perubahan lokal tetap ada; coba lagi.');
       })
       .finally(() => {
         setIsSaving(false);
@@ -2209,11 +2373,22 @@ export function RabWorkspacePage() {
             {/* The room is the same room; what may be done in it is not. */}
             <p>
               {!projectId
-                ? 'Tidak ada project aktif. Navigasi dari Proyek Saya untuk membuka ruang kerja.'
+                ? isProvisional
+                  ? 'RAB baru: ' + pendingProject?.name + '. Belum disimpan pada server; klasifikasi dan lokasi akan ditetapkan saat Simpan Draft pertama.'
+                  : 'Tidak ada project aktif. Navigasi dari Proyek Saya untuk membuka ruang kerja.'
                 : rabLocked
                 ? `Project: ${projectId}. Ruang kerja RAB terkunci — baca dan telusuri hasil RAB.`
                 : `Project: ${projectId}. Ruang kerja draft RAB — edit dan simpan sebelum baseline resmi.`}
             </p>
+            {isProvisional ? (
+              <label style={{ display: 'flex', flexDirection: 'column', maxWidth: 340, gap: 4, margin: '0.5rem 0' }}>
+                <span>Kode Proyek / Kode RAB (dapat dikoreksi sebelum simpan)</span>
+                <input aria-label="Kode Proyek RAB Baru" value={localProjectCode}
+                  disabled={isSaving} maxLength={120}
+                  onChange={(e) => setLocalProjectCode(e.target.value)}
+                  style={{ padding: '0.5rem', border: '1px solid #cbd5e1', borderRadius: 6 }} />
+              </label>
+            ) : null}
             <p aria-live="polite">
               {fieldContextLoad.phase === 'loading'
                 ? 'Memuat keterangan proyek.'
@@ -2223,9 +2398,22 @@ export function RabWorkspacePage() {
               <p style={{ whiteSpace: 'pre-wrap', margin: 0 }}>{fieldContextLoad.view.text}</p>
             ) : null}
           </div>
-          <span className="simprok-rab-workspace__status">{statusMessage}</span>
+          <div>
+            <span className="simprok-rab-workspace__status">{statusMessage}</span>
+            {isProvisional ? (
+              <p className="simprok-rab-workspace__status">
+                Import BOQ dan pencarian AHSP tersedia setelah Simpan Draft pertama, karena membutuhkan proyek tersimpan.
+              </p>
+            ) : null}
+          </div>
         </header>
       )}
+
+      {isProvisional && recoveryWarning ? (
+        <div className="simprok-rab-validation-alert" role="alert">
+          Salinan pemulihan RAB lokal belum berhasil disimpan di browser. Jangan tutup tab atau keluar dari sesi sebelum menyimpan Draft ke server. Perubahan ini dapat hilang jika sesi berakhir.
+        </div>
+      ) : null}
 
       {/*
         The action toolbar is the third block. Import, Export, Print, Simpan
@@ -2236,7 +2424,7 @@ export function RabWorkspacePage() {
       {focusMode ? null : (
         <section className="simprok-rab-toolbar" aria-label="Aksi Ruang Kerja RAB">
           <input ref={importInputRef} hidden type="file" accept=".xlsx" onChange={(event) => { const file = event.target.files?.[0]; event.currentTarget.value = ''; if (file) void previewImport(file); }} />
-          <button onClick={() => importInputRef.current?.click()} disabled={!projectId || !canEditDraft || isImporting} title="Import BOQ XLSX" aria-label="Import BOQ">
+          <button onClick={() => importInputRef.current?.click()} disabled={!projectId || !canEditDraft || isImporting} title={!projectId && isProvisional ? 'Import BOQ berbasis server tersedia setelah Simpan Draft pertama' : 'Import BOQ XLSX'} aria-label="Import BOQ">
             <FileInput size={17} /> Import BOQ
           </button>
           <button onClick={() => openPlaceholder('Export')} title="Export - belum tersambung" aria-label="Export - belum tersambung" data-route="/?ruang=export-rab">
@@ -2258,7 +2446,7 @@ export function RabWorkspacePage() {
             that are momentary rather than lifecycle.
           */}
           {canEditDraft ? (
-            <button className="simprok-rab-toolbar__save" onClick={handleSaveDraft} title={isSaving ? 'Menyimpan...' : 'Simpan Draft ke server'} aria-label="Simpan Draft" data-route="/?ruang=simpan-draft" aria-disabled={hasNegativeValue || isSaving || !projectId}>
+            <button className="simprok-rab-toolbar__save" onClick={handleSaveDraft} title={isSaving ? 'Menyimpan...' : 'Simpan Draft ke server'} aria-label="Simpan Draft" data-route="/?ruang=simpan-draft" aria-disabled={hasNegativeValue || isSaving || firstSaveUncertainRef.current}>
               <Save size={17} /> {isSaving ? 'Menyimpan...' : 'Simpan Draft'}
             </button>
           ) : null}
@@ -2352,6 +2540,39 @@ export function RabWorkspacePage() {
         </div>
       ) : null}
 
+      {blocker.state === 'blocked' ? (
+        <div className="simprok-rab-exit-backdrop">
+          <section className="simprok-rab-exit-dialog" role="alertdialog" aria-modal="true" aria-label="Perubahan RAB belum disimpan">
+            <strong>Perubahan RAB belum disimpan</strong>
+            <p>SIMPROK belum menyimpan perubahan terakhir. Pilih apa yang ingin dilakukan sebelum meninggalkan Ruang Kerja RAB.</p>
+            <div className="simprok-rab-exit-actions">
+              <button
+                className="simprok-rab-confirm__primary"
+                disabled={isSaving || !canEditDraft || hasNegativeValue}
+                onClick={() => {
+                  if (!isSaving && canEditDraft && !hasNegativeValue && (projectId || isProvisional)) {
+                    exitAfterSaveRef.current = true;
+                    handleSaveDraft();
+                  }
+                }}
+              >{isSaving ? 'Menyimpan...' : 'Simpan Draft dan Keluar'}</button>
+              <button
+                disabled={isSaving}
+                onClick={() => {
+                  if (isProvisional) clearRabRecovery(account?.id, activeWorkspaceId);
+                  if (blocker.state === 'blocked') blocker.proceed();
+                }}
+              >Buang Perubahan Lokal dan Keluar</button>
+              <button
+                autoFocus
+                disabled={isSaving}
+                onClick={() => { if (blocker.state === 'blocked') blocker.reset(); }}
+              >Tetap Mengerjakan</button>
+            </div>
+            <small>Hanya perubahan lokal yang dibuang. Proyek atau draft sebelumnya yang sudah tersimpan tidak dihapus.</small>
+          </section>
+        </div>
+      ) : null}
       {showBackflowWarning ? (
         <div className="simprok-rab-validation-alert simprok-rab-validation-alert--info" role="alert">
           <strong>Peringatan Navigasi (Draft Lokal)</strong>
@@ -2558,10 +2779,10 @@ export function RabWorkspacePage() {
         <section className="simprok-rab-sheet" aria-label="Tabel RAB">
           <div className="simprok-rab-sheet__label">
             {/* Storage is the same either way; freedom to edit is not. */}
-            <strong>{rabLocked ? 'RAB Terkunci' : 'Draft RAB'}</strong>
+            <strong>{rabLocked ? 'RAB Terkunci' : isProvisional ? 'RAB belum disimpan' : 'Draft RAB'}</strong>
             <span>
               {!projectId
-                ? 'Tidak ada project aktif'
+                ? isProvisional ? 'Belum disimpan — pekerjaan ini hanya di ruang kerja lokal' : 'Tidak ada project aktif'
                 : rabLocked
                 ? 'Tersimpan di server — dapat dibaca dan ditelusuri, tidak dapat diubah'
                 : 'Draft tersimpan di server — edit bebas, simpan kapan saja'}
@@ -3277,7 +3498,7 @@ export function RabWorkspacePage() {
               ) : null}
               <div>
                 <span>Persistensi</span>
-                <strong>{!projectId ? 'Belum ada project aktif' : rabLocked ? 'Terkunci, tersimpan di server' : 'Draft tersimpan di server'}</strong>
+                <strong>{!projectId ? (isProvisional ? 'RAB lokal belum disimpan' : 'Belum ada project aktif') : rabLocked ? 'Terkunci, tersimpan di server' : 'Draft tersimpan di server'}</strong>
               </div>
             </div>
             {/* THE RECIPE. "AHSP ini tersusun dari apa?" — the analysis's own
@@ -3463,7 +3684,8 @@ export function RabWorkspacePage() {
                   type="button"
                   className="simprok-ahsp-drawer__primary"
                   onClick={() => { setShowAhspSelection(true); setAhspPage(1); setAhspQuery(''); setDebouncedAhspQuery(''); setAhspPickerOpen(false); setAhspActiveIndex(0); }}
-                  disabled={!canEditDraft || isSelectingAhsp}
+                  disabled={!projectId || !canEditDraft || isSelectingAhsp}
+                  title={!projectId && isProvisional ? 'Simpan Draft pertama untuk mengaktifkan pencarian AHSP berbasis proyek' : 'Pilih / Ganti AHSP'}
                   aria-label="Pilih / Ganti AHSP"
                   aria-expanded={false}
                   aria-controls="simprok-ahsp-change-form"

@@ -703,14 +703,11 @@ test('Ruang Persiapan uses the canonical intake doors and no competing taxonomy'
   assert.match(selection, /\/project-intake\/regions/);
   assert.match(setup, /classificationNodeIds/);
   assert.match(setup, /locationRegionIds/);
-  assert.match(setup, /\/projects\/\$\{context\.projectId\}\/intake-context/);
-  assert.match(setup, /phase === 'verified'/);
-  assert.match(setup, /\/project\/\$\{context\.projectId\}\/rab\/workspace/);
-  assert.match(setup, /projectCreateRequest/);
-  const failedPost = setup.slice(setup.indexOf('if (!response.ok)'));
-  const dispositionAt = failedPost.indexOf('projectCreateHttpDisposition(response.status)');
-  const errorBodyAt = failedPost.indexOf('readApiErrorMessage(response)');
-  assert.ok(dispositionAt >= 0 && dispositionAt < errorBodyAt);
+  // First project save moved from Persiapan to the new RAB workspace.
+  // Opening the room is local-only and must not write a Project to the server.
+  assert.match(setup, /navigate\('\/project\/new\/rab\/workspace'/);
+  assert.doesNotMatch(setup, /apiFetch\('\/projects'/);
+  assert.doesNotMatch(setup, /Simpan Draft & Lanjut ke Ruang Kerja RAB/);
   assert.match(setup, /classificationNodeIds: selectedClassificationIds/);
   assert.match(setup, /locationRegionIds: selectedLocationRegionIds/);
   assert.match(setup, /fieldContextAcknowledgement/);
