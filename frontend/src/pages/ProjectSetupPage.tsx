@@ -1,27 +1,11 @@
-import { type FormEvent, useCallback, useRef, useState } from 'react';
+import { type FormEvent, useCallback, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
-import { apiFetch } from '../utils/apiClient';
 import { ProjectIntakeClassificationFields } from '../components/project/ProjectIntakeClassificationFields';
 import { ProjectIntakeLocationFields } from '../components/project/ProjectIntakeLocationFields';
 import type { ProjectVocabularyPath } from '../utils/projectIntakeVocabulary';
-import {
-  beginProjectCreate,
-  composeDraftDescription,
-  fieldContextAcknowledgement,
-  intakeContextMatches,
-  PROJECT_CREATE_NOT_ATTEMPTED,
-  PROJECT_CREATE_UNCERTAIN_MESSAGE,
-  projectCreateHttpDisposition,
-  projectCreateRejected,
-  projectCreateRequest,
-  projectCreateUncertain,
-  projectCreateView,
-  projectCreated,
-  projectReadbackOutcome,
-  type ProjectCreateSafety,
-  type SubmittedProjectContext,
-} from '../utils/projectIntakeSelection';
+import { composeDraftDescription, fieldContextAcknowledgement } from '../utils/projectIntakeSelection';
+import { readRabRecovery } from '../utils/rabProvisionalRecovery';
 import { ArrowRight, MapPin, Sparkles, X } from 'lucide-react';
 
 const requiredPreparationFields = [
@@ -32,7 +16,9 @@ const requiredPreparationFields = [
 
 export function ProjectSetupPage() {
   const navigate = useNavigate();
-  const { token, activeWorkspaceId } = useAuth();
+  const { token, activeWorkspaceId, account } = useAuth();
+  // Visible only to the same account and workspace after a 401/session expiry.
+  const recoverableRab = readRabRecovery<unknown>(account?.id, activeWorkspaceId);
   const [interactionText, setInteractionText] = useState('');
   const [interactionStatus, setInteractionStatus] = useState('Engine belum aktif');
   const [classificationNodeIds, setClassificationNodeIds] = useState<string[] | null>(null);
@@ -44,12 +30,7 @@ export function ProjectSetupPage() {
   const [projectCode, setProjectCode] = useState('');
   const [budgetCeiling, setBudgetCeiling] = useState('');
   const [mainMaterialSpec, setMainMaterialSpec] = useState('');
-  const [createSafety, setCreateSafety] = useState<ProjectCreateSafety>(
-    PROJECT_CREATE_NOT_ATTEMPTED,
-  );
   const [inputError, setInputError] = useState('');
-  const createSafetyRef = useRef(createSafety);
-  const navigatedProjectId = useRef<string | null>(null);
 
   const handleClassificationChange = useCallback(
     (state: { classificationNodeIds: string[] | null; classificationVocabularyPaths: ProjectVocabularyPath[]; blockedReason: string | null }) => {
@@ -134,92 +115,22 @@ export function ProjectSetupPage() {
     return null;
   };
 
-  const rememberCreateSafety = (next: ProjectCreateSafety) => {
-    createSafetyRef.current = next;
-    setCreateSafety(next);
-  };
-
-  const readProjectContext = async (context: SubmittedProjectContext) => {
-    rememberCreateSafety(projectCreated(context));
-    let httpStatus: number | null = null;
-    let matches = false;
-    let detail: string | null = null;
-    try {
-      const readback = await apiFetch(`/projects/${context.projectId}/intake-context`);
-      httpStatus = readback.status;
-      if (readback.ok) {
-        const body = (await readback.json()) as {
-          classificationSelections?: { id: string }[];
-          locationSelections?: { id: string }[];
-        };
-        matches = intakeContextMatches({
-          classificationNodeIds: context.classificationNodeIds,
-          locationRegionIds: context.locationRegionIds,
-          classificationSelections: body.classificationSelections ?? [],
-          locationSelections: body.locationSelections ?? [],
-        });
-      } else if (readback.status !== 403) {
-        detail = await readApiErrorMessage(readback);
-      }
-    } catch {
-      httpStatus = null;
-    }
-
-    const outcome = projectReadbackOutcome({
-      context,
-      httpStatus,
-      matches,
-      detail,
-    });
-    rememberCreateSafety(outcome);
-    if (outcome.phase === 'verified' && navigatedProjectId.current !== context.projectId) {
-      navigatedProjectId.current = context.projectId;
-      navigate(`/project/${context.projectId}/rab/workspace`);
-    }
-  };
-
-  const handleCreateDraftProject = async () => {
-    const current = createSafetyRef.current;
-    if (projectCreateRequest(current) === 'get') {
-      if (current.phase !== 'unverified') return;
-      await readProjectContext({
-        projectId: current.projectId,
-        classificationNodeIds: current.classificationNodeIds,
-        locationRegionIds: current.locationRegionIds,
-      });
+  // Persiapan RAB is a LOCAL intent, never a database write.
+  const handleCreateDraftProject = () => {
+    if (recoverableRab) {
+      setInputError('Masih ada RAB lokal belum disimpan. Lanjutkan RAB tersebut; jika ingin memulai yang baru, gunakan Buang Perubahan Lokal dan Keluar dari Ruang Kerja RAB terlebih dahulu.');
       return;
     }
-    if (projectCreateRequest(current) !== 'post') return;
-
     const validationError = validateDraftInput();
-    if (validationError) {
-      setInputError(validationError);
+    if (validationError) { setInputError(validationError); return; }
+    const workspaceId = getRequestWorkspaceId(activeWorkspaceId);
+    if (!workspaceId || !classificationNodeIds) {
+      setInputError('Konteks workspace atau klasifikasi resmi belum lengkap.');
       return;
     }
-
-    const began = beginProjectCreate(current);
-    if (began.phase !== 'in_progress' || began === current) return;
-    rememberCreateSafety(began);
-    setInputError('');
-
-    try {
-      const workspaceId = getRequestWorkspaceId(activeWorkspaceId);
-      if (!workspaceId) {
-        rememberCreateSafety(
-          projectCreateRejected('Draft project belum dapat dibuat. Workspace context belum tersedia.'),
-        );
-        return;
-      }
-      if (!classificationNodeIds) {
-        rememberCreateSafety(
-          projectCreateRejected('Jenis Pengadaan dan minimal satu Kategori wajib dipilih dari klasifikasi resmi.'),
-        );
-        return;
-      }
-
-      const selectedClassificationIds = classificationNodeIds;
-      const normalizedBudget = normalizeBudgetCeiling().value;
-      const normalizedSpec = mainMaterialSpec.trim();
+    const selectedClassificationIds = classificationNodeIds;
+    const normalizedBudget = normalizeBudgetCeiling().value;
+    const normalizedSpec = mainMaterialSpec.trim();
       const draftPayload = {
         name: preparationData['Nama Proyek'].trim(),
         code: buildDraftProjectCode(),
@@ -231,65 +142,9 @@ export function ProjectSetupPage() {
         ...(normalizedBudget ? { budgetBaseline: normalizedBudget } : {}),
         ...(normalizedSpec ? { mainMaterialSpec: normalizedSpec } : {}),
       };
-
-      let response: Response;
-      try {
-        response = await apiFetch('/projects', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(draftPayload),
-        });
-      } catch {
-        rememberCreateSafety(projectCreateUncertain(PROJECT_CREATE_UNCERTAIN_MESSAGE));
-        return;
-      }
-
-      if (!response.ok) {
-        const disposition = projectCreateHttpDisposition(response.status);
-        if (disposition === 'uncertain') {
-          rememberCreateSafety(projectCreateUncertain(PROJECT_CREATE_UNCERTAIN_MESSAGE));
-          return;
-        }
-        rememberCreateSafety(projectCreateRejected(await readApiErrorMessage(response)));
-        return;
-      }
-
-      let project: { id?: string; projectId?: string; classificationNodeIds?: string[] } | null = null;
-      try {
-        project = await response.json();
-      } catch {
-        project = null;
-      }
-      const projectId = project?.id || project?.projectId;
-      if (!projectId) {
-        rememberCreateSafety(
-          projectCreateUncertain(
-            'Server menjawab, tetapi identitas proyek tidak terbaca. Pembuatan tidak diulang dari formulir ini. Periksa Proyek Saya sebelum membuat draft baru.',
-          ),
-        );
-        return;
-      }
-
-      // New vocabulary choices become canonical UUID nodes inside the same
-      // project transaction. Never compare a synthetic UI id with saved truth.
-      const persistedIds = project?.classificationNodeIds;
-      if (classificationVocabularyPaths.length && (!Array.isArray(persistedIds) || !persistedIds.every((id) => /^[0-9a-f-]{36}$/i.test(id)))) {
-        rememberCreateSafety(projectCreateUncertain(PROJECT_CREATE_UNCERTAIN_MESSAGE));
-        return;
-      }
-      await readProjectContext({
-        projectId,
-        classificationNodeIds: persistedIds ?? selectedClassificationIds,
-        locationRegionIds: selectedLocationRegionIds,
-      });
-    } catch {
-      if (createSafetyRef.current.phase === 'in_progress') {
-        rememberCreateSafety(projectCreateUncertain(PROJECT_CREATE_UNCERTAIN_MESSAGE));
-      }
-    }
+    setInputError('');
+    navigate('/project/new/rab/workspace', { state: { preparedProject: draftPayload } });
   };
-
-  const createView = projectCreateView(createSafety);
 
   return (
     <div className="simprok-rab-prep">
@@ -304,6 +159,12 @@ export function ProjectSetupPage() {
           </div>
           <h1>Persiapan RAB</h1>
           <p>Lengkapi data pekerjaan dan konteks lapangan sebelum masuk ke Ruang Kerja RAB.</p>
+          {recoverableRab ? (
+            <button type="button" onClick={() => navigate('/project/new/rab/workspace')}
+              aria-label="Lanjutkan RAB Lokal Belum Disimpan">
+              Lanjutkan RAB belum disimpan: {recoverableRab.preparedProject.name}
+            </button>
+          ) : null}
         </div>
         <div className="simprok-rab-prep__status" title="Ruang Transisi RAB" aria-label="Ruang Transisi RAB">
           Ruang Transisi RAB
@@ -501,8 +362,8 @@ export function ProjectSetupPage() {
       </div>
 
       <footer className="simprok-rab-prep__footer">
-        <div style={{ flex: '1 1 260px', color: (inputError || createView.error) ? '#C0392B' : '#16294B', fontSize: '0.9rem' }}>
-          <strong>Status Draft:</strong> {inputError || createView.error || createView.status}
+        <div style={{ flex: '1 1 260px', color: inputError ? '#C0392B' : '#16294B', fontSize: '0.9rem' }}>
+          <strong>Status Draft:</strong> {inputError || 'Belum disimpan. Lengkapi persiapan, lalu lanjut untuk menyusun RAB secara lokal.'}
         </div>
         <button
           className="simprok-rab-action simprok-rab-action--secondary"
@@ -517,12 +378,11 @@ export function ProjectSetupPage() {
         <button
           className="simprok-rab-action simprok-rab-action--primary"
           onClick={handleCreateDraftProject}
-          disabled={createView.primaryDisabled}
-          title={createView.primaryLabel}
-          aria-label={createView.primaryLabel}
-          data-route="/project/:projectId/rab/workspace"
+          title="Lanjut ke Ruang Kerja RAB (belum menyimpan)"
+          aria-label="Lanjut ke Ruang Kerja RAB"
+          data-route="/project/new/rab/workspace"
         >
-          {createView.primaryLabel}
+          Lanjut ke Ruang Kerja RAB
           <ArrowRight size={18} aria-hidden="true" />
         </button>
       </footer>
@@ -530,34 +390,7 @@ export function ProjectSetupPage() {
   );
 }
 
-const checkStatus = (status: number) => {
-  if (status === 401) return 'Sesi Anda telah berakhir atau tidak valid. Silakan login kembali.';
-  if (status === 403) return 'Anda tidak memiliki akses untuk membuka data ini.';
-  if (status === 400) return 'Konteks workspace atau permintaan belum valid. Pilih workspace kembali.';
-  return 'Data gagal dimuat. Coba lagi beberapa saat.';
-};
-
 const getRequestWorkspaceId = (activeWorkspaceId: string | null) => {
   if (typeof window === 'undefined') return activeWorkspaceId;
   return localStorage.getItem('simprok_workspace') || activeWorkspaceId;
-};
-
-const readApiErrorMessage = async (response: Response) => {
-  const fallback = checkStatus(response.status);
-
-  try {
-    const contentType = response.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
-      const payload = await response.json();
-      const message = Array.isArray(payload?.message)
-        ? payload.message.join(', ')
-        : payload?.message || payload?.error;
-      return `Draft project belum dapat dibuat. API menolak request: ${response.status}. ${message || fallback}`;
-    }
-
-    const text = await response.text();
-    return `Draft project belum dapat dibuat. API menolak request: ${response.status}. ${text || fallback}`;
-  } catch {
-    return `Draft project belum dapat dibuat. API menolak request: ${response.status}. ${fallback}`;
-  }
 };

@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { createBrowserRouter, createRoutesFromElements, RouterProvider, Route } from 'react-router-dom';
 import { DashboardLayout } from './components/layout/DashboardLayout';
 import { ObservatoryPage } from './pages/ObservatoryPage';
 import { ProjectWarRoomPage } from './pages/ProjectWarRoomPage';
@@ -32,11 +32,11 @@ import { FieldTerminalPage } from './pages/field/FieldTerminalPage';
 import { ProjectWorkPage } from './pages/field/ProjectWorkPage';
 import { SubmitProgressPage } from './pages/field/SubmitProgressPage';
 
-function App() {
-  return (
-    <AuthProvider>
-      <BrowserRouter>
-        <Routes>
+// Retain all existing routes and access controls. The data router enables
+// the built-in navigation blocker for unsaved RAB drafts.
+const router = createBrowserRouter(
+  createRoutesFromElements(
+    <>
           <Route path="/login" element={<LoginPage />} />
           <Route path="/workspace-select" element={<WorkspaceSelectPage />} />
           
@@ -45,6 +45,7 @@ function App() {
               <Route index element={<RoleRoute allowedRoles={['DIRECTOR', 'FOREMAN', 'OWNER', 'MANDOR']}><ObservatoryPage /></RoleRoute>} />
               <Route path="proyek" element={<ProjectListPage />} />
               <Route path="project/new" element={<PermissionRoute permission="PROJECT_CREATE"><ProjectSetupPage /></PermissionRoute>} />
+              <Route path="project/new/rab/workspace" element={<PermissionRoute permission="PROJECT_CREATE"><PermissionRoute permission="RAB_DRAFT_EDIT"><RabWorkspacePage /></PermissionRoute></PermissionRoute>} />
               <Route path="project/:projectId/rab" element={<PermissionRoute permission="RAB_VIEW"><ProjectRabDoorPage /></PermissionRoute>} />
               <Route path="project/:projectId/rab/workspace" element={<PermissionRoute permission="RAB_DRAFT_EDIT"><RabWorkspacePage /></PermissionRoute>} />
               <Route path="project/:projectId/rab/ahsp-snapshot" element={<ProjectAhspSnapshotPage />} />
@@ -75,8 +76,14 @@ function App() {
               <Route path="progress/:boqItemId" element={<SubmitProgressPage />} />
             </Route>
           </Route>
-        </Routes>
-      </BrowserRouter>
+    </>
+  ),
+);
+
+function App() {
+  return (
+    <AuthProvider>
+      <RouterProvider router={router} />
     </AuthProvider>
   );
 }

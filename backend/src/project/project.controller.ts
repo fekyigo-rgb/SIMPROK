@@ -280,6 +280,22 @@ export class ProjectController {
     }
 
     const accountId = request.user?.id;
+    // New RAB first-save requires BOTH project creation and RAB draft editing
+    // authority. The existing PROJECT_CREATE guard remains authoritative.
+    if (createProjectDto.initialDraft) {
+      if (!accountId) {
+        throw new ForbiddenException('Authenticated account required for RAB draft creation');
+      }
+      const effective = await this.permissionResolver.resolve(accountId, contextWorkspaceId);
+      if (!effective?.permissions.includes(PERMISSIONS.RAB_DRAFT_EDIT)) {
+        throw new ForbiddenException('RAB_DRAFT_EDIT permission is required for first Save Draft');
+      }
+      // The first-save contract verifies canonical BOQ via RAB_VIEW GET.
+      // Refuse before mutation when readback is not authorized.
+      if (!effective.permissions.includes(PERMISSIONS.RAB_VIEW)) {
+        throw new ForbiddenException('RAB_VIEW permission is required for first Save Draft readback');
+      }
+    }
     return this.projectService.create(
       createProjectDto,
       contextWorkspaceId,
