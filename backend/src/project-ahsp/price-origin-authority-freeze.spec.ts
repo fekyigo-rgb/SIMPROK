@@ -50,7 +50,11 @@ describe('RAB-TRUTH-01H price-origin authority freeze', () => {
       serviceSource.indexOf('tx.aHSPVersion.findFirst('),
       serviceSource.indexOf('ELIGIBLE_AHSP_VERSION_NOT_FOUND'),
     );
-    expect(versionLoad).toMatch(/ahsp: \{ select: \{ ownershipType: true \} \}/);
+    // Additional read-only work labels travel in that same guarded query.
+    // They must not replace, or cause a second read of, the ownership authority.
+    expect(versionLoad).toMatch(
+      /ahsp:\s*\{\s*select:\s*\{\s*ownershipType:\s*true,\s*workType:\s*true,\s*methodName:\s*true\s*\},?\s*\}/,
+    );
   });
 
   it('is the domain enum and nullable, so an unproven history can stay unproven', () => {

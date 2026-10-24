@@ -120,6 +120,7 @@ export interface RowResourceProposal {
 
 export interface RowMachineProposal {
   rowId: string;
+  categoryReusedFromPriorReview?: boolean;
   unit: RowUnitProposal;
   resource: RowResourceProposal;
   /**
@@ -1063,6 +1064,86 @@ export function optionalRowCanEnrichKdnNow(
  * does not invent a second gate; it only decides whether the existing writer
  * may be shown.
  */
+/** Private memory is displayed as a HUMAN-VERIFIED answer, not a guess. */
+export function privateMappingReuseNotice(
+  row: Pick<BasicPriceImportRowSummary, 'machineProposal'>,
+): string | null {
+  return row.machineProposal?.resource.authority === 'VERIFIED_PRIVATE_ROW_MAPPING_REUSED'
+    ? row.machineProposal.categoryReusedFromPriorReview === true
+      ? 'Kategori dan padanan dikenali dari keputusan privat sebelumnya yang telah diaudit. Tidak perlu konfirmasi ulang; penerimaan batch tetap keputusan Anda.'
+      : 'Dikenali dari keputusan privat sebelumnya. Tidak perlu memilih padanan ulang. Periksa dan gunakan penerimaan batch untuk mencatat keputusan atas akun Anda.'
+    : null;
+}
+
+/**
+ * A clear NEXT ACTION from facts the canonical engine ALREADY supplied.
+ * Presentation ONLY. Never ranks candidates as canonical matches, guesses
+ * missing specifications, changes resource IDs, or records a human decision.
+ * Prior-human metadata means a candidate was chosen SOMETIME in this
+ * workspace, not that it was approved for this source or this specification.
+ */
+export function basicPriceReviewCompass(
+  row: Pick<BasicPriceImportRowSummary, 'status' | 'machineProposal'>,
+): string | null {
+  if (row.status !== 'NEEDS_REVIEW' || !row.machineProposal ||
+      row.machineProposal.identityPairProven) return null;
+  const facts = row.machineProposal;
+  const candidates = facts.resource.candidates;
+  if (facts.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED')) {
+    return 'Langkah berikutnya: periksa spesifikasi yang tertulis di Excel. Kategori yang dikenali belum membuktikan bahwa dua item identik.';
+  }
+  if (candidates.length === 1 && candidates[0].specificationUnproved) {
+    const candidate = candidates[0];
+    const missing = candidate.unprovedSpecificationFacts;
+    const description = missing.length > 0
+      ? 'Spesifikasi yang belum terbukti: ' + missing.join(', ') + '. '
+      : 'Spesifikasi kandidat belum seluruhnya terbukti. ';
+    return 'SIMPROK menemukan kandidat ' + candidate.name + ', tetapi belum menetapkan identitas. ' +
+      description + 'Langkah berikutnya: bandingkan spesifikasi sumber dan katalog; hanya pilih jika benar-benar sama.';
+  }
+  if (candidates.length > 1) {
+    const previouslyChosen = candidates.filter((item) => item.hasPriorHumanDecision);
+    const priorNotice = previouslyChosen.length > 0
+      ? ' ' + previouslyChosen.length + ' kandidat memiliki riwayat pilihan manusia, bukan bukti otomatis untuk item ini.'
+      : '';
+    return 'SIMPROK menemukan ' + candidates.length + ' kandidat yang belum terbukti identik.' +
+      priorNotice +
+      ' Langkah berikutnya: bandingkan jenis, satuan, merek, ukuran, atau mutu; pilih hanya kandidat yang sesuai.';
+  }
+  if (candidates.length === 1) {
+    return 'SIMPROK telah menemukan satu kandidat tetapi buktinya belum cukup. Langkah berikutnya: periksa informasi kandidat sebelum memilih atau menolaknya.';
+  }
+  return 'Belum ada identitas yang terbukti. Langkah berikutnya: periksa nama, kategori, satuan, serta spesifikasi sumber. Jangan membuat item baru sebelum memastikan tidak ada padanan yang sama.';
+}
+
+/**
+ * Display-only grouping of *already nominated* canonical kernel candidates.
+ * Human decision history is surfaced first, but never becomes proof or a
+ * source-matched identity decision. Server outcome/choice rules are unchanged.
+ */
+export type GuidedIdentityCandidate = Omit<RowResourceCandidate, 'resourceCatalogId'> & {
+  /** Opaque stable UI key only; never displayed or sent as a selected resource. */
+  searchKey: string;
+};
+
+export function guidedIdentityCandidates(
+  row: Pick<BasicPriceImportRowSummary, 'status' | 'machineProposal'>,
+): { prior: GuidedIdentityCandidate[]; other: GuidedIdentityCandidate[] } {
+  const empty = { prior: [], other: [] };
+  if (row.status !== 'NEEDS_REVIEW' || !row.machineProposal ||
+      row.machineProposal.identityPairProven) return empty;
+  const prior: GuidedIdentityCandidate[] = [];
+  const other: GuidedIdentityCandidate[] = [];
+  const seen = new Set<string>();
+  for (const candidate of row.machineProposal.resource.candidates) {
+    if (!candidate.resourceCatalogId || seen.has(candidate.resourceCatalogId)) continue;
+    seen.add(candidate.resourceCatalogId);
+    const { resourceCatalogId, ...displayFacts } = candidate;
+    (candidate.hasPriorHumanDecision ? prior : other).push({ ...displayFacts, searchKey: resourceCatalogId });
+  }
+  return { prior, other };
+}
+
 export function rowIdentityAdmissionOffered(
   row: Pick<BasicPriceImportRowSummary, 'status' | 'machineProposal'>,
 ): boolean {
@@ -1997,6 +2078,9 @@ export const rowSectionDisplay = (row: BasicPriceImportRowSummary): string => {
   }
   if (row.section !== null) {
     const label = rowSectionLabel(row.section);
+    if (row.machineProposal?.categoryReusedFromPriorReview === true) {
+      return 'Kategori dikenali dari konfirmasi sebelumnya: ' + label;
+    }
     /**
      * BP-VISUAL-TRUTH-07 §12 — A WEAK HINT MUST NOT BE DRESSED AS A FACT.
      *
@@ -2346,6 +2430,10 @@ export const rowNoteLines = (row: BasicPriceImportRowSummary): RowNoteLines => {
       const machineEstablished =
         row.machineProposal?.identityPairProven === true &&
         row.machineProposal.resource.admissibleForResolve;
+      // Read-only historical category proof is not a fresh actor decision.
+      // The separate review panel already displays its provenance and never
+      // presents a forged confirmation on the current row.
+      if (row.machineProposal?.categoryReusedFromPriorReview === true) continue;
       const reviewerConfirmed = row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER');
       const humanEstablished =
         row.effectiveResourceType !== null &&
@@ -2799,7 +2887,7 @@ export const UNKNOWN_REQUIRED_FACT_MESSAGE =
  * as two successes, so prices that were already kept are named as such.
  */
 export const smartSaveOutcomeMessage = (outcome: {
-  accepted: { acceptedCount: number; remainingEligible: number };
+  accepted: { acceptedCount: number; remainingEligible: number; skippedCount?: number };
   kept: { createdCount: number; alreadyPrivateCount: number };
 }): string => {
   const parts: string[] = [];
@@ -2816,6 +2904,14 @@ export const smartSaveOutcomeMessage = (outcome: {
   if (outcome.kept.createdCount === 0 && outcome.kept.alreadyPrivateCount > 0) {
     parts.push(
       `${outcome.kept.alreadyPrivateCount} harga memang sudah tersimpan sebelumnya, jadi tidak ada yang digandakan.`,
+    );
+  }
+  // The writer can return NEEDS_REVIEW for a same-identity collision without
+  // throwing. Never call a skipped row a price created, and never guess its
+  // specific reason: refresh reveals the authoritative per-row collision.
+  if ((outcome.accepted.skippedCount ?? 0) > 0) {
+    parts.push(
+      `${outcome.accepted.skippedCount} baris belum diterima otomatis; periksa Perlu Tinjauan untuk alasan yang tercatat.`,
     );
   }
   if (outcome.accepted.remainingEligible > 0) {

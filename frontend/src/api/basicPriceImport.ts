@@ -249,7 +249,8 @@ export async function previewBasicPriceImport(
 }
 
 export async function getBasicPriceImportBatch(batchId: string): Promise<BasicPriceImportBatchSummary> {
-  const response = await apiFetch(`/basic-price-imports/${batchId}`);
+  // Decision/readiness is live server truth. Never reuse a browser-cached 409-era snapshot.
+  const response = await apiFetch(`/basic-price-imports/${batchId}`, { cache: 'no-store' });
   return parseOrThrow(response);
 }
 

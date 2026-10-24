@@ -2721,6 +2721,124 @@ describe('BasicPriceRowResolutionService', () => {
     });
   });
 
+  describe('machine-proven Smart Save — review/read/write fidelity', () => {
+    const firstRow = {
+      ...baseRow,
+      id: 'machine-proven-row-a',
+      sourceSectionProvenance: 'UPLOADER_DECLARED',
+      reasonCodes: [],
+      collisionType: 'NONE',
+      specificationDecisions: [],
+      rawSourceCategoryName: null,
+      rawSourceCategoryCode: null,
+      rawSourceContext: null,
+    };
+    const collisionRow = {
+      ...firstRow,
+      id: 'machine-proven-row-b',
+    };
+    const proved = (rowId: string) => ({
+      rowId,
+      identityPairProven: true,
+      resource: {
+        status: 'RESOLVED',
+        admissibleForResolve: true,
+        resourceCatalogId: 'resource-01',
+      },
+      unit: {
+        status: 'RESOLVED',
+        unitDefinitionId: 'unit-01',
+      },
+    });
+
+    const arrange = (rows: typeof firstRow[]) => {
+      Object.assign(prisma, {
+        basicPriceImportBatch: {
+          findUnique: jest.fn().mockResolvedValue({
+            ...baseBatch,
+            status: 'NEEDS_REVIEW',
+          }),
+        },
+        basicPriceImportRow: {
+          findMany: jest.fn().mockResolvedValue(rows),
+        },
+      });
+      proposalService.proposeForRows.mockResolvedValue(
+        new Map(rows.map((row) => [row.id, proved(row.id)])),
+      );
+      return jest.spyOn(service as any, 'resolveWithinTransaction');
+    };
+
+    it('passes the source fingerprint, row version and audited category fact to the ONE canonical proposal authority', async () => {
+      const resolver = arrange([firstRow]);
+      resolver.mockResolvedValue({
+        status: 'READY_FOR_SUBMISSION',
+        resolutionStatus: 'RESOLVED',
+      });
+      const result = await service.acceptMachineProvenRows(
+        WORKSPACE_ID, BATCH_ID, REVIEWER_ID,
+      );
+      expect(proposalService.proposeForRows).toHaveBeenCalledWith(
+        WORKSPACE_ID,
+        [expect.objectContaining({
+          id: firstRow.id,
+          batchId: BATCH_ID,
+          rowVersion: firstRow.version,
+          sourceSha256: baseBatch.sourceSha256,
+          rowCategoryConfirmedByReviewer: false,
+          hasAuditedSpecifications: false,
+        })],
+      );
+      expect(result).toMatchObject({
+        acceptedCount: 1,
+        eligibleCount: 1,
+        skippedCount: 0,
+        evidenceLoads: 1,
+      });
+    });
+
+    it('counts only a persisted READY+RESOLVED decision, not an identity collision returned without an exception', async () => {
+      const resolver = arrange([firstRow, collisionRow]);
+      resolver.mockImplementation(async (
+        _tx: unknown, _workspace: string, _batch: string, rowId: string,
+      ) =>
+        (rowId === firstRow.id
+          ? { status: 'READY_FOR_SUBMISSION', resolutionStatus: 'RESOLVED' }
+          : { status: 'NEEDS_REVIEW', resolutionStatus: 'RESOURCE_AMBIGUOUS' }) as never,
+      );
+      const result = await service.acceptMachineProvenRows(
+        WORKSPACE_ID, BATCH_ID, REVIEWER_ID,
+      );
+      expect(result).toMatchObject({
+        acceptedCount: 1,
+        eligibleCount: 2,
+        skippedCount: 1,
+      });
+      expect(result.acceptedRowIds).toEqual([firstRow.id]);
+    });
+
+    it('does not re-offer a previously persisted collision as an automatic save on retry', async () => {
+      const resolver = arrange([
+        firstRow,
+        { ...collisionRow, collisionType: 'SAME_IDENTITY_SAME_VALUE' },
+      ]);
+      resolver.mockResolvedValue({
+        status: 'READY_FOR_SUBMISSION',
+        resolutionStatus: 'RESOLVED',
+      });
+      const result = await service.acceptMachineProvenRows(
+        WORKSPACE_ID, BATCH_ID, REVIEWER_ID,
+      );
+      expect(proposalService.proposeForRows).toHaveBeenCalledWith(
+        WORKSPACE_ID,
+        [expect.objectContaining({ id: firstRow.id })],
+      );
+      expect(result.eligibleCount).toBe(1);
+      expect(result.acceptedRowIds).toEqual([firstRow.id]);
+      expect(resolver).toHaveBeenCalledTimes(1);
+    });
+  });
+
   describe('admitSafeNewResources', () => {
     const fingerprint = 'a'.repeat(64);
     const unitId = '11111111-1111-4111-8111-111111111111';

@@ -60,6 +60,14 @@ test('App.tsx is the only RabWorkspacePage renderer', () => {
   assert.deepEqual(renderers, [join('src', 'App.tsx')]);
 });
 
+test('existing AHSP component panel exposes server evidence on demand without a second resolver', () => {
+  const code = codeOnly(workspace);
+  assert.match(code, /component\.trust\.needsAttention && component\.explanation/);
+  assert.match(code, /<summary>Mengapa perlu tinjauan\?<\/summary>/);
+  assert.match(code, /<p>\{component\.explanation\}<\/p>/);
+  assert.doesNotMatch(code, /function resolveSandVariant|function calculateAhspPriceVariant/);
+});
+
 test('every RAB workspace mount uses the permission gate', () => {
   const code = codeOnly(app);
   const mounts = code.match(/<RabWorkspacePage\b/g) ?? [];

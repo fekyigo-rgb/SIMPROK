@@ -45,6 +45,9 @@ import {
   optionalRowCanEnrichKdnNow,
   OPTIONAL_ENRICHMENT_EMPTY,
   rowIdentityAdmissionOffered,
+  privateMappingReuseNotice,
+  basicPriceReviewCompass,
+  guidedIdentityCandidates,
   rowSafeNewAdmissionEligible,
   rowIdentityRefusalChoices,
   rowIdentityAdmissionBlockReason,
@@ -75,6 +78,7 @@ import {
   WHY_DISCLOSURE_TITLE,
   type BasicPriceImportBatchSummary,
   type BasicPriceImportRowSummary,
+  type GuidedIdentityCandidate,
 } from '../utils/basicPriceImportDisplay';
 import { importRequestMessage } from '../utils/basicPriceIntakeErrors';
 import '../styles/basicPrice.css';
@@ -238,6 +242,8 @@ export function BasicPriceReviewPage() {
   /** Rows a person has edited by hand since this batch was loaded. */
   const [touchedRowIds, setTouchedRowIds] = useState<Set<string>>(new Set());
   const [lookupRows, setLookupRows] = useState<Set<string>>(new Set());
+  /** Human-selected SEARCH TARGET, never a catalog identity selection. */
+  const [candidateSearchSeeds, setCandidateSearchSeeds] = useState<Record<string, { id: string; name: string }>>({});
   const [rowFilter, setRowFilter] = useState<ReviewRowFilter>('ALL');
   const [visibleRowLimit, setVisibleRowLimit] = useState(REVIEW_ROW_PAGE_SIZE);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
@@ -331,6 +337,18 @@ export function BasicPriceReviewPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [batchId]);
 
+  // A reviewer may return to a still-open tab after QA restart or another
+  // reviewed decision. Refresh the SAME server read without erasing drafts.
+  // No background polling and no client-side identity decision.
+  useEffect(() => {
+    const onFocus = () => {
+      if (document.visibilityState === 'visible') void loadBatch(false);
+    };
+    window.addEventListener('focus', onFocus);
+    return () => window.removeEventListener('focus', onFocus);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [batchId]);
+
   const draftFor = (rowId: string): RowDraft => drafts[rowId] ?? emptyDraft;
   const updateDraft = (rowId: string, patch: Partial<RowDraft>) => {
     setDrafts((current) => ({
@@ -350,6 +368,12 @@ export function BasicPriceReviewPage() {
    * Previous catalog selections belong to the old spelling and must be cleared. */
   const changeWorkingName = (row: BasicPriceImportRowSummary, value: string) => {
     updateDraft(row.id, { correctedCanonicalName: value, resource: null, resourcePending: false });
+    setCandidateSearchSeeds((current) => {
+      if (!(row.id in current)) return current;
+      const next = { ...current };
+      delete next[row.id];
+      return next;
+    });
     setRowNotice((current) => current?.rowId === row.id ? null : current);
     setSafeNewRowIds((current) => {
       if (!current.has(row.id)) return current;
@@ -726,11 +750,11 @@ export function BasicPriceReviewPage() {
     const draft = draftFor(row.id);
     if (!draft.rejectOpen) {
       updateDraft(row.id, { rejectOpen: true });
-      setStatusMessage(`Tuliskan alasan penolakan untuk baris ${row.sourceRowNumber}.`);
+      setStatusMessage(`Anda akan menolak seluruh baris harga ${row.sourceRowNumber}, bukan kandidat katalog. Tuliskan alasannya jika itu keputusan Anda.`);
       return;
     }
     if (!draft.reason.trim()) {
-      setStatusMessage('Alasan penolakan wajib diisi.');
+      setStatusMessage('Alasan menolak seluruh baris harga wajib diisi.');
       return;
     }
     setIsBusy(true);
@@ -738,7 +762,7 @@ export function BasicPriceReviewPage() {
       await rejectBasicPriceImportRow(batchId, row.id, row.version, draft.reason.trim());
       forgetCompletedEdit(row.id);
       await loadBatch();
-      setStatusMessage(`Baris ${row.sourceRowNumber} ditolak.`);
+      setStatusMessage(`Seluruh baris harga ${row.sourceRowNumber} ditolak; kandidat katalog tidak ditolak oleh tindakan ini.`);
     } catch (error) {
       setStatusMessage(await recoverFromRowFailure('REJECT', row, error));
     } finally {
@@ -1193,13 +1217,13 @@ export function BasicPriceReviewPage() {
             onClick={() => void handleKeepPrivate()}
             disabled={!oneActionOffered || isBusy}
             aria-disabled={!oneActionOffered || isBusy}
-            title="Terima baris yang sudah dikenali SIMPROK, lalu simpan semuanya sebagai harga milik ruang kerja ini"
+            title="Proses hingga jumlah ini; benturan identitas dapat menahan sebagian harga. Jumlah tersimpan dipastikan dari hasil backend."
           >
-            Simpan &amp; Gunakan ({oneActionRowCount})
+            Simpan &amp; Gunakan (hingga {oneActionRowCount})
           </button>
         )}
         <p className="bp-bulk-action__help">
-          Simpan sekaligus semua harga yang sudah dipastikan SIMPROK; lainnya dapat ditinjau nanti.
+          SIMPROK memeriksa ulang sebelum menyimpan. Jumlah akhirnya mengikuti harga yang benar-benar tersimpan; benturan tetap untuk ditinjau.
         </p>
         {/*
           BP-SHARED-PROPOSAL-01 — door EXISTS vs door OPENS.
@@ -1356,7 +1380,52 @@ export function BasicPriceReviewPage() {
           const draft = draftFor(row.id);
           const mutable = isRowMutable(row);
           const proven = row.machineProposal?.identityPairProven === true;
+          const reviewCompass = basicPriceReviewCompass(row);
+          const guidedCandidates = guidedIdentityCandidates(row);
+          const guidedCount = guidedCandidates.prior.length + guidedCandidates.other.length;
+          const visibleGuidedCandidates = guidedCandidates.prior.length > 0
+            ? guidedCandidates.prior.slice(0, 2)
+            : guidedCandidates.other.slice(0, 2);
+          const hiddenGuidedPrior = guidedCandidates.prior.slice(visibleGuidedCandidates.filter((item) => item.hasPriorHumanDecision).length);
+          const hiddenGuidedOther = guidedCandidates.other.slice(visibleGuidedCandidates.filter((item) => !item.hasPriorHumanDecision).length);
+          const hiddenGuidedCount = hiddenGuidedPrior.length + hiddenGuidedOther.length;
           const expanded = expandedRows.has(row.id);
+          const renderGuidedCandidate = (candidate: GuidedIdentityCandidate) => (
+            <li key={candidate.searchKey} className="bp-guided-candidate">
+              <div className="bp-guided-candidate__body">
+                <strong>{candidate.name}</strong>
+                <span className="bp-field__help">
+                  {candidateResourceTypeLabel(candidate.type)} Â· satuan katalog: {candidate.baseUnit}
+                  {candidate.code ? ' Â· kode: ' + candidate.code : ''}
+                </span>
+                {candidate.hasPriorHumanDecision ? (
+                  <span className="bp-field__help">Pernah dipilih manusia; belum membuktikan kesamaan item pada impor ini.</span>
+                ) : null}
+                {candidate.specificationUnproved ? (
+                  <span className="bp-field__help">
+                    Spesifikasi belum terbukti
+                    {candidate.unprovedSpecificationFacts.length > 0 ? ': ' + candidate.unprovedSpecificationFacts.join(', ') : ''}
+                  </span>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                className="bp-btn bp-btn--sm"
+                disabled={isBusy}
+                aria-label={'Cari di katalog: ' + candidate.name}
+                onClick={() => {
+                  // Reuse the CURRENT catalog picker and server search. A click
+                  // here searches by name, it does NOT select a catalog UUID.
+                  setCandidateSearchSeeds((current) => ({ ...current, [row.id]: { id: candidate.searchKey, name: candidate.name } }));
+                  updateDraft(row.id, { resource: null, resourcePending: false, admitOpen: false });
+                  setLookupRows((current) => new Set(current).add(row.id));
+                  setRowNotice({ rowId: row.id, text: 'Pencarian katalog untuk ' + candidate.name + ' dibuka. Pilih hasil yang benar dan periksa satuan sebelum Gunakan Pilihan.' });
+                }}
+              >
+                Periksa di katalog
+              </button>
+            </li>
+          );
           const resourceProven = machinePickedResource(row) !== null;
           const unitProven = machinePickedUnit(row) !== null;
           const collisionLabel = collisionWarningLabel(row.collisionType);
@@ -1665,7 +1734,7 @@ export function BasicPriceReviewPage() {
                     <h3>Pilih Penyelesaian</h3>
                     {/* Reuse the sole canonical category editor in the decision panel. */}
                     {mutable &&
-                     (row.section === null || categoryEditRows.has(row.id) || (row.sectionProvenance === 'UPLOADER_DECLARED' && !row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER'))) &&
+                     (row.section === null || categoryEditRows.has(row.id) || (row.sectionProvenance === 'UPLOADER_DECLARED' && !row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') && row.machineProposal?.categoryReusedFromPriorReview !== true)) &&
                      (row.section === null || row.sectionProvenance === 'UPLOADER_DECLARED') &&
                      !row.sourceCategoryName?.trim() && !row.sourceCategoryCode?.trim() ? (
                       <div id={`bp-category-editor-${row.id}`} className="bp-note bp-note--info" aria-label={`Tentukan jenis baris ${row.sourceRowNumber}`}>
@@ -1694,7 +1763,7 @@ export function BasicPriceReviewPage() {
                       </div>
                     ) : null}
                     {mutable && !proven &&
-                      (row.section === null || (row.sectionProvenance === 'UPLOADER_DECLARED' && !row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER'))) &&
+                      (row.section === null || (row.sectionProvenance === 'UPLOADER_DECLARED' && !row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') && row.machineProposal?.categoryReusedFromPriorReview !== true)) &&
                       !row.sourceCategoryName?.trim() && !row.sourceCategoryCode?.trim() ? (
                         <p className="bp-field__help" role="status">
                           Langkah berikutnya ada di atas: tekan <strong>Konfirmasi Jenis</strong>. Pilihan Bahan yang sama dengan Excel tetap dihitung sebagai keputusan Anda dan tercatat.
@@ -1703,43 +1772,73 @@ export function BasicPriceReviewPage() {
                         {!admissionOffered && admissionReview?.reasonCode && admissionUnavailableReason(admissionReview.reasonCode) ? (
                           <div className="bp-field__help">
                             <p role="status">{row.machineProposal?.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED')
-                              ? 'Spesifikasi dari berkas belum diperiksa. Item ini belum bisa disimpan atau dinyatakan identik.'
+                              ? 'Periksa spesifikasi yang tercantum pada berkas dan kandidat katalog. Jangan nyatakan sama atau buat item baru sebelum perbedaannya terbukti.'
                               : admissionReview.reasonCode === 'IDENTITY_CANDIDATE_BLOCKED'
-                              ? 'Item Baru BELUM dapat disimpan: SIMPROK menemukan calon padanan yang belum terbukti berbeda. Periksa daftar kandidat di bawah sebelum menetapkan identitas baru.'
+                              ? 'Periksa kandidat di bawah dan bandingkan identitas serta spesifikasinya. Pilih padanan yang terbukti sama; item baru hanya jika perbedaannya terbukti.'
                               : 'Item baru belum tersedia: ' + admissionUnavailableReason(admissionReview.reasonCode)}</p>
                             {admissionReview.reasonCode === 'IDENTITY_CANDIDATE_BLOCKED' ? (
                               <details className="bp-details">
-                                <summary>Bandingkan kandidat dan bukti identitas</summary>
-                                {row.machineProposal?.resource.candidates.some((candidate) => candidate.admissionDisposition === 'BLOCKED') ? (
-                                  <>
-                                    <ul>
-                                    {row.machineProposal.resource.candidates
-                                      .filter((candidate) => candidate.admissionDisposition === 'BLOCKED')
-                                      .map((candidate, index) => (
-                                        <li key={index}>
-                                          <strong>{candidate.name}</strong>
-                                          {candidate.code ? ' (' + candidate.code + ')' : ''}
-                                          {' — ' + candidateResourceTypeLabel(candidate.type) + ' · satuan ' + candidate.baseUnit}
-                                          {candidate.specificationUnproved && candidate.unprovedSpecificationFacts.length > 0
-                                            ? ' — bukti yang masih diperlukan: ' + candidate.unprovedSpecificationFacts.join(', ')
-                                            : ''}
-                                        </li>
-                                      ))}
-                                    </ul>
-                                  </>
-                                ) : <p>Daftar item yang mungkin sama belum dapat ditampilkan. Item baru belum dapat dibuat sebelum pemeriksaan.</p>}
-                                <p>Jika sesuai, gunakan <strong>Pilih Item yang Sesuai Padanan</strong> dan pilih satuan. Jika berbeda, jangan pilih padanan yang salah; perbedaan spesifikasi masih memerlukan bukti.</p>
+                                <summary>Mengapa item baru belum dapat dibuat?</summary>
+                                {row.machineProposal?.resource.candidates.some((candidate) => candidate.admissionDisposition === 'BLOCKED')
+                                  ? <p>Ada calon padanan yang belum terbukti berbeda. Daftar kandidat ditampilkan satu kali di panel peninjauan; bukti spesifikasinya tetap wajib diperiksa.</p>
+                                  : <p>Identitas baru belum boleh ditetapkan sampai perbandingan sumber dan katalog selesai.</p>}
                                 <p>Hasil pencarian kosong belum membuktikan bahwa item ini baru. Nama kerja bukan bukti spesifikasi; memuat ulang halaman saja tidak membuktikan perbedaan tersebut.</p>
                                 <p>Item privat tidak memerlukan persetujuan katalog resmi SIMPROK.</p>
                                 {!(row.sectionProvenance === 'SOURCE_ROW_CATEGORY' ||
                                     row.sectionProvenance === 'SOURCE_SECTION_TITLE' ||
-                                    row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER')) ? (
+                                    row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') ||
+                                    row.machineProposal?.categoryReusedFromPriorReview === true) ? (
                                   <p role="status">Konfirmasi Jenis pada panel penyelesaian ini sebelum memutuskan padanan atau item baru.</p>
                                 ) : null}
                               </details>
                             ) : null}
                           </div>
                         ) : null}
+                    {/* The LEFT item fact already displays audited category memory.
+                        Never repeat this message on the resolution side. */}
+                    {mutable && reviewCompass && guidedCount === 0 ? (
+                      <p className="bp-field__help" role="status" aria-label="Panduan langkah berikutnya">
+                        {reviewCompass}
+                      </p>
+                    ) : null}
+                    {mutable && !proven && guidedCount > 0 && !lookupRows.has(row.id) ? (
+                      <section className="bp-guided-candidates" aria-label={'Saran kandidat baris ' + row.sourceRowNumber}>
+                        <p className="bp-guided-candidates__heading">
+                          {guidedCandidates.prior.length > 0
+                            ? 'Pernah dipilih sebelumnya (' + guidedCandidates.prior.length + ') - belum tentu cocok'
+                            : 'Kandidat perlu diperiksa (' + guidedCount + ')'}
+                        </p>
+                        <ul className="bp-guided-candidates__list">{visibleGuidedCandidates.map(renderGuidedCandidate)}</ul>
+                        {hiddenGuidedCount > 0 ? (
+                          <details className="bp-details">
+                            <summary>Lihat {hiddenGuidedCount} kandidat lainnya</summary>
+                            {hiddenGuidedPrior.length > 0 ? (
+                              <>
+                                <p className="bp-guided-candidates__heading">Riwayat pilihan lainnya</p>
+                                <ul className="bp-guided-candidates__list">{hiddenGuidedPrior.map(renderGuidedCandidate)}</ul>
+                              </>
+                            ) : null}
+                            {hiddenGuidedOther.length > 0 ? (
+                              <>
+                                <p className="bp-guided-candidates__heading">Kandidat lain</p>
+                                <ul className="bp-guided-candidates__list">{hiddenGuidedOther.map(renderGuidedCandidate)}</ul>
+                              </>
+                            ) : null}
+                          </details>
+                        ) : null}
+                        <button type="button" className="bp-btn bp-btn--link bp-btn--sm" disabled={isBusy}
+                          onClick={() => {
+                            setCandidateSearchSeeds((current) => {
+                              if (!(row.id in current)) return current;
+                              const next = { ...current };
+                              delete next[row.id];
+                              return next;
+                            });
+                            updateDraft(row.id, { resource: null, resourcePending: false, admitOpen: false });
+                            setLookupRows((current) => new Set(current).add(row.id));
+                          }}>Cari padanan lain di katalog</button>
+                      </section>
+                    ) : null}
                     {identityReviewStatuses?.[row.id] && identityReviewStatuses[row.id].status !== 'NOT_REQUESTED' ? (
                       <details className="bp-details" aria-label={`Riwayat identitas baris ${row.sourceRowNumber}`}>
                         <summary>Riwayat keputusan identitas</summary>
@@ -1755,7 +1854,7 @@ export function BasicPriceReviewPage() {
                       </details>
                     ) : null}
                     {proven ? (
-                      <p className="bp-field__help">Dikenali otomatis. Gunakan Simpan &amp; Gunakan di atas untuk menyimpan baris ini bersama baris pasti lainnya.</p>
+                      <p className="bp-field__help">{privateMappingReuseNotice(row) ?? 'Dikenali otomatis. Gunakan Simpan & Gunakan di atas untuk menyimpan baris ini bersama baris pasti lainnya.'}</p>
                     ) : row.status === 'REJECTED' ? (
                       <p className="bp-field__help">{noteDisclosure.primary ?? 'Baris ini telah ditolak.'}</p>
                     ) : mutable ? (
@@ -1767,7 +1866,7 @@ export function BasicPriceReviewPage() {
                           <button type="button" className="bp-btn bp-rowcard__choice" title="Pilih satuan standar untuk item yang sudah dikenali." aria-expanded={lookupRows.has(row.id)} onClick={() => { updateDraft(row.id, { admitOpen: false }); setLookupRows((current) => new Set(current).add(row.id)); }} disabled={isBusy}>
                             Pilih Satuan
                           </button>
-                        ) : !sourceSpecUnverified && !resourceProven ? (
+                        ) : !sourceSpecUnverified && !resourceProven && guidedCount === 0 ? (
                           <button
                             type="button"
                             className="bp-btn bp-rowcard__choice"
@@ -1785,11 +1884,19 @@ export function BasicPriceReviewPage() {
                         {!sourceSpecUnverified && lookupRows.has(row.id) && mutable && !proven ? (
                           <div id={`bp-lookup-${row.id}`} tabIndex={-1} className="bp-rowcard__lookup bp-rowcard__lookup--contextual" aria-label="Cari dan pilih item atau satuan">
                             <strong className="bp-rowcard__lookup-heading">{resourceProven ? "Pilih satuan yang sesuai" : "Cari item yang sudah ada di SIMPROK"}</strong>
+                            {guidedCount > 0 && !resourceProven ? (
+                              <button type="button" className="bp-btn bp-btn--link bp-btn--sm" disabled={isBusy}
+                                onClick={() => setLookupRows((current) => {
+                                  const next = new Set(current);
+                                  next.delete(row.id);
+                                  return next;
+                                })}>Kembali ke saran kandidat</button>
+                            ) : null}
                             {!resourceProven ? (
                               <CatalogSearchSelect
                                 mode="resource"
-                                key={`${row.id}:${draft.correctedCanonicalName ?? row.name}`}
-                                initialQuery={(draft.correctedCanonicalName ?? row.name).trim().replace(/^-\s+/, '')}
+                                key={[row.id, candidateSearchSeeds[row.id]?.id ?? draft.correctedCanonicalName ?? row.name].join(':')}
+                                initialQuery={(candidateSearchSeeds[row.id]?.name ?? draft.correctedCanonicalName ?? row.name).trim().replace(/^-\s+/, '')}
                                 initialResourceType={reviewResourceSearchFamily(row)}
                                 selected={draft.resource}
                                 disabled={isBusy}
@@ -1932,11 +2039,12 @@ export function BasicPriceReviewPage() {
                         ) : null}
                         {draft.rejectOpen ? (
                           <label className="bp-field">
-                            <span className="bp-field__label">Alasan tolak</span>
-                            <input className="bp-input" type="text" placeholder="Mengapa baris ini ditolak?" value={draft.reason} onChange={(event) => updateDraft(row.id, { reason: event.target.value })} />
+                            <span className="bp-field__label">Alasan menolak seluruh baris harga</span>
+                            <input className="bp-input" type="text" placeholder="Mengapa baris harga ini ditolak?" value={draft.reason} onChange={(event) => updateDraft(row.id, { reason: event.target.value })} />
+                            <span className="bp-field__help">Ini menolak baris harga dari impor, bukan salah satu kandidat katalog.</span>
                           </label>
                         ) : null}
-                        <button type="button" className="bp-btn bp-btn--danger-quiet" onClick={() => void handleReject(row)} disabled={isBusy} aria-disabled={isBusy}>Tolak</button>
+                        <button type="button" className="bp-btn bp-btn--danger-quiet" onClick={() => void handleReject(row)} disabled={isBusy} aria-disabled={isBusy}>Tolak baris harga ini</button>
                       </>
                     ) : <p className="bp-field__help">{rowStateLabel(row)}</p>}
                     {row.mappingReasonAudit ? (

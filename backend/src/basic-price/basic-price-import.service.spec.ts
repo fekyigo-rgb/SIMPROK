@@ -959,11 +959,16 @@ describe('BasicPriceImportService', () => {
         sourceSha256: 'A'.repeat(64),
         sourceSection: 'MATERIAL',
         sourceSectionProvenance: undefined,
+        rowCategoryConfirmedByReviewer: false,
         rawResourceNameText: 'Air',
         rawResourceCodeText: null,
         rawUnitText: 'ltr',
         rawSourceContext: undefined,
         confirmedSpecifications: null,
+        hasAuditedSpecifications: false,
+        sourceRowNumber: 2,
+        rawSourceCategoryName: undefined,
+        rawSourceCategoryCode: undefined,
       });
     });
 

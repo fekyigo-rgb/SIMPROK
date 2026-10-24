@@ -28,5 +28,5 @@ test('PR205 specification review does not advertise an item-selection action tha
   assert.match(screen, /!sourceSpecUnverified && lookupRows\.has\(row\.id\)/u);
   assert.match(screen, /Spesifikasi pada berkas belum diperiksa sebagai bukti identitas/u);
   assert.match(screen, /Anda dapat meninjau nanti/u);
-  assert.match(screen, />Tolak<\/button>/u);
+  assert.match(screen, />Tolak baris harga ini<\/button>/u);
 });
