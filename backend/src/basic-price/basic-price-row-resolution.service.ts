@@ -14,6 +14,7 @@ import {
   ResolveBasicPriceImportRowDto,
   ConfirmBasicPriceImportRowCategoryDto,
   CompensateBasicPriceImportRowDto,
+  ReopenRejectedBasicPriceImportRowDto,
   ClarifyBasicPriceRowUnitReasonDto,
 } from './dto/resolve-basic-price-import-row.dto';
 import {
@@ -542,7 +543,15 @@ export class BasicPriceRowResolutionService {
     // already resolved, and a row a human is still editing in the browser are
     // all excluded here rather than being refused later.
     const rows = await this.prisma.basicPriceImportRow.findMany({
-      where: { batchId, status: 'NEEDS_REVIEW' },
+      // BP-C2: a reviewer-compensated mapping is an EXPLICIT withdrawal of
+      // consent, even when the identity kernel can still propose its catalog.
+      // Never let a later bulk "Simpan & Gunakan" silently make that same
+      // decision again. The user can still inspect and explicitly resolve it.
+      where: {
+        batchId,
+        status: 'NEEDS_REVIEW',
+        resolutionCompensations: { none: {} },
+      },
       orderBy: { sourceRowNumber: 'asc' },
       select: {
         id: true,
@@ -1843,14 +1852,15 @@ export class BasicPriceRowResolutionService {
   }
 
   /**
-   * BP-ROW8-COMPENSATION-01 — a HUMAN can compensate their OWN mistaken
-   * row-scoped catalog admission, before any price or another consumer uses it.
-   * The original mapping and source sighting remain unchanged. A new durable
-   * event records the reversal. NOT a generic resource deletion or mass undo.
+   * BP-C1 — a human compensates their OWN unsubmitted row decision.
+   * Reuse the existing append-only compensation event: never delete the
+   * mapping, source sighting, catalog, price or another consumer's decision.
    *
-   * The catalog row is RETIRED rather than deleted, so existing source audit
-   * remains referentially intact while Resource Identity Kernel's existing
-   * ACTIVE filter makes it ineligible as current evidence.
+   * An exclusively-owned, unused newly admitted catalog is RETIRED using
+   * the existing protected path. For an existing, shared or consumed catalog,
+   * the catalog stays ACTIVE: only this reviewer's current row is reopened.
+   * Resource Identity retains the old mapping as history but must never
+   * treat the compensated mapping as fresh positive evidence.
    */
   /** Append-only reason correction for an existing mapping; never reinterpret identity. */
   async clarifyUnitCorrectionReason(
@@ -1975,6 +1985,9 @@ export class BasicPriceRowResolutionService {
       });
       if (row.batch.workspaceId !== workspaceId) throw new NotFoundException('Batch not found');
       assertBatchOwnedByCaller(row.batch, actorAccountId, 'Batch not found');
+      if (row.batch.status !== 'NEEDS_REVIEW' && row.batch.status !== 'READY_FOR_REVIEW') {
+        throw new ConflictException('BATCH_NOT_MUTABLE');
+      }
       if (row.version !== dto.version) throw new ConflictException('ROW_VERSION_STALE');
       if (
         row.status !== 'READY_FOR_SUBMISSION' ||
@@ -1997,23 +2010,24 @@ export class BasicPriceRowResolutionService {
       );
       if (catalogLock.length !== 1) throw new ConflictException('COMPENSATION_CATALOG_MISSING');
       const catalog = await tx.resourceCatalog.findUniqueOrThrow({ where: { id: catalogId } });
-      if (catalog.workspaceId !== workspaceId || catalog.status !== 'ACTIVE') {
+      if ((catalog.workspaceId !== workspaceId && catalog.workspaceId !== null) ||
+          catalog.status !== 'ACTIVE') {
         throw new ConflictException('COMPENSATION_CATALOG_NOT_OWNED_ACTIVE');
       }
       const sightings = await tx.resourceSourceIdentity.findMany({
         where: { resourceCatalogId: catalogId },
       });
-      if (sightings.length !== 1 ||
-          sightings[0].workspaceId !== workspaceId ||
-          sightings[0].sourceSha256 !== row.batch.sourceSha256 ||
-          sightings[0].sourceRowNumber !== row.sourceRowNumber ||
-          sightings[0].rawName !== row.rawResourceNameText ||
-          sightings[0].sourceNameCellAddress !== row.sourceNameCellAddress) {
-        throw new ConflictException('COMPENSATION_SOURCE_NOT_EXCLUSIVE');
-      }
-      // An exclusively-owned newly admitted catalog only. If it has ANY
-      // downstream consumer, do not retire it, even at the original reviewer's
-      // request. All counts are read while the catalog FK target is locked.
+      const exclusiveSighting = sightings.length === 1 &&
+        sightings[0].workspaceId === workspaceId &&
+        sightings[0].sourceSha256 === row.batch.sourceSha256 &&
+        sightings[0].sourceRowNumber === row.sourceRowNumber &&
+        sightings[0].rawName === row.rawResourceNameText &&
+        sightings[0].sourceNameCellAddress === row.sourceNameCellAddress;
+      // Reuse the existing compensation event for BOTH exclusive and shared
+      // catalogs. Only a truly exclusive, unused, workspace-owned catalog may
+      // be retired. A shared/global or consumed catalog stays ACTIVE, and
+      // only this reviewer's unsubmitted row decision is compensated.
+      // Catalog FK locking protects against concurrent consumer creation.
       const counts = await Promise.all([
         tx.basicPrice.count({ where: { resourceId: catalogId } }),
         tx.priceSubmission.count({ where: { resourceId: catalogId } }),
@@ -2030,9 +2044,8 @@ export class BasicPriceRowResolutionService {
           where: { resourceCatalogId: catalogId, rowId: { not: rowId } },
         }),
       ]);
-      if (counts.some((count) => count !== 0)) {
-        throw new ConflictException('COMPENSATION_CATALOG_IN_USE');
-      }
+      const retireExclusiveCatalog = catalog.workspaceId === workspaceId &&
+        exclusiveSighting && counts.every((count) => count === 0);
       // Preserve the original decision and source evidence. A transaction
       // commits the NEW audit and both current-state changes together.
       const event = await tx.basicPriceImportRowResolutionCompensation.create({
@@ -2048,11 +2061,13 @@ export class BasicPriceRowResolutionService {
           previousCatalogName: catalog.name,
         },
       });
-      const retired = await tx.resourceCatalog.updateMany({
-        where: { id: catalogId, workspaceId, status: 'ACTIVE' },
-        data: { status: 'RETIRED' },
-      });
-      if (retired.count !== 1) throw new ConflictException('COMPENSATION_CATALOG_STALE');
+      if (retireExclusiveCatalog) {
+        const retired = await tx.resourceCatalog.updateMany({
+          where: { id: catalogId, workspaceId, status: 'ACTIVE' },
+          data: { status: 'RETIRED' },
+        });
+        if (retired.count !== 1) throw new ConflictException('COMPENSATION_CATALOG_STALE');
+      }
       const reopened = await tx.basicPriceImportRow.updateMany({
         where: {
           id: rowId,
@@ -2077,13 +2092,89 @@ export class BasicPriceRowResolutionService {
       return {
         rowId, batchId, priorRowVersion: row.version,
         newRowVersion: row.version + 1,
-        compensationEventId: event.id, retiredResourceCatalogId: catalogId,
+        compensationEventId: event.id,
+        retiredResourceCatalogId: retireExclusiveCatalog ? catalogId : null,
         status: 'NEEDS_REVIEW' as const,
       };
     }, { timeout: 20_000, maxWait: 20_000, isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   /** Human rejection (state machine B, reason required, no automatic path). */
+  async reopenRejectedRow(
+    workspaceId: string,
+    batchId: string,
+    rowId: string,
+    actorAccountId: string,
+    dto: ReopenRejectedBasicPriceImportRowDto,
+  ) {
+    const reason = dto.reason?.trim();
+    if (!reason || reason.length < 10 || reason.length > 1200 || reason !== dto.reason) {
+      throw new BadRequestException('REOPEN_REASON_REQUIRED');
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const batch = await tx.basicPriceImportBatch.findUnique({
+        where: { id: batchId },
+      });
+      if (!batch || batch.workspaceId !== workspaceId) {
+        throw new NotFoundException('Batch not found');
+      }
+      assertBatchOwnedByCaller(batch, actorAccountId, 'Batch not found');
+      if (batch.status !== 'NEEDS_REVIEW' && batch.status !== 'READY_FOR_REVIEW') {
+        throw new ConflictException('BATCH_NOT_MUTABLE');
+      }
+      const locks = await tx.$queryRaw<Array<{ id: string }>>(
+        Prisma.sql`SELECT "id" FROM "basic_price_import_rows"
+          WHERE "id" = ${rowId}::uuid AND "batchId" = ${batchId}::uuid FOR UPDATE`,
+      );
+      if (locks.length !== 1) throw new NotFoundException('Row not found');
+      const row = await tx.basicPriceImportRow.findUniqueOrThrow({
+        where: { id: rowId },
+        include: { privateBasicPrice: { select: { id: true } } },
+      });
+      if (row.batchId !== batchId) throw new NotFoundException('Row not found');
+      if (row.version !== dto.version) throw new ConflictException('ROW_VERSION_STALE');
+      if (
+        row.status !== 'REJECTED' ||
+        row.resolutionStatus !== 'UNRESOLVED' ||
+        row.privateBasicPrice !== null ||
+        row.priceSubmissionId !== null ||
+        row.resourceCatalogId !== null ||
+        row.unitDefinitionId !== null
+      ) {
+        throw new ConflictException('REJECTED_ROW_NOT_REOPENABLE');
+      }
+      // Keep the source's original rejection wording in place; do not
+      // redefine the mapping, price, identity or raw source during this action.
+      const previousReason = [...row.reasonCodes].reverse().find(
+        (code) => code.startsWith('REJECTED:'),
+      );
+      if (!previousReason) throw new ConflictException('REJECTION_AUDIT_MISSING');
+      const changed = await tx.basicPriceImportRow.updateMany({
+        where: { id: rowId, batchId, version: row.version, status: 'REJECTED' },
+        data: {
+          status: 'NEEDS_REVIEW',
+          resolvedByAccountId: null,
+          resolvedAt: null,
+          version: { increment: 1 },
+        },
+      });
+      if (changed.count !== 1) throw new ConflictException('ROW_VERSION_STALE');
+      // Append-only, one event per prior version. A concurrent caller
+      // cannot turn the same rejection into two reopened decisions.
+      await tx.$executeRaw(Prisma.sql`
+        INSERT INTO "basic_price_import_row_rejected_review_reopens"
+          ("id","workspaceId","rowId","actorAccountId","reason",
+           "priorRowVersion","newRowVersion","previousReason","reopenedAt")
+        VALUES (gen_random_uuid(), ${workspaceId}::uuid, ${rowId}::uuid,
+          ${actorAccountId}::uuid, ${reason}, ${row.version},
+          ${row.version + 1}, ${previousReason}, CURRENT_TIMESTAMP)`);
+      await this.recomputeBatchStatus(tx, batchId);
+      return { batchId, rowId, priorRowVersion: row.version,
+        newRowVersion: row.version + 1, status: 'NEEDS_REVIEW' as const };
+    }, { timeout: 20_000, maxWait: 20_000, isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  /** Original rejection remains auditable even after a lawful reopening. */
   async rejectRow(
     workspaceId: string,
     batchId: string,
@@ -2108,6 +2199,7 @@ export class BasicPriceRowResolutionService {
           data: {
             status: 'REJECTED',
             reasonCodes: { push: `REJECTED:${dto.reason}` },
+            resolvedByAccountId: currentAccountId,
             resolvedAt: new Date(),
             version: { increment: 1 },
           },

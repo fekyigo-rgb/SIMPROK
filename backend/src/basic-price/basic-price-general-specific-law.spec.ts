@@ -135,6 +135,66 @@ describe('BP general-versus-specific product law — real kernel and existing pr
     expect(verdict.status).not.toBe('RESOLVED');
   });
 
+  it.each([
+    {
+      kind: ResourceType.MATERIAL, broad: "Beton f'c 30 MPa",
+      specific: "Beton f'c 30 MPa dalam air",
+      attribute: 'lingkungan', qualifier: 'dalam air', unit: 'M3', code: 'B30',
+    },
+    {
+      kind: ResourceType.EQUIPMENT, broad: 'Excavator 20 ton',
+      specific: 'Excavator 20 ton rawa',
+      attribute: 'lingkungan', qualifier: 'rawa', unit: 'Jam', code: 'E20',
+    },
+    {
+      kind: ResourceType.LABOR, broad: 'Pekerja',
+      specific: 'Pekerja penyelam',
+      attribute: 'kompetensi', qualifier: 'penyelam', unit: 'OH', code: 'L01',
+    },
+  ])(
+    'allows a human to refuse an already recorded broader $kind candidate, with exact confirmed qualifier',
+    ({ kind, broad, specific, attribute, qualifier, unit, code }) => {
+      const catalog = {
+        id: `general-${kind}`, code: null, name: broad, type: kind,
+        baseUnit: unit, status: 'ACTIVE' as const, specifications: null,
+      };
+      const sighting = {
+        resourceCatalogId: catalog.id, rawName: broad, rawCode: code,
+        rawUnit: unit, sourceSection: kind, sourceSha256: 'e'.repeat(64),
+        sheetName: 'Harga', sourceRowNumber: 3,
+      };
+      const reference = {
+        rawName: specific, rawCode: code, rawUnit: unit, resourceType: kind,
+        confirmedSpecifications: { [attribute]: qualifier },
+      };
+      const verdict = resolveResourceIdentity({
+        reference, catalogCandidates: [catalog],
+        sourceSightings: [sighting], reviewedMappings: [],
+      });
+      // Recorded source code is a candidate, not authority to force a match.
+      expect(verdict.status).toBe('NEEDS_REVIEW');
+      expect(verdict.resolvedResourceCatalogId).toBeNull();
+      expect(verdict.candidates[0].identityBasis).toBe('RECORDED_FACT');
+      const question = {
+        ...reviewQuestion(specific, unit, code), sourceSection: kind,
+        sourceSectionProvenance: 'SOURCE_ROW_CATEGORY' as const,
+        confirmedSpecifications: reference.confirmedSpecifications,
+      };
+      const review = buildBasicPriceAdmissionReview(question, verdict, new Set([catalog.id]), kind);
+      expect(review.offered).toBe(true);
+      expect(review.humanRefusableCandidateIds).toEqual([catalog.id]);
+      const witness = { refusedCandidateIds: [catalog.id], candidateContextDigest: review.candidateContextDigest };
+      expect(isAdmissibleAfterExamination(verdict, witness, review.candidateContextDigest, reference)).toBe(true);
+      expect(isAdmissibleAfterExamination(verdict, witness, 'stale-context', reference)).toBe(false);
+      expect(isAdmissibleAfterExamination(verdict, { ...witness, refusedCandidateIds: [] }, review.candidateContextDigest, reference)).toBe(false);
+      const withoutConfirmedScope = buildBasicPriceAdmissionReview(
+        { ...question, confirmedSpecifications: null }, verdict, new Set([catalog.id]), kind,
+      );
+      expect(withoutConfirmedScope.offered).toBe(false);
+      expect(withoutConfirmedScope.blockedCandidateIds).toEqual([catalog.id]);
+    },
+  );
+
   it('permits different specific cement brand against strongly recorded generic Semen, without forcing identity', () => {
     const general = {
       id: 'catalog-semen-umum', name: 'Semen', type: ResourceType.MATERIAL,

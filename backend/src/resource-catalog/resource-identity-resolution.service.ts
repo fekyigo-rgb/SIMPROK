@@ -276,6 +276,7 @@ export class ResourceIdentityResolutionService {
           reviewerAccountId: true,
           decidedAt: true,
           reason: true,
+          compensation: { select: { id: true } },
           row: {
             select: {
               rawResourceNameText: true,
@@ -416,6 +417,7 @@ export class ResourceIdentityResolutionService {
             rawUnit: row.row.rawUnitText,
             unitDefinitionId: row.unitDefinitionId,
             originatingRowStatus: row.row.status,
+            isCompensated: Boolean(row.compensation),
             hasAuditedSourceSpecifications: (row.row.specificationDecisions?.length ?? 0) > 0,
             sourceSha256: row.row.batch?.sourceSha256,
             sourceRowNumber: row.row.sourceRowNumber,

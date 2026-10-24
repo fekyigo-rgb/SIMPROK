@@ -3,8 +3,14 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import { catalogLabelSignature } from '../resource-catalog/resource-catalog-name-correction.service';
+import { normalizeResourceName } from '../resource-catalog/resource-identity-resolution.kernel';
+import { confirmedSpecifications } from '../resource-catalog/resource-identity-specification.contract';
+import { trustedUnitContext } from '../unit-kernel/unit-kernel.contracts';
 import { GetBasicPricesDto } from './dto/get-basic-prices.dto';
 import { Prisma } from '@prisma/client';
 import {
@@ -246,7 +252,88 @@ export class BasicPriceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eligibility: BasicPriceEligibilityPolicy,
+    @Optional() private readonly unitKernel?: UnitKernelService,
   ) {}
+
+  /**
+   * BP-C3 — non-mutating preflight for a proposed name correction.
+   * Before anyone can edit a live ResourceCatalog, we must show its readers,
+   * identity collision risk and provenance. This is NOT rename authority.
+   * Only the exact active workspace-owned ResourceCatalog may be inspected.
+   */
+  async previewCatalogNameCorrection(
+    workspaceId: string,
+    resourceId: string,
+    proposedName: string,
+  ) {
+    // Reject control characters BEFORE whitespace normalization can erase them.
+    if (/[\x00-\x1f]/.test(proposedName)) {
+      throw new BadRequestException('RESOURCE_CATALOG_NAME_PROPOSAL_INVALID');
+    }
+    const proposal = proposedName.trim().replace(/\s+/g, ' ');
+    if (proposal.length < 3 || proposal.length > 180 || /[\x00-\x1f]/.test(proposal)) {
+      throw new BadRequestException('RESOURCE_CATALOG_NAME_PROPOSAL_INVALID');
+    }
+    const resource = await this.prisma.resourceCatalog.findFirst({
+      where: { id: resourceId, workspaceId, status: 'ACTIVE' },
+      select: { id: true, name: true, code: true, type: true, baseUnit: true, specifications: true, updatedAt: true },
+    });
+    if (!resource) throw new NotFoundException('RESOURCE_CATALOG_NOT_FOUND');
+    const [basicPriceCount, ahspResolutionCount, importRowCount, sourceIdentityCount, conversionRuleCount, neighbors] =
+      await Promise.all([
+        this.prisma.basicPrice.count({ where: { workspaceId, resourceId } }),
+        this.prisma.projectAhspResourceResolution.count({ where: { resourceCatalogId: resourceId } }),
+        this.prisma.basicPriceImportRow.count({ where: { resourceCatalogId: resourceId } }),
+        this.prisma.resourceSourceIdentity.count({ where: { workspaceId, resourceCatalogId: resourceId } }),
+        this.prisma.unitConversionRule.count({ where: { resourceCatalogId: resourceId } }),
+        this.prisma.resourceCatalog.findMany({
+          where: { workspaceId, type: resource.type, status: 'ACTIVE', id: { not: resourceId } },
+          select: { id: true, name: true, baseUnit: true },
+          take: 5001,
+        }),
+      ]);
+    // Never claim a complete conflict preflight from a truncated candidate set.
+    if (neighbors.length > 5000) {
+      throw new ConflictException('CATALOG_NAME_PREVIEW_SCOPE_EXCEEDED');
+    }
+    const folded = normalizeResourceName(proposal);
+    const signature = catalogLabelSignature(proposal);
+    const collisions = neighbors.filter((other) =>
+      normalizeResourceName(other.name) === folded ||
+      catalogLabelSignature(other.name) === signature,
+    );
+    const sameTypographyIdentity = catalogLabelSignature(resource.name) === catalogLabelSignature(proposal);
+    return {
+      currentName: resource.name,
+      proposedName: proposal,
+      resourceType: resource.type,
+      resourceCode: resource.code,
+      baseUnit: resource.baseUnit,
+      hasSpecifications: resource.specifications !== null,
+      specificationFacts: Object.entries(confirmedSpecifications(resource.specifications) ?? {})
+        .map(([name, value]) => ({ name, value })),
+      // A database timestamp is not an authorization to edit; it is evidence
+      // for a future stale-write guard and is deliberately read-only here.
+      observedVersion: resource.updatedAt.toISOString(),
+      impact: {
+        basicPrices: basicPriceCount,
+        projectAhspResolutions: ahspResolutionCount,
+        importRows: importRowCount,
+        sourceIdentityRecords: sourceIdentityCount,
+        conversionRules: conversionRuleCount,
+      },
+      conflictingSameTypeNames: collisions.length,
+      verdict: collisions.length > 0
+        ? 'IDENTITY_CONFLICT_REVIEW_REQUIRED'
+        : resource.name === proposal
+          ? 'NO_CHANGE'
+          : sameTypographyIdentity
+            ? 'SPELLING_ONLY_PREVIEW'
+            : 'IDENTITY_REVIEW_REQUIRED',
+      writable: false as const,
+      message: 'Pemeriksaan dampak saja. Nama katalog belum diubah; persetujuan identitas dan jurnal koreksi masih diwajibkan.',
+    };
+  }
 
   /**
    * Existing birth-audit lineage applied to source-name SEARCH, before count
@@ -1087,6 +1174,9 @@ export class BasicPriceService {
       explorerRows,
       workspaceId,
     );
+    const unitDisplays = this.unitKernel
+      ? await this.explorerVerifiedUnitDisplays(explorerRows)
+      : new Map<string, string | null>();
     // Same existing provenance-reference law as removeOwnPrivatePrice.
     // One bounded read for the visible page, never a per-row search.
     const privateIds = explorerRows
@@ -1114,6 +1204,11 @@ export class BasicPriceService {
         const inherited = inheritedNames.get(row.id);
         return {
           ...item,
+          ...(this.unitKernel ? { resource: {
+            ...item.resource,
+            // Presentation ONLY: canonical UnitDefinition symbol, not raw source text.
+            displayUnit: unitDisplays.get(row.resource.id) ?? null,
+          } } : {}),
           sourceName: item.sourceName ?? inherited ?? null,
           alreadyProposed:
             row.assetScope === 'WORKSPACE_PRIVATE'
@@ -1141,6 +1236,58 @@ export class BasicPriceService {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  /**
+   * Explorer presentation only. Reuse the ONE Unit Kernel's documented
+   * alias+trusted-resource-class law; resolve once per class/page, not N+1.
+   * This DOES NOT change resource base units, price denominators, conversion
+   * factors, saved source text, or any canonical identity.
+   *
+   * Null is an honest unresolved unit, never an inferred equivalent.
+   */
+  private async explorerVerifiedUnitDisplays(
+    rows: ExplorerRowSource[],
+  ): Promise<Map<string, string | null>> {
+    const output = new Map<string, string | null>();
+    const groups = new Map<'LABOR' | 'MATERIAL' | 'EQUIPMENT', Set<string>>();
+    for (const row of rows) {
+      output.set(row.resource.id, null);
+      const context = trustedUnitContext(row.resource.type);
+      if (!context) continue;
+      const units = groups.get(context) ?? new Set<string>();
+      units.add(row.resource.baseUnit);
+      groups.set(context, units);
+    }
+
+    const verifiedIds = new Map<string, string>();
+    await Promise.all([...groups.entries()].map(async ([context, rawUnits]) => {
+      const identities = await this.unitKernel!.resolveCanonicalUnitIdentities(
+        [...rawUnits], context,
+      );
+      for (const identity of identities) {
+        if (identity.status === 'RESOLVED' && identity.unitDefinition) {
+          verifiedIds.set(context + '\u0000' + identity.rawUnit, identity.unitDefinition.id);
+        }
+      }
+    }));
+    const definitionIds = [...new Set(verifiedIds.values())];
+    if (definitionIds.length === 0) return output;
+    const definitions = await this.prisma.unitDefinition.findMany({
+      where: { id: { in: definitionIds }, isActive: true },
+      select: { id: true, symbol: true },
+    });
+    const symbols = new Map(definitions.map((d) => [d.id, d.symbol]));
+    for (const row of rows) {
+      const context = trustedUnitContext(row.resource.type);
+      const definitionId = context
+        ? verifiedIds.get(context + '\u0000' + row.resource.baseUnit)
+        : undefined;
+      if (definitionId) {
+        output.set(row.resource.id, symbols.get(definitionId) ?? null);
+      }
+    }
+    return output;
   }
 
   /**

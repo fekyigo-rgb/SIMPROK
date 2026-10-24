@@ -109,6 +109,50 @@ export const searchExplorerRegions = async (q?: string, signal?: AbortSignal): P
   return page.items;
 };
 
+/** BP-C3 read-only impact preview for an ACTIVE workspace ResourceCatalog. No rename. */
+export interface CatalogNameImpact {
+  currentName: string;
+  proposedName: string;
+  resourceType: string;
+  resourceCode: string | null;
+  baseUnit: string;
+  hasSpecifications: boolean;
+  specificationFacts: Array<{ name: string; value: string }>;
+  observedVersion: string;
+  impact: {
+    basicPrices: number;
+    projectAhspResolutions: number;
+    importRows: number;
+    sourceIdentityRecords: number;
+    conversionRules: number;
+  };
+  conflictingSameTypeNames: number;
+  verdict: 'IDENTITY_CONFLICT_REVIEW_REQUIRED' | 'SPELLING_ONLY_PREVIEW' | 'NO_CHANGE' | 'IDENTITY_REVIEW_REQUIRED';
+  writable: false;
+  message: string;
+}
+export const previewCatalogNameImpact = (
+  resourceCatalogId: string, proposedName: string,
+): Promise<CatalogNameImpact> =>
+  requestJson<CatalogNameImpact>(
+    withQuery('/basic-prices/catalog-name-impact/' + encodeURIComponent(resourceCatalogId), { proposedName }),
+  );
+
+/** BP-C3: only the existing workspace identity curator can commit a proven
+ * same-identity typography correction; the backend does all authorization. */
+export const correctActiveResourceCatalogName = (resourceCatalogId: string, input: {
+  previousName: string;
+  correctedName: string;
+  expectedUpdatedAt: string;
+  reason: string;
+  evidence: string;
+  sameIdentityConfirmed: true;
+}): Promise<{ corrected: true; previousName: string; correctedName: string }> =>
+  requestJson(
+    '/resource-observations/catalog/' + encodeURIComponent(resourceCatalogId) + '/correct-name',
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input) },
+  );
+
 // BP-MULTI-ACTION-01 — a private owner's governed withdrawal, not physical delete.
 // Reuses the canonical BasicPrice writer/authority and existing API credentials.
 export const removeOwnBasicPrice = async (

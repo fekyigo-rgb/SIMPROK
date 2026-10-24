@@ -83,6 +83,16 @@ describe('BP-PRIVATE-LEARNING — exact prior user mapping through canonical ide
     expect(reuse(current, [historicalMapping, conflict]).status).toBe('NEEDS_REVIEW');
   });
 
+  it('refuses revoked mapping even if an earlier review row was accepted', () => {
+    expect(reuse(current, [{ ...historicalMapping, isCompensated: true }]).status).toBe('NEEDS_REVIEW');
+    const conflictingReversal = {
+      ...historicalMapping, mappingId: 'reversed-old-choice',
+      resourceCatalogId: 'another-resource', isCompensated: true,
+    };
+    // Revoked history remains relevant for conflict safety. Never auto-overrule it.
+    expect(reuse(current, [historicalMapping, conflictingReversal]).status).toBe('NEEDS_REVIEW');
+  });
+
   it('does not reuse a prior row that was rejected or had audited source specifications', () => {
     expect(reuse(current, [{ ...historicalMapping, originatingRowStatus: 'REJECTED' }]).status).toBe('NEEDS_REVIEW');
     expect(reuse(current, [{ ...historicalMapping, hasAuditedSourceSpecifications: true }]).status).toBe('NEEDS_REVIEW');

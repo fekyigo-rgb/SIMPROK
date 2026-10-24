@@ -46,6 +46,14 @@ export class ClarifyBasicPriceRowUnitReasonDto {
   @IsString() @MinLength(30) @MaxLength(900) reason!: string;
 }
 
+/** Reopen a REJECTED source row only during an unsubmitted review.
+ * The original rejection is preserved in an append-only audit record.
+ */
+export class ReopenRejectedBasicPriceImportRowDto {
+  @IsInt() version!: number;
+  @IsString() @MinLength(10) @MaxLength(1200) reason!: string;
+}
+
 export class CompensateBasicPriceImportRowDto {
   @IsInt() version!: number;
   @IsString() @MinLength(10) @MaxLength(1200) reason!: string;
