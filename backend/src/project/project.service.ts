@@ -711,13 +711,14 @@ export class ProjectService {
 
   async findAllGlobal() {
     return await this.prisma.project.findMany({
+      where: { deletedAt: null },
       orderBy: { createdAt: 'desc' },
     });
   }
 
   async findAllByWorkspace(workspaceId: string) {
     return await this.prisma.project.findMany({
-      where: { workspaceId },
+      where: { workspaceId, deletedAt: null },
       orderBy: { createdAt: 'desc' },
     });
   }
@@ -726,8 +727,94 @@ export class ProjectService {
     const project = await this.prisma.project.findUnique({
       where: { id },
     });
-    if (!project) throw new NotFoundException('Project not found');
+    if (!project || project.deletedAt != null) throw new NotFoundException('Project not found');
     return project;
+  }
+
+  /**
+   * Discard only a still-editable Project/RAB draft. Existing Project.deletedAt is
+   * canonical; never physically delete Project, BOQ, audit evidence or relations.
+   * Project row and lifecycle checks share one transaction/row lock.
+   */
+  async discardDraftProject(
+    projectId: string,
+    projectName: string | undefined,
+    actor: {
+      accountId: string;
+      workspaceId: string;
+      membershipId: string;
+      roleInProject: string;
+      isPrimaryAssignment: boolean;
+    },
+  ) {
+    if (actor.roleInProject !== 'OWNER' || actor.isPrimaryAssignment !== true) {
+      throw new ForbiddenException('Only the primary project owner may discard its draft');
+    }
+    if (typeof projectName !== 'string' || !projectName.trim()) {
+      throw new BadRequestException('Confirm the project name before discarding its draft');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const locked = await tx.$queryRaw<
+        Array<{ id: string; name: string; workspaceId: string; status: ProjectStatus; deletedAt: Date | null }>
+      >(Prisma.sql`SELECT "id", "name", "workspaceId", "status", "deletedAt"
+          FROM "projects" WHERE "id" = ${projectId}::uuid FOR UPDATE`);
+      const project = locked[0];
+      if (!project || project.workspaceId !== actor.workspaceId || project.deletedAt !== null) {
+        throw new NotFoundException('Project not found');
+      }
+      if (project.name.trim() !== projectName.trim()) {
+        throw new ConflictException('Project name has changed; refresh before deleting');
+      }
+      const lifecycle = await this.rabLifecyclePolicy.evaluateInTransaction(tx, projectId, project.status);
+      if (project.status !== ProjectStatus.PLANNED || !lifecycle.canEditDraft) {
+        throw new ConflictException('Only editable, never-locked project drafts may be deleted');
+      }
+      // Historical official decisions cannot be erased simply because no baseline is ACTIVE today.
+      const [baselines, officialRab, officialBoq, reports, contracts, decisions] = await Promise.all([
+        tx.projectBaseline.count({ where: { projectId } }),
+        tx.rabDocument.count({ where: { projectId, status: { not: 'DRAFT' } } }),
+        tx.boqStructure.count({ where: { projectId, status: { not: 'DRAFT' } } }),
+        tx.progressReport.count({ where: { projectId } }),
+        tx.projectContract.count({ where: { projectId } }),
+        tx.formalDecision.count({ where: { projectId } }),
+      ]);
+      if (baselines || officialRab || officialBoq || reports || contracts || decisions) {
+        throw new ConflictException('Project contains official records and cannot be discarded as a draft');
+      }
+      const now = new Date();
+      const changed = await tx.project.updateMany({
+        where: { id: projectId, workspaceId: actor.workspaceId, deletedAt: null, status: ProjectStatus.PLANNED },
+        data: { deletedAt: now },
+      });
+      if (changed.count !== 1) throw new ConflictException('Draft state changed; refresh before deleting');
+
+      await tx.progressAuditEvent.create({
+        data: {
+          schemaVersion: 1,
+          eventType: 'PROJECT_CONFIGURATION',
+          outcome: ProgressAuditOutcome.SUCCESS,
+          workspaceId: actor.workspaceId,
+          projectId,
+          actorAccountId: actor.accountId,
+          actorMembershipId: actor.membershipId,
+          actorType: 'USER',
+          roleInProjectSnapshot: actor.roleInProject,
+          action: 'PROJECT_DRAFT_SOFT_DELETE',
+          sourceModule: 'PROJECT_GOVERNANCE',
+          targetEntityType: 'PROJECT',
+          targetEntityId: projectId,
+          correlationId: randomUUID(),
+          requestId: randomUUID(),
+          reason: 'Primary owner confirmed deletion of an editable draft',
+          reasonCode: 'OWNER_CONFIRMED_DRAFT_DISCARD',
+          occurredAt: now,
+          recordedAt: now,
+          metadata: { mode: 'SOFT_DELETE', previousStatus: project.status, confirmedProjectName: project.name },
+        },
+      });
+      return { id: projectId, deleted: true };
+    });
   }
 
   getReality(projectId: string) {

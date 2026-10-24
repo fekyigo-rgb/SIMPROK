@@ -1,6 +1,7 @@
 import {
   Controller,
   Post,
+  Delete,
   Put,
   Patch,
   Body,
@@ -34,7 +35,7 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { ProjectAccessGuard } from '../auth/guards/project-access.guard';
 import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import { ProjectAccessPolicyService } from '../auth/project-access-policy.service';
-import { Permissions } from '../common/decorators/permissions.decorator';
+import { Permissions, PermissionsAll } from '../common/decorators/permissions.decorator';
 import { PERMISSIONS } from '../common/constants/permissions';
 import { CostKernelService } from './cost-kernel.service';
 import { BoqImportService, MAX_UPLOAD_BYTES } from './boq-import.service';
@@ -320,6 +321,28 @@ export class ProjectController {
     return this.projectService.findAllByWorkspace(
       request.workspaceContext.workspaceId,
     );
+  }
+
+  /** Only the assigned primary project OWNER with RAB draft edit may discard an editable draft. */
+  @Delete(':projectId/draft')
+  @UseGuards(ProjectAccessGuard, PermissionsGuard)
+  @PermissionsAll(PERMISSIONS.PROJECT_VIEW, PERMISSIONS.RAB_DRAFT_EDIT)
+  async discardDraftProject(
+    @Req() request: any,
+    @Param('projectId') projectId: string,
+    @Body() body: { projectName?: string },
+  ) {
+    const access = request.projectAccess;
+    if (!access?.workspaceId || !access?.membershipId || !request.user?.id) {
+      throw new ForbiddenException('Authorized project context is required');
+    }
+    return this.projectService.discardDraftProject(projectId, body?.projectName, {
+      workspaceId: access.workspaceId,
+      membershipId: access.membershipId,
+      accountId: request.user.id,
+      roleInProject: access.roleInProject,
+      isPrimaryAssignment: access.isPrimaryAssignment,
+    });
   }
 
   @Get('mine')
