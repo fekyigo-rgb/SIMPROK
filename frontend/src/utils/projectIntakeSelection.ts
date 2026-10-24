@@ -648,6 +648,40 @@ export function composeDraftDescription(parts: {
   return `${body}${FIELD_CONTEXT_MARKER}${parts.fieldContext.length}\n${parts.fieldContext}`;
 }
 
+/**
+ * Read the existing descriptive preparation format without treating user
+ * address lines as generated labels. The fixed final three form lines are
+ * anchored at the END of the descriptive body; free-form context has its
+ * separately length-delimited suffix. Unknown formats fail closed.
+ */
+export function readDraftPreparationFields(description: unknown): {
+  year: string; owner: string; address: string;
+} | null {
+  if (typeof description !== 'string') return null;
+  const context = readSavedFieldContext(description);
+  if (context.state === 'unreadable') return null;
+  let body = description;
+  if (context.state === 'present') {
+    const suffix = FIELD_CONTEXT_MARKER + context.text.length + '\n' + context.text;
+    if (!body.endsWith(suffix)) return null;
+    body = body.slice(0, -suffix.length);
+  }
+  const header = 'Draft project dibuat dari Persiapan RAB. Belum baseline resmi dan belum RAB final.';
+  if (!body.startsWith(header + '\n')) return null;
+  const content = body.slice(header.length);
+  const trailingFields = /\nNama Proyek: ([^\n]*)\nTahun Anggaran \/ Tahun Harga: ([^\n]*)\nPemilik \/ Instansi: ([^\n]*)$/;
+  const match = trailingFields.exec(content);
+  if (!match) return null;
+  const prefix = content.slice(0, match.index);
+  const addressPrefix = '\nAlamat Detail: ';
+  if (prefix && !prefix.startsWith(addressPrefix)) return null;
+  const asField = (value: string) => value === 'Belum diisi' ? '' : value;
+  return {
+    year: asField(match[2]), owner: asField(match[3]),
+    address: prefix ? prefix.slice(addressPrefix.length) : '',
+  };
+}
+
 export function readSavedFieldContext(
   description: unknown,
 ): { state: 'present'; text: string } | { state: 'absent' } | { state: 'unreadable' } {
