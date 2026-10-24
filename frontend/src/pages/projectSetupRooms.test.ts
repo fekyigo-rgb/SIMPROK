@@ -51,7 +51,8 @@ test('Persiapan RAB keeps the five owner rooms in order', () => {
   assert.equal(right.includes('Isi kode jika tersedia'), true);
   assert.equal(right.includes('Jika kosong, SIMPROK membuat kode draft unik.'), true);
   assert.equal(source.includes('Otomatis bila pola tersedia'), false);
-  assert.equal(source.includes('{createView.primaryLabel}'), true);
+  assert.equal(source.includes('Lanjut ke Ruang Kerja RAB'), true);
+  assert.equal(source.includes("apiFetch('/projects'"), false);
   assert.equal(source.includes('Simpan Data'), false);
   assert.equal(source.includes('aria-required="true"'), true);
 

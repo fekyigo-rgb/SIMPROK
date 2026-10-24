@@ -65,7 +65,10 @@ test('every RAB workspace mount uses the permission gate', () => {
   const mounts = code.match(/<RabWorkspacePage\b/g) ?? [];
   const gated =
     code.match(/permission=.RAB_DRAFT_EDIT.>\s*<RabWorkspacePage \/>\s*<\/PermissionRoute>/g) ?? [];
-  assert.equal(mounts.length, 1);
+  // One saved-Project room, plus one no-project local composition room.
+  assert.equal(mounts.length, 2);
   assert.equal(gated.length, mounts.length);
+  assert.match(code, /project\/new\/rab\/workspace/);
+  assert.match(code, /permission=.PROJECT_CREATE.><PermissionRoute permission=.RAB_DRAFT_EDIT.>/);
   assert.doesNotMatch(code, /<RoleRoute[^>]*>\s*<RabWorkspacePage/);
 });

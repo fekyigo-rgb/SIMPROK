@@ -413,7 +413,7 @@ test("AFF-B. Save keeps its exact behaviour while the draft is editable", () => 
   const saveTag = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf('className="simprok-rab-toolbar__save"')));
 
   assert.match(saveTag, /onClick=\{handleSaveDraft\}/);
-  assert.match(saveTag, /aria-disabled=\{hasNegativeValue \|\| isSaving \|\| !projectId\}/);
+  assert.match(saveTag, /aria-disabled=\{hasNegativeValue \|\| isSaving \|\| firstSaveUncertainRef\.current\}/);
   assert.match(saveTag, /data-route="\/\?ruang=simpan-draft"/);
   // The command still refuses independently, so the screen is not the only guard.
   assert.match(functionBody(workspace, "handleSaveDraft"), /if \(!canEditDraft\) \{/);

@@ -23,13 +23,17 @@
 - Pure regression tests for navigation and save-result identity; frontend build and tests.
 - No backend change, DB migration, GitHub main change, or permanent runtime change.
 
-## Phase B — BLOCKING: initial project creation
-Owner explicitly requires a new RAB NOT to enter canonical persistence or Proyek Saya until the workspace **Simpan Draft** click. Phase A does NOT fulfill that because POST /projects still occurs in Persiapan RAB.
-
-Required next architecture: truly LOCAL/nonpersistent composition for new RAB before first save, then a single atomic first-save operation that reuses the existing Project and BOQ canonical writers, with classification/location/authorization/idempotency/readback. No fake fix that merely hides already-saved projects, and no deletion of provisional canonical records. Inventory project-bound AHSP/Basic Price/Unit/region consumers before making this change; ensure existing intelligence is reusable without extra engine.
+## Phase B — source implementation staged, integration acceptance OPEN
+- Persiapan RAB now navigates to a local preparation-backed instance of the SAME RAB Workspace; no POST /projects on Lanjut.
+- The new provisional workspace can edit local BOQ rows with no projectId, blocks unsaved exits, and makes its first explicit Save Draft via the existing POST /projects route carrying nested initialDraft.
+- CreateProjectDto includes validated initialDraft; ProjectService.create transaction calls the extracted SAME saveDraftBoqInTransaction writer before commit. Existing PUT /projects/:id/boq/draft reuses the same writer and projection, not a parallel BOQ engine.
+- PROJECT_CREATE permission remains guarded; initialDraft additionally requires RAB_DRAFT_EDIT resolved through the existing workspace permission authority. No migration, new table, second transaction, or temporary DB project.
+- First-save UI re-reads canonical classification/location and saved BOQ identity before claiming success; uncertain 5xx/network/readback blocks blind retries; 4xx rejection remains correctable.
+- Project-bound AHSP/Basic Price picker and server BOQ-import approval are not available in local provisional mode; this is an explicit product acceptance gap, NOT proven equivalent to the saved-project journey.
+- **Not yet proven:** authenticated end-to-end browser interaction, isolated disposable DB commit/rollback under real Postgres, service permission negative cases, import BOQ before first save, end-to-end navigation/back/reload and uncertain network outcome. Phase B code cannot be merged until verified.
 
 ## Release gate
 Verify no Project/BOQ structure/RAB document or Project card before first explicit Save; cancel pre-save writes nothing; first Save commits exactly one valid Project + BOQ and readback; discard edits to existing project preserves last saved state; browser/menu/back/reload/401/403/network timeout/retry/saving race tests; independent review; Owner-controlled merge and separate runtime promotion.
 
 ## Verdict
-PHASE A: staged in isolated worktree. PHASE B: NOT IMPLEMENTED. **MERGE HOLD** until both meet Owner law and authenticated browser proof. Do not claim product-law fulfillment from Phase A tests.
+PHASE A: locally verified. PHASE B: source implementation and targeted unit tests staged; backend/frontend build verification in progress. **MERGE HOLD / DEPLOY HOLD** until disposable-DB integration, authorized-browser and pending import parity are proven. Never claim production activation from local tests.

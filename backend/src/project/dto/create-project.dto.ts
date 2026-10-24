@@ -1,4 +1,5 @@
 import { Transform, Type } from 'class-transformer';
+import { SaveDraftBoqDto } from './save-draft-boq.dto';
 import {
   IsArray,
   ArrayMaxSize,
@@ -36,6 +37,12 @@ export class ProjectVocabularyPathDto {
 }
 
 export class CreateProjectDto {
+  /** Only the explicit first Save Draft action supplies this optional document. */
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => SaveDraftBoqDto)
+  initialDraft?: SaveDraftBoqDto;
+
   @IsString()
   @IsNotEmpty()
   name: string;
