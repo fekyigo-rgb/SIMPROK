@@ -488,15 +488,28 @@ export function BasicPriceDetailPanel({
                               <span className="bp-field__label">Dasar koreksi nama (dokumen atau penetapan Owner/kurator yang nyata)</span>
                               <input className="bp-input" value={nameSourceReference}
                                 onChange={(event) => setNameSourceReference(event.target.value)}
-                                maxLength={350} placeholder="Identitas dokumen, atau keputusan Owner/kurator dan tanggalnya" />
+                                maxLength={350} placeholder="Mis. Penetapan Owner, 26 Oktober 2026, untuk item E07" />
                             </label>
+                            <p className="bp-field__help">
+                              Catat keputusan atau referensi yang benar-benar ada, beserta pihak dan tanggalnya. Jangan menyatakan dokumen impor menulis Ton bila sumbernya menulis TC.
+                            </p>
                             <label className="bp-field">
                               <span className="bp-field__label">Ketik ulang kode katalog untuk memastikan item yang dipilih</span>
                               <input className="bp-input" value={confirmedCatalogCode}
                                 onChange={(event) => setConfirmedCatalogCode(event.target.value)}
-                                placeholder={nameImpactResult.resourceCode ?? 'Kode katalog tidak tersedia'}
+                                placeholder={nameImpactResult.resourceCode
+                                  ? 'Ketik ' + nameImpactResult.resourceCode + ' secara manual'
+                                  : 'Kode katalog tidak tersedia'}
                                 maxLength={80} />
                             </label>
+                            <p className="bp-field__help" role="status" aria-live="polite">
+                              {!confirmedCatalogCode.trim()
+                                ? 'Kode belum diisi. Ketik ulang ' + (nameImpactResult.resourceCode ?? 'kode katalog') + ' pada kotak di atas; tulisan petunjuk bukan isian.'
+                                : confirmedCatalogCode.trim().toLocaleLowerCase('id-ID') !==
+                                  nameImpactResult.resourceCode?.toLocaleLowerCase('id-ID')
+                                  ? 'Kode yang diketik tidak cocok dengan identitas katalog. Periksa ulang.'
+                                  : 'Kode katalog sudah cocok.'}
+                            </p>
                             <label className="bp-field">
                               <input type="checkbox" checked={nomenclatureVerified}
                                 onChange={(event) => setNomenclatureVerified(event.target.checked)} />
@@ -545,11 +558,18 @@ export function BasicPriceDetailPanel({
                         </label>
                         <p className="bp-field__help" aria-live="polite">
                           {nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' &&
-                            (!nameImpactResult.resourceCode ||
-                              confirmedCatalogCode.trim().toLocaleLowerCase('id-ID') !== nameImpactResult.resourceCode.toLocaleLowerCase('id-ID') ||
-                              nameSourceReference.trim().length < 12 || !nomenclatureVerified)
-                            ? 'Simpan belum aktif: lengkapi dasar koreksi yang nyata, kode katalog yang tepat, dan konfirmasi salah tulis.'
-                            : !nameCorrectionConfirmed
+                            !confirmedCatalogCode.trim()
+                            ? 'Simpan belum aktif: kode ' + (nameImpactResult.resourceCode ?? 'katalog') + ' masih berupa petunjuk. Ketik ulang kode katalog di kotak kode.'
+                            : nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' &&
+                              (!nameImpactResult.resourceCode ||
+                                confirmedCatalogCode.trim().toLocaleLowerCase('id-ID') !== nameImpactResult.resourceCode.toLocaleLowerCase('id-ID'))
+                              ? 'Simpan belum aktif: kode katalog tidak cocok.'
+                              : nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' &&
+                                nameSourceReference.trim().length < 12
+                                ? 'Simpan belum aktif: lengkapi dasar koreksi yang nyata (minimal 12 karakter).'
+                                : nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' && !nomenclatureVerified
+                                  ? 'Simpan belum aktif: konfirmasikan keputusan kurator mengenai salah tulis.'
+                                  : !nameCorrectionConfirmed
                               ? 'Simpan belum aktif: konfirmasikan bahwa identitas dan spesifikasi resource tetap sama.'
                             : nameCorrectionReason.trim().length < 10
                               ? 'Simpan belum aktif: lengkapi alasan koreksi.'
