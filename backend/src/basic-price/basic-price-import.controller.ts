@@ -48,6 +48,7 @@ import { BasicPriceSmartSaveService } from './basic-price-smart-save.service';
 import { CorrectPrivateProvenanceDto } from './dto/correct-private-provenance.dto';
 import { EnrichBasicPriceKdnDto } from './dto/enrich-basic-price-kdn.dto';
 import { CorrectPrivateBasicPriceDto } from './dto/correct-private-basic-price.dto';
+import { ReconcileImportedPrivateCorrectionDto } from './dto/reconcile-imported-private-correction.dto';
 import { ObservePrivateBasicPriceDto } from './dto/observe-private-basic-price.dto';
 import { ObservePrivateKdnDto } from './dto/observe-private-kdn.dto';
 import { CorrectPrivateKdnDto } from './dto/correct-private-kdn.dto';
@@ -670,6 +671,30 @@ export class BasicPriceImportController {
       actor,
       expectedValue: dto.expectedValue,
       proposedValue: dto.proposedValue,
+      reason: dto.reason,
+    });
+  }
+
+  /**
+   * BP-C2 — reconcile TWO EXISTING imported private prices after the owner
+   * confirms that one corrected the other. Uses the existing currentness
+   * relation and provenance journal. No third Basic Price is created.
+   */
+  @Post('prices/:priceId/reconcile-imported-correction')
+  @Permissions(PERMISSIONS.BASIC_PRICE_SUBMIT)
+  async reconcileImportedPrivateCorrection(
+    @Req() request: RequestIdentity,
+    @Param('priceId') priceId: string,
+    @Body() dto: ReconcileImportedPrivateCorrectionDto,
+  ) {
+    const actor = await this.trustedActor.resolveActor(
+      request.workspaceContext, request.user?.id,
+    );
+    return this.privateAssetService.reconcileImportedPrivateCorrection({
+      actor, previousPriceId: priceId,
+      correctedPriceId: dto.correctedPriceId,
+      expectedPreviousValue: dto.expectedPreviousValue,
+      expectedCorrectedValue: dto.expectedCorrectedValue,
       reason: dto.reason,
     });
   }

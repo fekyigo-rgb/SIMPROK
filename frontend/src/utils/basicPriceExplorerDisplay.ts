@@ -529,3 +529,20 @@ export const reverificationLine = (
   const base = `${REVERIFICATION_LABEL} ${formatDate(item.reviewDate)}`;
   return item.reverification === 'DUE' ? `${base} · ${REVERIFICATION_DUE_BADGE}` : base;
 };
+
+/** BP-C2: selection-only UI offer. Backend remains the authority. */
+export const canLinkExistingImportedPricePair = (
+  a: BasicPriceExplorerItem, b: BasicPriceExplorerItem,
+): boolean =>
+  a.assetScope === 'WORKSPACE_PRIVATE' &&
+  b.assetScope === 'WORKSPACE_PRIVATE' &&
+  a.resource.id === b.resource.id &&
+  a.region?.id === b.region?.id &&
+  (a.regionCoverageSummary ?? null) === (b.regionCoverageSummary ?? null) &&
+  Boolean(a.sourceName?.trim()) &&
+  a.sourceName?.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLocaleLowerCase('id-ID') ===
+    b.sourceName?.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLocaleLowerCase('id-ID') &&
+  a.effectiveDate === b.effectiveDate &&
+  a.sourceType === b.sourceType &&
+  a.sourceOrigin === b.sourceOrigin &&
+  a.price !== b.price;

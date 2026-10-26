@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Download, FileInput, RefreshCw, Send, Trash2 } from 'lucide-react';
-import { submitPrivateBasicPrice } from '../api/basicPriceImport';
+import { submitPrivateBasicPrice, reconcileImportedPrivateCorrection, ImportRequestError } from '../api/basicPriceImport';
 import {
   BasicPriceExplorerError,
   fetchBasicPriceExplorer,
@@ -30,6 +30,7 @@ import {
   formatExplorerPrice,
   basicPriceRegionLabel,
   canProposePrivateExplorerItem,
+  canLinkExistingImportedPricePair,
   privateProposalIsNotPublication,
   resourceLabel,
   resourceTypeLabel,
@@ -195,6 +196,10 @@ export function BasicPriceExplorerPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectionBusy, setSelectionBusy] = useState(false);
   const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [correctionWinnerId, setCorrectionWinnerId] = useState('');
+  const [correctionReason, setCorrectionReason] = useState('');
+  const [correctionConfirmed, setCorrectionConfirmed] = useState(false);
   const requestGate = useRef(createLatestRequestGate());
 
   useEffect(() => {
@@ -315,6 +320,11 @@ export function BasicPriceExplorerPage() {
   const canSubmit = hasPermission('BASIC_PRICE_SUBMIT');
   const proposableRows = selectedRows.filter((item) => canProposePrivateExplorerItem(item, canSubmit));
   const removableRows = selectedRows.filter((item) => item.canRemoveOwn === true);
+  // UI invitation only. The server rechecks the actual persisted publisher,
+  // resource identity, temporal context, trusted actor and both original files.
+  const canReconcileImportedPair = hasPermission('BASIC_PRICE_SUBMIT') &&
+    selectedRows.length === 2 &&
+    canLinkExistingImportedPricePair(selectedRows[0], selectedRows[1]);
 
   const toggleOne = (id: string) => {
     setSelectionNotice(null);
@@ -336,6 +346,36 @@ export function BasicPriceExplorerPage() {
       }
       return next;
     });
+  };
+
+  const reconcileSelectedCorrection = async () => {
+    if (selectionBusy || !canReconcileImportedPair || !correctionConfirmed || !correctionReason.trim()) return;
+    const correct = selectedRows.find(row => row.basicPriceId === correctionWinnerId);
+    const previous = selectedRows.find(row => row.basicPriceId !== correctionWinnerId);
+    if (!correct || !previous) return;
+    setSelectionBusy(true);
+    setSelectionNotice(null);
+    try {
+      const result = await reconcileImportedPrivateCorrection(
+        previous.basicPriceId, correct.basicPriceId,
+        previous.price, correct.price, correctionReason.trim(),
+      );
+      setCorrectionOpen(false);
+      setCorrectionWinnerId('');
+      setCorrectionReason('');
+      setCorrectionConfirmed(false);
+      setSelectedIds(new Set());
+      setReloadNonce(n => n + 1);
+      setSelectionNotice(result.unchanged
+        ? 'Hubungan koreksi ini sudah tercatat; harga tidak digandakan.'
+        : 'Koreksi harga tercatat. Harga sebelumnya tetap dapat dibaca dalam riwayat; tampilan harga berlaku dimuat ulang.');
+    } catch (error) {
+      const code = error instanceof ImportRequestError ? error.detail : '';
+      setSelectionNotice('Koreksi belum dilakukan. Periksa sumber, identitas, atau hak akses; tidak ada harga yang diubah. ' +
+        (code ? 'Server: ' + code.slice(0, 180) : 'Silakan muat ulang data.'));
+    } finally {
+      setSelectionBusy(false);
+    }
   };
 
   const exportSelection = () => {
@@ -705,6 +745,13 @@ export function BasicPriceExplorerPage() {
             onClick={() => void submitSelection()}>
             <Send size={14} /> {selectionBusy ? 'Memproses...' : 'Usulkan ke SIMPROK'}
           </button>
+          {canReconcileImportedPair ? (
+            <button type="button" className="bp-btn bp-btn--sm"
+              disabled={selectionBusy}
+              onClick={() => { setCorrectionOpen(open => !open); setCorrectionConfirmed(false); }}>
+              Hubungkan koreksi harga
+            </button>
+          ) : null}
           <button type="button" className="bp-btn bp-btn--sm" disabled={selectionBusy} onClick={exportSelection}>
             <Download size={14} /> Export
           </button>
@@ -719,6 +766,39 @@ export function BasicPriceExplorerPage() {
             Batal pilih
           </button>
         </div>
+      ) : null}
+      {correctionOpen && canReconcileImportedPair ? (
+        <section className="bp-note" aria-label="Tentukan harga yang benar" style={{ marginBottom: 12 }}>
+          <strong>Koreksi dua harga yang sudah tersimpan</strong>
+          <p className="bp-field__help">
+            Pilih harga yang benar. Harga lama tidak dihapus dan tetap tercatat pada riwayat koreksi.
+            Hanya boleh digunakan untuk dua harga dari penerbit, resource, satuan, wilayah, dan periode yang sama.
+          </p>
+          {selectedRows.map(row => (
+            <label className="bp-choice__item" key={row.basicPriceId} style={{ display: 'block' }}>
+              <input type="radio" name="bp-existing-price-winner"
+                checked={correctionWinnerId === row.basicPriceId}
+                onChange={() => { setCorrectionWinnerId(row.basicPriceId); setCorrectionConfirmed(false); }}/>
+              {' '} Harga yang benar: {formatExplorerPrice(row.price)} — {resourceLabel(row.resource)}
+            </label>
+          ))}
+          <label className="bp-field" style={{ marginTop: 8 }}>
+            <span className="bp-field__label">Alasan dan dasar koreksi</span>
+            <textarea className="bp-textarea" value={correctionReason}
+              onChange={event => { setCorrectionReason(event.target.value); setCorrectionConfirmed(false); }}
+              placeholder="Contoh: Penerbit mengoreksi harga sebelumnya yang salah."/>
+          </label>
+          <label className="bp-choice__item" style={{ display: 'block', marginTop: 8 }}>
+            <input type="checkbox" checked={correctionConfirmed}
+              onChange={event => setCorrectionConfirmed(event.target.checked)}/>
+            {' '} Saya memastikan harga terpilih mengoreksi catatan lama, bukan harga dari varian teknis atau sumber berbeda.
+          </label>
+          <button type="button" className="bp-btn bp-btn--sm"
+            disabled={selectionBusy || !correctionWinnerId || !correctionReason.trim() || !correctionConfirmed}
+            onClick={() => void reconcileSelectedCorrection()}>
+            {selectionBusy ? 'Mencatat koreksi...' : 'Simpan hubungan koreksi'}
+          </button>
+        </section>
       ) : null}
       {selectionNotice ? (
         <p className="bp-note bp-note--info" role="status" aria-live="polite">{selectionNotice}</p>

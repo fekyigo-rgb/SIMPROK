@@ -799,3 +799,30 @@ export async function smartSaveBatch(
   if (!response.ok) throw new ImportRequestError(response.status, await response.text());
   return (await response.json()) as SmartSaveResult;
 }
+
+/** BP-C2: link two ALREADY persisted imported prices as a governed correction.
+ * No third price is created. The server validates source/identity/authority.
+ */
+export async function reconcileImportedPrivateCorrection(
+  previousPriceId: string,
+  correctedPriceId: string,
+  expectedPreviousValue: string,
+  expectedCorrectedValue: string,
+  reason: string,
+): Promise<{ basicPriceId: string; previousBasicPriceId: string; value: string; unchanged: boolean }> {
+  const response = await apiFetch(
+    `/basic-price-imports/prices/${previousPriceId}/reconcile-imported-correction`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        correctedPriceId,
+        expectedPreviousValue,
+        expectedCorrectedValue,
+        reason,
+      }),
+    },
+  );
+  if (!response.ok) throw new ImportRequestError(response.status, await response.text());
+  return response.json();
+}

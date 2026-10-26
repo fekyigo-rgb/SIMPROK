@@ -278,6 +278,173 @@ const PRIVATE_PRICE_SELECT = {
 export class BasicPricePrivateAssetService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /**
+   * BP-C2 — Two imported prices already exist as independent roots.
+   * The Owner has reviewed their source facts and explicitly stated that the
+   * later-imported price CORRECTS a wrong earlier price. Reuse the existing
+   * supersession pointer + correction journal, not the existing create-third-
+   * price writer. No money, import-row, catalog or source bytes are mutated.
+   */
+  async reconcileImportedPrivateCorrection(params: {
+    previousPriceId: string;
+    correctedPriceId: string;
+    actor: TrustedBasicPriceActor;
+    expectedPreviousValue: string;
+    expectedCorrectedValue: string;
+    reason: string;
+  }) {
+    const { actor, previousPriceId, correctedPriceId } = params;
+    if (previousPriceId === correctedPriceId) {
+      throw new ConflictException('CORRECTION_SELF_REFERENCE');
+    }
+    const previousValue = toMoneyDecimal2(params.expectedPreviousValue).toFixed(2);
+    const correctedValue = toMoneyDecimal2(params.expectedCorrectedValue).toFixed(2);
+    if (previousValue === correctedValue) {
+      throw new ConflictException('CORRECTION_IDENTICAL_VALUE_NOT_ADJUDICATED');
+    }
+    const reason = params.reason.trim();
+    if (!reason) throw new ConflictException('CORRECTION_REASON_REQUIRED');
+
+    return this.prisma.$transaction(async (tx) => {
+      // One deterministic ordering, even if two actors attempt opposite links.
+      const ids = [previousPriceId, correctedPriceId].sort();
+      const locked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT "id" FROM "basic_prices"
+        WHERE "id" IN (${Prisma.join(ids.map(id => Prisma.sql`${id}::uuid`))})
+          AND "workspaceId" = ${actor.workspaceId}::uuid
+          AND "assetScope" = 'WORKSPACE_PRIVATE'
+        ORDER BY "id" FOR UPDATE
+      `);
+      if (locked.length !== 2) throw new NotFoundException('BasicPrice not found');
+
+      const prices = await tx.basicPrice.findMany({
+        where: {
+          id: { in: ids },
+          workspaceId: actor.workspaceId,
+          assetScope: BasicPriceAssetScope.WORKSPACE_PRIVATE,
+        },
+        include: {
+          sourceImportRow: {
+            select: { batch: {
+              select: {
+                sourceOrganizationName: true, sourceVendorName: true,
+                uploadedByAccountId: true,
+              },
+            } },
+          },
+          supersededBy: { select: { id: true } },
+        },
+      });
+      const previous = prices.find(price => price.id === previousPriceId);
+      const corrected = prices.find(price => price.id === correctedPriceId);
+      if (!previous || !corrected) throw new NotFoundException('BasicPrice not found');
+      if (
+        previous.workspaceId !== corrected.workspaceId ||
+        previous.organizationId !== corrected.organizationId ||
+        previous.resourceId !== corrected.resourceId ||
+        previous.regionId !== corrected.regionId ||
+        previous.regionCoverageSetId !== corrected.regionCoverageSetId ||
+        previous.effectiveDate.getTime() !== corrected.effectiveDate.getTime() ||
+        previous.sourceType !== corrected.sourceType ||
+        previous.sourceOrigin !== corrected.sourceOrigin ||
+        previous.status !== 'UNPUBLISHED' ||
+        corrected.status !== 'UNPUBLISHED' ||
+        previous.verificationStatus !== 'UNVERIFIED' ||
+        corrected.verificationStatus !== 'UNVERIFIED'
+      ) throw new ConflictException('CORRECTION_CONTEXT_MISMATCH');
+      if (
+        !previous.sourceImportRowId || !corrected.sourceImportRowId ||
+        !previous.sourceImportRow || !corrected.sourceImportRow
+      ) throw new ConflictException('CORRECTION_REQUIRES_TWO_IMPORTED_PRICES');
+      const earlierSource = previous.sourceImportRow.batch;
+      const correctedSource = corrected.sourceImportRow.batch;
+      if (
+        earlierSource.uploadedByAccountId !== actor.accountId ||
+        correctedSource.uploadedByAccountId !== actor.accountId
+      ) throw new NotFoundException('BasicPrice not found');
+      const normalize = (value: string | null) =>
+        value?.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLocaleLowerCase('id-ID') ?? '';
+      const oldPublisher = normalize(sourceNameFromBatch(earlierSource));
+      const newPublisher = normalize(sourceNameFromBatch(correctedSource));
+      if (!oldPublisher || oldPublisher !== newPublisher) {
+        throw new ConflictException('CORRECTION_PUBLISHER_IDENTITY_UNPROVED');
+      }
+      if (
+        toDecimalString2(previous.value) !== previousValue ||
+        toDecimalString2(corrected.value) !== correctedValue
+      ) throw new ConflictException('PRICE_STALE_FACT');
+      if (
+        previous.supersedesBasicPriceId !== null ||
+        corrected.supersededBy !== null ||
+        corrected.createdAt.getTime() <= previous.createdAt.getTime()
+      ) throw new ConflictException('CORRECTION_LINEAGE_NOT_SAFE');
+
+      // On a successful first call the predecessor's inverse relation is
+      // populated. Honor a replay ONLY for that exact pointer and its audit.
+      if (corrected.supersedesBasicPriceId === previous.id) {
+        if (previous.supersededBy?.id !== corrected.id) {
+          throw new ConflictException('CORRECTION_LINEAGE_NOT_SAFE');
+        }
+        const audit = await tx.basicPriceProvenanceCorrection.findFirst({
+          where: { basicPriceId: corrected.id, workspaceId: actor.workspaceId },
+          orderBy: { createdAt: 'desc' },
+        });
+        const after = audit?.after;
+        if (
+          after && typeof after === 'object' && !Array.isArray(after) &&
+          (after as Record<string, unknown>).semantic === 'IMPORTED_PRICE_CORRECTION_LINK' &&
+          (after as Record<string, unknown>).previousBasicPriceId === previous.id
+        ) return { basicPriceId: corrected.id, previousBasicPriceId: previous.id, value: correctedValue, unchanged: true };
+        throw new ConflictException('CORRECTION_LINK_AUDIT_MISSING');
+      }
+      if (previous.supersededBy !== null) {
+        throw new ConflictException('CORRECTION_LINEAGE_NOT_SAFE');
+      }
+      if (corrected.supersedesBasicPriceId !== null) {
+        throw new ConflictException('CORRECTION_ALREADY_LINKED');
+      }
+
+      const changed = await tx.basicPrice.updateMany({
+        where: {
+          id: corrected.id,
+          workspaceId: actor.workspaceId,
+          assetScope: BasicPriceAssetScope.WORKSPACE_PRIVATE,
+          supersedesBasicPriceId: null,
+        },
+        data: { supersedesBasicPriceId: previous.id },
+      });
+      if (changed.count !== 1) throw new ConflictException('CORRECTION_STALE_FACT');
+      await tx.basicPriceProvenanceCorrection.create({
+        data: {
+          basicPriceId: corrected.id,
+          workspaceId: actor.workspaceId,
+          actorAccountId: actor.accountId,
+          reason,
+          before: {
+            semantic: 'INDEPENDENT_IMPORTED_PRICE',
+            previousBasicPriceId: previous.id,
+            value: previousValue,
+            previousSourceImportRowId: previous.sourceImportRowId,
+          },
+          after: {
+            semantic: 'IMPORTED_PRICE_CORRECTION_LINK',
+            previousBasicPriceId: previous.id,
+            correctedBasicPriceId: corrected.id,
+            value: correctedValue,
+            correctedSourceImportRowId: corrected.sourceImportRowId,
+            sourceIdentityName: sourceNameFromBatch(correctedSource),
+            evidenceClass: 'SOURCE_DOCUMENT',
+          },
+        },
+      });
+      return {
+        basicPriceId: corrected.id, previousBasicPriceId: previous.id,
+        value: correctedValue, unchanged: false,
+      };
+    });
+  }
+
+
   async keepBatchPrivate(params: {
     batchId: string;
     actor: TrustedBasicPriceActor;
@@ -1744,6 +1911,7 @@ export class BasicPricePrivateAssetService {
       }
     });
   }
+
 
   private async lockPrivatePredecessor(
     tx: Prisma.TransactionClient,
