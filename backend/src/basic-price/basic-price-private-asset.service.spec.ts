@@ -220,6 +220,32 @@ describe('BasicPricePrivateAssetService', () => {
       expect(tx.basicPrice.create).not.toHaveBeenCalled();
     });
 
+    it('holds only the conflicting row and still stores a distinct healthy resource', async () => {
+      const healthyRowId = '70000000-0000-4000-8000-000000000002';
+      const healthyResourceId = '80000000-0000-4000-8000-000000000002';
+      makeTx({
+        batch: { ...baseBatch(), sourceOrganizationName: 'Tim Simprok', sourceVendorName: null },
+        rows: [{ id: rowId }, { id: healthyRowId }],
+      });
+      tx.basicPriceImportRow.findUniqueOrThrow.mockImplementation(async ({ where }: any) => ({
+        ...baseRow(),
+        id: where.id,
+        resourceCatalogId: where.id === healthyRowId ? healthyResourceId : resourceCatalogId,
+      }));
+      tx.basicPrice.findMany
+        .mockResolvedValueOnce([competingPrice('Tim Simprok')])
+        .mockResolvedValueOnce([]);
+      const result = await service.keepBatchPrivate({ batchId, actor });
+      expect(result.createdCount).toBe(1);
+      expect(result.heldRows).toEqual([{
+        rowId,
+        reasonCode: 'SAME_PUBLISHER_PRICE_CONTEXT_REQUIRES_REVIEW',
+      }]);
+      expect(tx.basicPrice.create).toHaveBeenCalledTimes(1);
+      expect(tx.basicPrice.create.mock.calls[0][0].data.resourceId)
+        .toBe(healthyResourceId);
+    });
+
     it('scopes cross-batch guard to resource, workspace, locality and applicability day', async () => {
       makeTx({ batch: {
         ...baseBatch(), sourceOrganizationName: 'Tim Simprok', sourceVendorName: null,
