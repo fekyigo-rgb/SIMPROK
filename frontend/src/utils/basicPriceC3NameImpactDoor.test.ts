@@ -13,6 +13,13 @@ test('BP-C3: impact preview stays read-only and write needs curator evidence', (
   assert.match(panel, /hasPermission\('AHSP_RESOURCE_IDENTITY_DECIDE'\)/u);
   assert.match(panel, /nameCorrectionConfirmed/u);
   assert.match(panel, /nameCorrectionEvidence\.trim\(\)\.length < 20/u);
+  assert.match(panel, /Bukti perlu minimal 20 karakter/u);
+  assert.match(panel, /Simpan belum aktif: lengkapi bukti identitas minimal 20 karakter/u);
+  assert.match(panel, /Alasan perlu minimal 10 karakter/u);
+  assert.match(panel, /Nama katalog saat ini:/u);
+  assert.match(panel, /Nama yang diusulkan:/u);
+  assert.match(panel, /whiteSpace: 'pre-wrap'/u);
+  assert.match(panel, /aria-describedby="bp-c3-evidence-guidance"/u);
   assert.match(panel, /correctActiveResourceCatalogName\(item\.resource\.id/u);
   const subpanel = panel.slice(panel.indexOf('BP-C3 — catalog name impact preview'), panel.indexOf('GAP-B — THREE SENTENCES'));
   assert.doesNotMatch(subpanel, /updateResourceCatalog|renameResourceCatalog|method: ['"]PATCH['"]/u);

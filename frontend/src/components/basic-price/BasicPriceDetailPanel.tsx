@@ -449,7 +449,9 @@ export function BasicPriceDetailPanel({
                 {nameImpactError ? <p role="alert" className="bp-field__help">{nameImpactError}</p> : null}
                 {nameImpactResult ? (
                   <div className="bp-note" role="status" aria-live="polite" style={{ marginTop: 10 }}>
-                    <p><strong>{nameImpactResult.currentName}</strong> → <strong>{nameImpactResult.proposedName}</strong></p>
+                    <p><strong>Nama katalog saat ini:</strong> <code style={{ whiteSpace: 'pre-wrap' }}>{nameImpactResult.currentName}</code></p>
+                    <p><strong>Nama yang diusulkan:</strong> <code style={{ whiteSpace: 'pre-wrap' }}>{nameImpactResult.proposedName}</code></p>
+                    <p className="bp-field__help">Spasi asli dipertahankan di atas agar perbedaan penulisan terlihat sebelum keputusan.</p>
                     <p>
                       {nameImpactResult.verdict === 'SPELLING_ONLY_PREVIEW'
                         ? 'Indikasi koreksi penulisan tanpa perubahan makna; tetap memerlukan otorisasi dan jurnal koreksi.'
@@ -478,18 +480,30 @@ export function BasicPriceDetailPanel({
                             className="bp-input"
                             value={nameCorrectionReason}
                             maxLength={500}
+                            aria-describedby="bp-c3-reason-guidance"
                             onChange={(event) => setNameCorrectionReason(event.target.value)}
                           />
                         </label>
+                        <p id="bp-c3-reason-guidance" className="bp-field__help" role="status">
+                          {nameCorrectionReason.trim().length < 10
+                            ? `Alasan perlu minimal 10 karakter (sekarang ${nameCorrectionReason.trim().length}/10).`
+                            : 'Alasan memenuhi panjang minimal.'}
+                        </p>
                         <label className="bp-field">
                           <span className="bp-field__label">Bukti bahwa identitas item tetap sama</span>
                           <textarea
                             className="bp-input"
                             value={nameCorrectionEvidence}
                             maxLength={2000}
+                            aria-describedby="bp-c3-evidence-guidance"
                             onChange={(event) => setNameCorrectionEvidence(event.target.value)}
                           />
                         </label>
+                        <p id="bp-c3-evidence-guidance" className="bp-field__help" role="status">
+                          {nameCorrectionEvidence.trim().length < 20
+                            ? `Bukti perlu minimal 20 karakter (sekarang ${nameCorrectionEvidence.trim().length}/20). Jelaskan fakta yang menunjukkan resource dan spesifikasinya tetap sama.`
+                            : 'Panjang bukti memenuhi syarat; pastikan bukti faktual dan benar.'}
+                        </p>
                         <label className="bp-field">
                           <input
                             type="checkbox"
@@ -498,6 +512,15 @@ export function BasicPriceDetailPanel({
                           />
                           <span className="bp-field__label">Saya sudah memeriksa spesifikasi dan memastikan ini resource yang sama.</span>
                         </label>
+                        <p className="bp-field__help" aria-live="polite">
+                          {!nameCorrectionConfirmed
+                            ? 'Simpan belum aktif: konfirmasikan bahwa identitas dan spesifikasi resource tetap sama.'
+                            : nameCorrectionReason.trim().length < 10
+                              ? 'Simpan belum aktif: lengkapi alasan koreksi.'
+                              : nameCorrectionEvidence.trim().length < 20
+                                ? 'Simpan belum aktif: lengkapi bukti identitas minimal 20 karakter.'
+                                : 'Persyaratan isian terpenuhi. Simpan akan memverifikasi ulang izin, identitas, versi data, dan jurnal audit.'}
+                        </p>
                         <button
                           type="button"
                           className="bp-btn bp-btn--primary"
