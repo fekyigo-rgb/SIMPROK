@@ -24,9 +24,9 @@ const payload = (overrides: Record<string, unknown> = {}) => ({
   previousName: 'CRANE ON TRUCK 10-15 TC',
   correctedName: 'CRANE ON TRUCK 10-15 Ton',
   expectedUpdatedAt: before.toISOString(),
-  reason: 'Meluruskan singkatan peralatan pada katalog.',
-  evidence: 'Verifikasi dari dokumen peralatan E07: kapasitas 10-15 dan spesifikasi tetap sama.',
-  sourceReference: 'Dokumen spesifikasi alat E07 halaman terkait',
+  reason: 'Membetulkan kesalahan penulisan TC pada label katalog E07.',
+  evidence: 'Penetapan kurator: TC pada label E07 adalah salah tulis; kapasitas 10-15 dan satuan katalog tidak berubah.',
+  sourceReference: 'Penetapan kurator mengenai salah tulis nama resource E07',
   nomenclatureVerified: true,
   confirmedCatalogCode: 'E07',
   sameIdentityConfirmed: true,
@@ -75,6 +75,7 @@ describe('BP-C3 canonical nomenclature review, not auto-equivalence', () => {
     ['Excavator 10 Ton', 'Crane 10 Ton'],
     ['Pipa 10 mm', 'Pipa 10 cm'],
     ['Excavator 10 HP', 'Excavator 10 kW'],
+    ['CRANE ON TRUCK 10-15 Ton', 'CRANE ON TRUCK 10-15 TC'],
     ['Semen Portlan', 'Baja Portland'],
   ])('blocks technical changes regardless of claimed evidence (%s -> %s)', (a, b) => {
     expect(classifyCatalogNameChange(a, b)).toBe('TECHNICAL_CHANGE_BLOCKED');
@@ -101,6 +102,9 @@ describe('BP-C3 canonical nomenclature review, not auto-equivalence', () => {
       data: { name: 'CRANE ON TRUCK 10-15 Ton' },
     }));
     expect(tx.$executeRaw).toHaveBeenCalledTimes(2);
+    const auditSql = tx.$executeRaw.mock.calls[1][0] as { values: unknown[] };
+    expect(auditSql.values).toContain('[KOREKSI_SALAH_TULIS_TERVERIFIKASI] Membetulkan kesalahan penulisan TC pada label katalog E07.');
+    expect(auditSql.values).toContainEqual(expect.stringContaining('DASAR_PENETAPAN: Penetapan kurator mengenai salah tulis nama resource E07'));
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
   it('rejects a curator code mismatch, stale version and duplicate catalog name', async () => {

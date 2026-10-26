@@ -19,8 +19,10 @@ import { normalizeResourceName } from './resource-identity-resolution.kernel';
  * to any Basic Price or AHSP/BOQ row.
  *
  * Typography corrections use the existing safe pathway. Small nomenclature
- * corrections require documented curator adjudication and an exact catalog
- * code confirmation; the gate never presumes a term is technically equivalent.
+ * corrections require a documented curator/Owner determination and an exact
+ * catalog code confirmation. The gate NEVER treats two spellings as synonyms:
+ * a source can contain the erroneous spelling (e.g. TC), while a lawful human
+ * correction explains why the correct label is Ton for that SAME resource.
  */
 export function catalogLabelSignature(value: string): string {
   return value.normalize('NFKC').toLocaleLowerCase('id-ID')
@@ -33,9 +35,9 @@ export type CatalogNameChangeClass =
   | 'TECHNICAL_CHANGE_BLOCKED';
 
 /**
- * Conservative single-term spelling/abbreviation gate, never an identity
- * resolver. "TC" -> "Ton" or "Portlan" -> "Portland" MAY be submitted for
- * curator review; equality of those terms is NOT asserted by this function.
+ * Conservative single-term spelling-review gate, never an identity
+ * resolver. "TC" -> "Ton" or "Portlan" -> "Portland" MAY be submitted as
+ * suspected errors. Their semantic equivalence is NEVER asserted.
  * Numerics, multiple term changes or substantial substitutions remain blocked.
  */
 export function classifyCatalogNameChange(oldName: string, newName: string): CatalogNameChangeClass {
@@ -78,11 +80,11 @@ export function classifyCatalogNameChange(oldName: string, newName: string): Cat
   ]);
   for (let i = 0; i < a.length; i++) {
     if (a[i] === b[i]) continue;
-    const abbreviationCandidate =
-      (a[i] === 'tc' && b[i] === 'ton') ||
-      (a[i] === 'ton' && b[i] === 'tc');
+    // TC -> Ton is eligible for human correction of a mistaken label;
+    // this is emphatically NOT a UnitAlias, conversion, or synonym rule.
+    const potentialLabelError = a[i] === 'tc' && b[i] === 'ton';
     if ((protectedUnits.has(a[i]) || protectedUnits.has(b[i])) &&
-        !abbreviationCandidate) return 'TECHNICAL_CHANGE_BLOCKED';
+        !potentialLabelError) return 'TECHNICAL_CHANGE_BLOCKED';
     changed++;
     if (changed > 1 || !smallEdit(a[i], b[i])) return 'TECHNICAL_CHANGE_BLOCKED';
   }
@@ -155,6 +157,9 @@ export class ResourceCatalogNameCorrectionService {
          !input.confirmedCatalogCode.trim())) {
       throw new BadRequestException('CATALOG_NOMENCLATURE_CURATOR_VERIFICATION_REQUIRED');
     }
+    // Reference to actual documented basis: source/specification OR an
+    // explicitly attributable Owner/curator correction decision. Never claim
+    // the raw source already says the corrected term when it does not.
     const reference = nomenclature
       ? requiredEvidence(input.sourceReference, 12, 350, 'CATALOG_NOMENCLATURE_SOURCE_REQUIRED')
       : '';
@@ -244,8 +249,8 @@ export class ResourceCatalogNameCorrectionService {
         VALUES (${randomUUID()}::uuid, ${input.workspaceId}::uuid,
           ${resource.id}::uuid, ${input.actorAccountId}::uuid,
           ${resource.name}, ${correctedName},
-          ${nomenclature ? '[NOMENCLATURE_VERIFIED] ' + reason : reason},
-          ${nomenclature ? 'REFERENSI: ' + reference + '\nBUKTI: ' + evidence : evidence},
+          ${nomenclature ? '[KOREKSI_SALAH_TULIS_TERVERIFIKASI] ' + reason : reason},
+          ${nomenclature ? 'DASAR_PENETAPAN: ' + reference + '\nBUKTI_IDENTITAS: ' + evidence : evidence},
           ${resource.updatedAt}, ${after.updatedAt})
       `);
       return {

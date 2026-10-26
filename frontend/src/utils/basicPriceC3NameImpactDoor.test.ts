@@ -25,8 +25,9 @@ test('BP-C3: impact preview stays read-only and write needs curator evidence', (
   assert.match(panel, /nomenclatureVerified/u);
   assert.match(panel, /confirmedCatalogCode/u);
   assert.match(panel, /nameSourceReference\.trim\(\)\.length < 12/u);
-  assert.match(panel, /Rujukan dokumen yang membuktikan makna istilah/u);
-  assert.match(panel, /SIMPROK tidak menganggapnya sama secara otomatis/u);
+  assert.match(panel, /Dasar koreksi nama \(dokumen atau penetapan Owner\/kurator yang nyata\)/u);
+  assert.match(panel, /bukan klaim kedua istilah sinonim/u);
+  assert.match(panel, /Jangan mengarang isi dokumen sumber/u);
   const subpanel = panel.slice(panel.indexOf('BP-C3 — catalog name impact preview'), panel.indexOf('GAP-B — THREE SENTENCES'));
   assert.doesNotMatch(subpanel, /updateResourceCatalog|renameResourceCatalog|method: ['"]PATCH['"]/u);
   assert.match(api, /withQuery\('\/basic-prices\/catalog-name-impact\/'/u);

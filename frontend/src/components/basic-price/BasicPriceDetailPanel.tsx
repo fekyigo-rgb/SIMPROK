@@ -464,7 +464,7 @@ export function BasicPriceDetailPanel({
                           : nameImpactResult.verdict === 'IDENTITY_CONFLICT_REVIEW_REQUIRED'
                             ? 'Terdapat nama serupa pada identitas katalog lain. Perlu adjudikasi identitas.'
                             : nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED'
-                              ? 'Singkatan atau istilah berbeda. Kurator wajib membuktikan kesetaraan teknis dari sumber sebelum mengubah nama; SIMPROK tidak menganggapnya sama secara otomatis.'
+                              ? 'Penulisan istilah berbeda. Ini dapat berupa salah tulis (misalnya TC → Ton), BUKAN berarti kedua istilah sinonim. Kurator perlu mendokumentasikan dasar koreksi nama pada item yang sama.'
                               : 'Perubahan ini dapat mengubah mutu, kapasitas, atau identitas. Tidak boleh diproses sebagai koreksi nama.'}
                     </p>
                     <p>Jenis: {resourceTypeLabel(nameImpactResult.resourceType as typeof item.resource.type)} · Kode: {nameImpactResult.resourceCode ?? 'Tidak ditetapkan'} · Satuan: {nameImpactResult.baseUnit}</p>
@@ -480,15 +480,15 @@ export function BasicPriceDetailPanel({
                       hasPermission('AHSP_RESOURCE_IDENTITY_DECIDE') ? (
                       <div style={{ paddingTop: 10 }}>
                         <p><strong>Koreksi nama katalog — khusus kurator identitas</strong></p>
-                        <p className="bp-field__help">Koreksi hanya untuk identitas resource yang SAMA. Angka mutu, kapasitas, jenis dan satuan tidak boleh berubah. Singkatan yang berbeda memerlukan bukti arti yang sah.</p>
+                        <p className="bp-field__help">Koreksi hanya untuk identitas resource yang SAMA. Angka mutu, kapasitas, jenis dan satuan tidak boleh berubah. Salah tulis seperti TC menjadi Ton bukan penyamaan arti dua istilah; keputusan koreksi harus dapat ditelusuri.</p>
                         {nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' ? (
                           <div>
-                            <p><strong>Verifikasi istilah/ singkatan — keputusan kurator</strong></p>
+                            <p><strong>Pemeriksaan salah tulis / nomenklatur — keputusan kurator</strong></p>
                             <label className="bp-field">
-                              <span className="bp-field__label">Rujukan dokumen yang membuktikan makna istilah</span>
+                              <span className="bp-field__label">Dasar koreksi nama (dokumen atau penetapan Owner/kurator yang nyata)</span>
                               <input className="bp-input" value={nameSourceReference}
                                 onChange={(event) => setNameSourceReference(event.target.value)}
-                                maxLength={350} placeholder="Nama dokumen/acuan, nomor bagian atau identitas sumber" />
+                                maxLength={350} placeholder="Identitas dokumen, atau keputusan Owner/kurator dan tanggalnya" />
                             </label>
                             <label className="bp-field">
                               <span className="bp-field__label">Ketik ulang kode katalog untuk memastikan item yang dipilih</span>
@@ -500,9 +500,9 @@ export function BasicPriceDetailPanel({
                             <label className="bp-field">
                               <input type="checkbox" checked={nomenclatureVerified}
                                 onChange={(event) => setNomenclatureVerified(event.target.checked)} />
-                              <span className="bp-field__label">Saya memverifikasi dari sumber bahwa istilah lama dan istilah baru merujuk item serta spesifikasi teknis yang sama.</span>
+                              <span className="bp-field__label">Saya telah memeriksa dasar koreksi: nama lama salah tulis, nama baru benar untuk resource dan spesifikasi yang sama (bukan klaim kedua istilah sinonim).</span>
                             </label>
-                            <p className="bp-field__help">Tidak ada padanan otomatis. Jika sumber tidak membuktikan kesetaraan, jangan simpan koreksi ini.</p>
+                            <p className="bp-field__help">Jangan mengarang isi dokumen sumber: nama asli yang salah tetap disimpan. Cantumkan dasar penetapan yang nyata; jika kesalahan belum dapat dipastikan, jangan simpan.</p>
                           </div>
                         ) : null}
                         <label className="bp-field">
@@ -548,7 +548,7 @@ export function BasicPriceDetailPanel({
                             (!nameImpactResult.resourceCode ||
                               confirmedCatalogCode.trim().toLocaleLowerCase('id-ID') !== nameImpactResult.resourceCode.toLocaleLowerCase('id-ID') ||
                               nameSourceReference.trim().length < 12 || !nomenclatureVerified)
-                            ? 'Simpan belum aktif: lengkapi rujukan dokumen, kode katalog yang tepat, dan konfirmasi verifikasi istilah.'
+                            ? 'Simpan belum aktif: lengkapi dasar koreksi yang nyata, kode katalog yang tepat, dan konfirmasi salah tulis.'
                             : !nameCorrectionConfirmed
                               ? 'Simpan belum aktif: konfirmasikan bahwa identitas dan spesifikasi resource tetap sama.'
                             : nameCorrectionReason.trim().length < 10
