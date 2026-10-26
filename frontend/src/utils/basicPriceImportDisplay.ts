@@ -2904,7 +2904,7 @@ export const UNKNOWN_REQUIRED_FACT_MESSAGE =
  */
 export const smartSaveOutcomeMessage = (outcome: {
   accepted: { acceptedCount: number; remainingEligible: number; skippedCount?: number };
-  kept: { createdCount: number; alreadyPrivateCount: number };
+  kept: { createdCount: number; alreadyPrivateCount: number; heldRows?: Array<{ rowId: string; reasonCode: string }> };
 }): string => {
   const parts: string[] = [];
   if (outcome.accepted.acceptedCount > 0) {
@@ -2920,6 +2920,11 @@ export const smartSaveOutcomeMessage = (outcome: {
   if (outcome.kept.createdCount === 0 && outcome.kept.alreadyPrivateCount > 0) {
     parts.push(
       `${outcome.kept.alreadyPrivateCount} harga memang sudah tersimpan sebelumnya, jadi tidak ada yang digandakan.`,
+    );
+  }
+  if ((outcome.kept.heldRows?.length ?? 0) > 0) {
+    parts.push(
+      `${outcome.kept.heldRows!.length} baris harga ditahan: resource dan penerbit sudah memiliki harga untuk wilayah/tanggal berlaku yang sama. Harga lama tidak diubah. Periksa sumber dan tentukan Koreksi Harga atau Harga Terbaru di detail Basic Price; jangan membuat resource duplikat.`,
     );
   }
   // The writer can return NEEDS_REVIEW for a same-identity collision without

@@ -532,6 +532,7 @@ export interface KeepBatchPrivateResult {
   batchId: string;
   createdCount: number;
   alreadyPrivateCount: number;
+  heldRows: Array<{ rowId: string; reasonCode: string }>;
   prices: PrivateBasicPriceItem[];
 }
 

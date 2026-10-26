@@ -78,6 +78,7 @@ describe('BasicPricePrivateAssetService', () => {
       },
       basicPrice: {
         findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn().mockResolvedValue(createdRow()),
       },
       basicPriceImportRow: {
@@ -164,6 +165,76 @@ describe('BasicPricePrivateAssetService', () => {
       expect(tx.basicPrice.create.mock.calls[0][0].data.reportedByAccountId).toBe(
         accountId,
       );
+    });
+  });
+
+  describe('BP-C2 same-publisher current price intake guard', () => {
+    const competingPrice = (publisher: string | null) => ({
+      id: 'other-batch-price',
+      sourceImportRow: {
+        batch: { sourceVendorName: null, sourceOrganizationName: publisher },
+      },
+      sourceSubmission: null,
+      provenanceCorrections: [],
+    });
+
+    it.each([
+      ['125000.00', 'TIM  SIMPROK'],
+      ['65000.00', 'Tim Simprok'],
+    ])('refuses second current price regardless of amount %s', async (_amount, name) => {
+      makeTx({ batch: {
+        ...baseBatch(), sourceOrganizationName: 'Tim Simprok', sourceVendorName: null,
+      } });
+      tx.basicPriceImportRow.findUniqueOrThrow.mockResolvedValue({
+        ...baseRow(), proposedCanonicalPrice: new Prisma.Decimal(_amount),
+      });
+      tx.basicPrice.findMany.mockResolvedValue([competingPrice(name)]);
+      const result = await service.keepBatchPrivate({ batchId, actor });
+      expect(result.createdCount).toBe(0);
+      expect(result.heldRows).toEqual([{
+        rowId,
+        reasonCode: 'SAME_PUBLISHER_PRICE_CONTEXT_REQUIRES_REVIEW',
+      }]);
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(3); // transactional context lock
+    });
+
+    it('allows a proven different publisher while keeping the same canonical resource', async () => {
+      makeTx({ batch: {
+        ...baseBatch(), sourceOrganizationName: 'Tim Simprok', sourceVendorName: null,
+      } });
+      tx.basicPrice.findMany.mockResolvedValue([competingPrice('Penerbit Lain')]);
+      await expect(service.keepBatchPrivate({ batchId, actor }))
+        .resolves.toMatchObject({ createdCount: 1 });
+    });
+
+    it('does not treat missing publisher identity as a safe second issuer', async () => {
+      makeTx();
+      tx.basicPrice.findMany.mockResolvedValue([competingPrice(null)]);
+      const result = await service.keepBatchPrivate({ batchId, actor });
+      expect(result.createdCount).toBe(0);
+      expect(result.heldRows).toEqual([{
+        rowId,
+        reasonCode: 'SAME_PUBLISHER_PRICE_CONTEXT_REQUIRES_REVIEW',
+      }]);
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    });
+
+    it('scopes cross-batch guard to resource, workspace, locality and applicability day', async () => {
+      makeTx({ batch: {
+        ...baseBatch(), sourceOrganizationName: 'Tim Simprok', sourceVendorName: null,
+      } });
+      await service.keepBatchPrivate({ batchId, actor });
+      expect(tx.basicPrice.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          resourceId: resourceCatalogId,
+          workspaceId,
+          regionId,
+          effectiveDate: baseBatch().effectiveDate,
+          supersededBy: { is: null },
+        }),
+      }));
+      expect(tx.basicPrice.create).toHaveBeenCalledTimes(1);
     });
   });
 

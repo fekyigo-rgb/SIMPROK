@@ -16,6 +16,7 @@ import { toDecimalString2, toMoneyDecimal2 } from '../common/money';
 import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
 import {
   deriveExplorerSourceName,
+  sourceNameFromBatch,
   mapPrivateBasicPriceItem,
   type PrivateBasicPriceItem,
 } from '../common/basic-price-workflow.projection';
@@ -172,6 +173,8 @@ export interface KeepBatchPrivateResult {
   createdCount: number;
   /** Rows that already had a private price — re-running is not a duplicate. */
   alreadyPrivateCount: number;
+  /** Import rows held because an existing publisher price needs adjudication. */
+  heldRows: Array<{ rowId: string; reasonCode: string }>;
   prices: PrivateBasicPriceItem[];
 }
 
@@ -291,6 +294,8 @@ export class BasicPricePrivateAssetService {
             workspaceId: string;
             organizationId: string;
             sourceSha256: string;
+            sourceOrganizationName: string | null;
+            sourceVendorName: string | null;
             status: string;
             effectiveDate: Date | null;
             regionId: string | null;
@@ -314,7 +319,7 @@ export class BasicPricePrivateAssetService {
                           "sourcePeriodLabel", "sourcePeriodGranularity", "effectiveDateProvenance", "effectiveDateDerivationRule",
                           "reviewDate",
                           "sourceRegionScopeLabel", "sourceRegionScopeGeographicEvidence",
-                          "regionScopeConfirmedRegionId", "sourceSha256"
+                          "regionScopeConfirmedRegionId", "sourceSha256", "sourceOrganizationName", "sourceVendorName"
                      FROM "basic_price_import_batches"
                     WHERE "id" = ${batchId}::uuid
                     FOR UPDATE`,
@@ -390,6 +395,7 @@ export class BasicPricePrivateAssetService {
         const prices: PrivateBasicPriceItem[] = [];
         let createdCount = 0;
         let alreadyPrivateCount = 0;
+        const heldRows: Array<{ rowId: string; reasonCode: string }> = [];
 
         for (const { id: rowId } of readyRows) {
           const existing = await tx.basicPrice.findFirst({
@@ -451,6 +457,81 @@ export class BasicPricePrivateAssetService {
             { ...batch, effectiveDate: batch.effectiveDate as Date },
             row.effectiveDateOverride,
           );
+
+          // BP-C2: an imported row is not an independent price identity.
+          // If the same publisher already has a private price for this
+          // canonical resource, locality and effective date, hold instead of
+          // creating a competing Explorer offer. Different specifications are
+          // distinguished by ResourceCatalog identity BEFORE reaching here.
+          // This gate does not decide whether the new workbook is a correction
+          // or a newer observation; existing Detail writers own that decision.
+          const sourceIdentity = sourceNameFromBatch(batch);
+          const normalizedSource = sourceIdentity?.normalize('NFKC')
+            .replace(/\s+/gu, ' ').trim().toLocaleLowerCase('id-ID') ?? null;
+          // Serialize across different batches in the same workspace; the
+          // batch lock above alone cannot prevent two parallel imported files
+          // from both seeing no predecessor. The key contains only server-side
+          // canonical facts and is released automatically by PostgreSQL.
+          const contextKey = [
+            batch.workspaceId, row.resourceCatalogId, batch.regionId,
+            batch.regionCoverageSetId, temporal.effectiveDate.toISOString().slice(0, 10),
+          ].join('|');
+          await tx.$queryRaw<Array<{ ok: number }>>(Prisma.sql`
+            SELECT 1::int AS "ok" FROM (
+              SELECT pg_advisory_xact_lock(
+                hashtext(${contextKey}::text),
+                hashtext(${normalizedSource ?? '<unknown-publisher>'}::text)
+              )
+            ) AS "contextGuard"`);
+          const competing = await tx.basicPrice.findMany({
+            where: {
+              workspaceId: batch.workspaceId,
+              assetScope: BasicPriceAssetScope.WORKSPACE_PRIVATE,
+              resourceId: row.resourceCatalogId,
+              regionId: batch.regionId,
+              regionCoverageSetId: batch.regionCoverageSetId,
+              effectiveDate: temporal.effectiveDate,
+              supersededBy: { is: null },
+            },
+            select: {
+              id: true,
+              sourceImportRow: {
+                select: { batch: {
+                  select: { sourceOrganizationName: true, sourceVendorName: true },
+                } },
+              },
+              sourceSubmission: {
+                select: { importRow: {
+                  select: { batch: {
+                    select: { sourceOrganizationName: true, sourceVendorName: true },
+                  } },
+                } },
+              },
+              provenanceCorrections: {
+                orderBy: { createdAt: 'asc' },
+                take: 1,
+                select: { after: true },
+              },
+            },
+          });
+          if (competing.some((candidate) => {
+            const candidateName = deriveExplorerSourceName(candidate);
+            const candidateSource = candidateName?.normalize('NFKC')
+              .replace(/\s+/gu, ' ').trim().toLocaleLowerCase('id-ID') ?? null;
+            // The absence of publisher identity cannot establish that two
+            // indistinguishable prices are lawful separate publisher offers.
+            return !normalizedSource || !candidateSource ||
+              candidateSource === normalizedSource;
+          })) {
+            // Do not block the other READY rows of a large workbook. The
+            // existing price stays untouched and the source row remains
+            // reviewable; the response names each held source row accurately.
+            heldRows.push({
+              rowId: row.id,
+              reasonCode: 'SAME_PUBLISHER_PRICE_CONTEXT_REQUIRES_REVIEW',
+            });
+            continue;
+          }
 
           const created = await tx.basicPrice.create({
             data: {
@@ -543,6 +624,7 @@ export class BasicPricePrivateAssetService {
           batchId: batch.id,
           createdCount,
           alreadyPrivateCount,
+          heldRows,
           prices,
         };
       },

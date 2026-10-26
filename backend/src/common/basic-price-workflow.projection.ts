@@ -507,7 +507,7 @@ export function sameSourceObservationPredecessorId(
     : null;
 }
 
-function sourceNameFromBatch(
+export function sourceNameFromBatch(
   batch: ImportBatchSourceNames | null | undefined,
 ): string | null {
   if (!batch) return null;
