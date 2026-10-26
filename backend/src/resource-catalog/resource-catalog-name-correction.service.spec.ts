@@ -65,6 +65,21 @@ describe('BP-C3 governed ACTIVE ResourceCatalog typography correction', () => {
     expect(tx.$executeRaw).toHaveBeenCalledTimes(2); // shared admission lock; same-tx audit insert
     expect(tx.resourceCatalog.findMany).toHaveBeenCalledTimes(1);
   });
+  it('denies dropping a numeric range operator on ACTIVE catalog before any transaction', async () => {
+    const { service, prisma } = setup();
+    const amp = 'Sewa Asphalt Mixing Plant (AMP) 80-100 Ton/Jam';
+    for (const unsafe of [
+      'Sewa Asphalt Mixing Plant (AMP) 80100 Ton/Jam',
+      'Sewa Asphalt Mixing Plant (AMP) 80 100 Ton/Jam',
+      'Sewa Asphalt Mixing Plant (AMP) 80/100 Ton/Jam',
+    ]) {
+      await expect(service.correct(request({
+        previousName: amp,
+        correctedName: unsafe,
+      }))).rejects.toThrow('CATALOG_CORRECTION_REQUIRES_IDENTITY_ADJUDICATION');
+    }
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
   it('denies a change of a measured technical capacity before transaction', async () => {
     const { service, prisma } = setup();
     await expect(service.correct(request({ correctedName: 'Sewa Asphalt Finisher Kap. 12 Ton' })))

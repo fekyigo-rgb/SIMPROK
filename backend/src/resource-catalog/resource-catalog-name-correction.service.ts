@@ -41,12 +41,28 @@ export type CatalogNameChangeClass =
  * Numerics, multiple term changes or substantial substitutions remain blocked.
  */
 export function classifyCatalogNameChange(oldName: string, newName: string): CatalogNameChangeClass {
+  // Technical numbers include their OPERATORS, not only their digits.
+  // The existing label signature intentionally ignores punctuation to allow
+  // normal spacing/case fixes. For equipment capacities that is too broad:
+  // 80-100 Ton/Jam and 80100 Ton/Jam have the same folded label, but very
+  // different meanings. Fail closed BEFORE the typography shortcut.
+  //
+  // Keep separators within a numeric expression (ranges, ratios, decimal
+  // values, dimensions). Spaces around an unchanged operator and Unicode
+  // dash glyphs are typographic; losing or replacing an operator is not.
+  const numericExpressions = (value: string): string[] => {
+    const normalized = value.normalize('NFKC').replace(/[‐‑‒–—−]/gu, '-');
+    return Array.from(
+      normalized.matchAll(/\d+(?:\s*[-/:.,×]\s*\d+)*/gu),
+      match => match[0].replace(/\s+/gu, ''),
+    );
+  };
+  if (JSON.stringify(numericExpressions(oldName)) !==
+      JSON.stringify(numericExpressions(newName))) {
+    return 'TECHNICAL_CHANGE_BLOCKED';
+  }
   if (catalogLabelSignature(oldName) === catalogLabelSignature(newName)) {
     return 'TYPOGRAPHY_ONLY';
-  }
-  const numerics = (s: string) => s.match(/\d+(?:[.,]\d+)*/gu) ?? [];
-  if (JSON.stringify(numerics(oldName)) !== JSON.stringify(numerics(newName))) {
-    return 'TECHNICAL_CHANGE_BLOCKED';
   }
   const tokens = (s: string) => s.toLocaleLowerCase('id-ID').match(/[\p{L}\p{N}]+/gu) ?? [];
   const a = tokens(oldName);

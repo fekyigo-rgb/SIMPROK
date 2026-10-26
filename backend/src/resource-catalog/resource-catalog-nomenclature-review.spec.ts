@@ -3,6 +3,36 @@ import {
   ResourceCatalogNameCorrectionService,
 } from './resource-catalog-name-correction.service';
 
+describe('BP-C3 numeric notation is identity-bearing, not disposable punctuation', () => {
+  it.each([
+    ['AMP 80-100 Ton/Jam', 'AMP 80100 Ton/Jam'],
+    ['AMP 80-100 Ton/Jam', 'AMP 80 100 Ton/Jam'],
+    ['AMP 80-100 Ton/Jam', 'AMP 80/100 Ton/Jam'],
+    ['Kayu 5/7 cm', 'Kayu 57 cm'],
+    ['Beton 1.5 MPa', 'Beton 15 MPa'],
+    ['Baja 10:15', 'Baja 1015'],
+    ['Plat 4×4 mm', 'Plat 44 mm'],
+  ])('blocks technical notation %s -> %s', (original, proposed) => {
+    expect(classifyCatalogNameChange(original, proposed))
+      .toBe('TECHNICAL_CHANGE_BLOCKED');
+  });
+
+  it.each([
+    ['Sewa Asphalt Finisher  Kap. 10 Ton', 'Sewa Asphalt Finisher Kap. 10 Ton'],
+    ['AMP 80 - 100 Ton/Jam', 'AMP 80-100 Ton/Jam'],
+    ['AMP 80–100 Ton/Jam', 'AMP 80-100 Ton/Jam'],
+    ['Kayu 5 / 7 cm', 'Kayu 5/7 cm'],
+  ])('retains safe typography %s -> %s', (original, proposed) => {
+    expect(classifyCatalogNameChange(original, proposed))
+      .toBe('TYPOGRAPHY_ONLY');
+  });
+
+  it('preserves the human-verified typo path without calling TC and Ton synonyms', () => {
+    expect(classifyCatalogNameChange('CRANE ON TRUCK 10-15 TC', 'CRANE ON TRUCK 10-15 Ton'))
+      .toBe('NOMENCLATURE_REQUIRES_VERIFICATION');
+  });
+});
+
 const before = new Date('2026-10-24T12:00:00.000Z');
 const after = new Date('2026-10-24T12:00:00.125Z');
 
