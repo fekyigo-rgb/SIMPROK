@@ -80,6 +80,9 @@ export class ResourceObservationController {
       reason?: string;
       evidence?: string;
       sameIdentityConfirmed?: boolean;
+      nomenclatureVerified?: boolean;
+      confirmedCatalogCode?: string;
+      sourceReference?: string;
     },
   ) {
     if (!this.nameCorrections) {
@@ -95,6 +98,9 @@ export class ResourceObservationController {
       reason: body?.reason ?? '',
       evidence: body?.evidence ?? '',
       sameIdentityConfirmed: body?.sameIdentityConfirmed === true,
+      nomenclatureVerified: body?.nomenclatureVerified === true,
+      confirmedCatalogCode: body?.confirmedCatalogCode,
+      sourceReference: body?.sourceReference,
     });
   }
 

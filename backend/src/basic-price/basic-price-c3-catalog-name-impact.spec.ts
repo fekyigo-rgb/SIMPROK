@@ -79,6 +79,29 @@ describe('BP-C3 existing ResourceCatalog name correction — impact gate', () =>
     expect(result.verdict).toBe('IDENTITY_REVIEW_REQUIRED');
     expect(result.writable).toBe(false);
   });
+  it('shows a controlled curator nomenclature review for TC to Ton, not a guaranteed match', async () => {
+    const {service, prisma} = make();
+    prisma.resourceCatalog.findFirst.mockResolvedValue({
+      ...record, code: 'E07', name: 'CRANE ON TRUCK 10-15 TC',
+    });
+    const result = await service.previewCatalogNameCorrection(
+      'workspace-A', 'catalog-1', 'CRANE ON TRUCK 10-15 Ton',
+    );
+    expect(result.verdict).toBe('NOMENCLATURE_VERIFICATION_REQUIRED');
+    expect(result.resourceCode).toBe('E07');
+    expect(result.writable).toBe(false);
+    expect(prisma.resourceCatalog.update).not.toHaveBeenCalled();
+  });
+  it('keeps fc to f-prime-c in the already-proven typography lane', async () => {
+    const {service, prisma} = make();
+    prisma.resourceCatalog.findFirst.mockResolvedValue({
+      ...record, type: 'MATERIAL', name: 'Beton fc 30 MPa',
+    });
+    const result = await service.previewCatalogNameCorrection(
+      'workspace-A', 'catalog-1', "Beton f'c 30 MPa",
+    );
+    expect(result.verdict).toBe('SPELLING_ONLY_PREVIEW');
+  });
   it('rejects empty and unsafe names', async () => {
     const {service}=make();
     await expect(service.previewCatalogNameCorrection('workspace-A','catalog-1','  '))

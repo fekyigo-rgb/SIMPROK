@@ -144,6 +144,9 @@ export function BasicPriceDetailPanel({
   const [nameCorrectionReason, setNameCorrectionReason] = useState('');
   const [nameCorrectionEvidence, setNameCorrectionEvidence] = useState('');
   const [nameCorrectionConfirmed, setNameCorrectionConfirmed] = useState(false);
+  const [nomenclatureVerified, setNomenclatureVerified] = useState(false);
+  const [confirmedCatalogCode, setConfirmedCatalogCode] = useState('');
+  const [nameSourceReference, setNameSourceReference] = useState('');
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
   const detail = useBasicPriceDetail(item.basicPriceId, detailEpoch);
@@ -422,6 +425,7 @@ export function BasicPriceDetailPanel({
                       setNameImpactResult(null);
                       setNameImpactError(null);
                       setNameCorrectionConfirmed(false);
+                      setNomenclatureVerified(false);
                     }}
                   />
                 </label>
@@ -459,7 +463,9 @@ export function BasicPriceDetailPanel({
                           ? 'Tidak ada perubahan nama yang diajukan.'
                           : nameImpactResult.verdict === 'IDENTITY_CONFLICT_REVIEW_REQUIRED'
                             ? 'Terdapat nama serupa pada identitas katalog lain. Perlu adjudikasi identitas.'
-                            : 'Perubahan ini dapat mengubah makna identitas. Perlu pemeriksaan teknis.'}
+                            : nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED'
+                              ? 'Singkatan atau istilah berbeda. Kurator wajib membuktikan kesetaraan teknis dari sumber sebelum mengubah nama; SIMPROK tidak menganggapnya sama secara otomatis.'
+                              : 'Perubahan ini dapat mengubah mutu, kapasitas, atau identitas. Tidak boleh diproses sebagai koreksi nama.'}
                     </p>
                     <p>Jenis: {resourceTypeLabel(nameImpactResult.resourceType as typeof item.resource.type)} · Kode: {nameImpactResult.resourceCode ?? 'Tidak ditetapkan'} · Satuan: {nameImpactResult.baseUnit}</p>
                     {(nameImpactResult.specificationFacts?.length ?? 0) > 0 ? (
@@ -469,11 +475,36 @@ export function BasicPriceDetailPanel({
                     )}
                     <p>Dipakai oleh {nameImpactResult.impact.basicPrices} Basic Price, {nameImpactResult.impact.projectAhspResolutions} resolusi AHSP proyek, {nameImpactResult.impact.importRows} baris impor, {nameImpactResult.impact.sourceIdentityRecords} catatan sumber, dan {nameImpactResult.impact.conversionRules} aturan konversi.</p>
                     <p className="bp-field__help">Pemeriksaan ini belum menyimpan apa pun. ID resource, satuan, dan seluruh hubungan tetap utuh.</p>
-                    {nameImpactResult.verdict === 'SPELLING_ONLY_PREVIEW' &&
+                    {(nameImpactResult.verdict === 'SPELLING_ONLY_PREVIEW' ||
+                      nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED') &&
                       hasPermission('AHSP_RESOURCE_IDENTITY_DECIDE') ? (
                       <div style={{ paddingTop: 10 }}>
                         <p><strong>Koreksi nama katalog — khusus kurator identitas</strong></p>
-                        <p className="bp-field__help">Hanya pembetulan penulisan pada identitas yang SAMA. Perubahan mutu, kapasitas, jenis dan satuan tidak boleh lewat pintu ini.</p>
+                        <p className="bp-field__help">Koreksi hanya untuk identitas resource yang SAMA. Angka mutu, kapasitas, jenis dan satuan tidak boleh berubah. Singkatan yang berbeda memerlukan bukti arti yang sah.</p>
+                        {nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' ? (
+                          <div>
+                            <p><strong>Verifikasi istilah/ singkatan — keputusan kurator</strong></p>
+                            <label className="bp-field">
+                              <span className="bp-field__label">Rujukan dokumen yang membuktikan makna istilah</span>
+                              <input className="bp-input" value={nameSourceReference}
+                                onChange={(event) => setNameSourceReference(event.target.value)}
+                                maxLength={350} placeholder="Nama dokumen/acuan, nomor bagian atau identitas sumber" />
+                            </label>
+                            <label className="bp-field">
+                              <span className="bp-field__label">Ketik ulang kode katalog untuk memastikan item yang dipilih</span>
+                              <input className="bp-input" value={confirmedCatalogCode}
+                                onChange={(event) => setConfirmedCatalogCode(event.target.value)}
+                                placeholder={nameImpactResult.resourceCode ?? 'Kode katalog tidak tersedia'}
+                                maxLength={80} />
+                            </label>
+                            <label className="bp-field">
+                              <input type="checkbox" checked={nomenclatureVerified}
+                                onChange={(event) => setNomenclatureVerified(event.target.checked)} />
+                              <span className="bp-field__label">Saya memverifikasi dari sumber bahwa istilah lama dan istilah baru merujuk item serta spesifikasi teknis yang sama.</span>
+                            </label>
+                            <p className="bp-field__help">Tidak ada padanan otomatis. Jika sumber tidak membuktikan kesetaraan, jangan simpan koreksi ini.</p>
+                          </div>
+                        ) : null}
                         <label className="bp-field">
                           <span className="bp-field__label">Alasan koreksi</span>
                           <textarea
@@ -513,8 +544,13 @@ export function BasicPriceDetailPanel({
                           <span className="bp-field__label">Saya sudah memeriksa spesifikasi dan memastikan ini resource yang sama.</span>
                         </label>
                         <p className="bp-field__help" aria-live="polite">
-                          {!nameCorrectionConfirmed
-                            ? 'Simpan belum aktif: konfirmasikan bahwa identitas dan spesifikasi resource tetap sama.'
+                          {nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' &&
+                            (!nameImpactResult.resourceCode ||
+                              confirmedCatalogCode.trim().toLocaleLowerCase('id-ID') !== nameImpactResult.resourceCode.toLocaleLowerCase('id-ID') ||
+                              nameSourceReference.trim().length < 12 || !nomenclatureVerified)
+                            ? 'Simpan belum aktif: lengkapi rujukan dokumen, kode katalog yang tepat, dan konfirmasi verifikasi istilah.'
+                            : !nameCorrectionConfirmed
+                              ? 'Simpan belum aktif: konfirmasikan bahwa identitas dan spesifikasi resource tetap sama.'
                             : nameCorrectionReason.trim().length < 10
                               ? 'Simpan belum aktif: lengkapi alasan koreksi.'
                               : nameCorrectionEvidence.trim().length < 20
@@ -527,7 +563,12 @@ export function BasicPriceDetailPanel({
                           disabled={nameImpactBusy ||
                             !nameCorrectionConfirmed ||
                             nameCorrectionReason.trim().length < 10 ||
-                            nameCorrectionEvidence.trim().length < 20}
+                            nameCorrectionEvidence.trim().length < 20 ||
+                            (nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' &&
+                              (!nomenclatureVerified ||
+                               nameSourceReference.trim().length < 12 ||
+                               !nameImpactResult.resourceCode ||
+                               confirmedCatalogCode.trim().toLocaleLowerCase('id-ID') !== nameImpactResult.resourceCode.toLocaleLowerCase('id-ID')))}
                           onClick={async () => {
                             setNameImpactBusy(true);
                             setNameImpactError(null);
@@ -539,6 +580,9 @@ export function BasicPriceDetailPanel({
                                 reason: nameCorrectionReason,
                                 evidence: nameCorrectionEvidence,
                                 sameIdentityConfirmed: true,
+                                nomenclatureVerified: nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' && nomenclatureVerified,
+                                confirmedCatalogCode: confirmedCatalogCode.trim(),
+                                sourceReference: nameSourceReference.trim(),
                               });
                               setNameImpactOpen(false);
                               setNameImpactResult(null);

@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
-import { catalogLabelSignature } from '../resource-catalog/resource-catalog-name-correction.service';
+import { catalogLabelSignature, classifyCatalogNameChange } from '../resource-catalog/resource-catalog-name-correction.service';
 import { normalizeResourceName } from '../resource-catalog/resource-identity-resolution.kernel';
 import { confirmedSpecifications } from '../resource-catalog/resource-identity-specification.contract';
 import { trustedUnitContext } from '../unit-kernel/unit-kernel.contracts';
@@ -302,7 +302,7 @@ export class BasicPriceService {
       normalizeResourceName(other.name) === folded ||
       catalogLabelSignature(other.name) === signature,
     );
-    const sameTypographyIdentity = catalogLabelSignature(resource.name) === catalogLabelSignature(proposal);
+    const classification = classifyCatalogNameChange(resource.name, proposal);
     return {
       currentName: resource.name,
       proposedName: proposal,
@@ -327,9 +327,11 @@ export class BasicPriceService {
         ? 'IDENTITY_CONFLICT_REVIEW_REQUIRED'
         : resource.name === proposal
           ? 'NO_CHANGE'
-          : sameTypographyIdentity
+          : classification === 'TYPOGRAPHY_ONLY'
             ? 'SPELLING_ONLY_PREVIEW'
-            : 'IDENTITY_REVIEW_REQUIRED',
+            : classification === 'NOMENCLATURE_REQUIRES_VERIFICATION'
+              ? 'NOMENCLATURE_VERIFICATION_REQUIRED'
+              : 'IDENTITY_REVIEW_REQUIRED',
       writable: false as const,
       message: 'Pemeriksaan dampak saja. Nama katalog belum diubah; persetujuan identitas dan jurnal koreksi masih diwajibkan.',
     };

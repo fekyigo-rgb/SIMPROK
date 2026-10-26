@@ -127,7 +127,7 @@ export interface CatalogNameImpact {
     conversionRules: number;
   };
   conflictingSameTypeNames: number;
-  verdict: 'IDENTITY_CONFLICT_REVIEW_REQUIRED' | 'SPELLING_ONLY_PREVIEW' | 'NO_CHANGE' | 'IDENTITY_REVIEW_REQUIRED';
+  verdict: 'IDENTITY_CONFLICT_REVIEW_REQUIRED' | 'SPELLING_ONLY_PREVIEW' | 'NOMENCLATURE_VERIFICATION_REQUIRED' | 'NO_CHANGE' | 'IDENTITY_REVIEW_REQUIRED';
   writable: false;
   message: string;
 }
@@ -147,6 +147,9 @@ export const correctActiveResourceCatalogName = (resourceCatalogId: string, inpu
   reason: string;
   evidence: string;
   sameIdentityConfirmed: true;
+  nomenclatureVerified?: boolean;
+  confirmedCatalogCode?: string;
+  sourceReference?: string;
 }): Promise<{ corrected: true; previousName: string; correctedName: string }> =>
   requestJson(
     '/resource-observations/catalog/' + encodeURIComponent(resourceCatalogId) + '/correct-name',

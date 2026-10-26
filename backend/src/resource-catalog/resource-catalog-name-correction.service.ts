@@ -18,13 +18,75 @@ import { normalizeResourceName } from './resource-identity-resolution.kernel';
  * No resource admission, no new identifier, no unit conversion and no mutation
  * to any Basic Price or AHSP/BOQ row.
  *
- * This first writer permits ONLY typography/spacing/case corrections whose
- * alphanumeric spelling is unchanged. Broader terminological changes require
- * a separate identity adjudication; no arbitrary 'Edit' masquerading as typo.
+ * Typography corrections use the existing safe pathway. Small nomenclature
+ * corrections require documented curator adjudication and an exact catalog
+ * code confirmation; the gate never presumes a term is technically equivalent.
  */
 export function catalogLabelSignature(value: string): string {
   return value.normalize('NFKC').toLocaleLowerCase('id-ID')
     .replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+export type CatalogNameChangeClass =
+  | 'TYPOGRAPHY_ONLY'
+  | 'NOMENCLATURE_REQUIRES_VERIFICATION'
+  | 'TECHNICAL_CHANGE_BLOCKED';
+
+/**
+ * Conservative single-term spelling/abbreviation gate, never an identity
+ * resolver. "TC" -> "Ton" or "Portlan" -> "Portland" MAY be submitted for
+ * curator review; equality of those terms is NOT asserted by this function.
+ * Numerics, multiple term changes or substantial substitutions remain blocked.
+ */
+export function classifyCatalogNameChange(oldName: string, newName: string): CatalogNameChangeClass {
+  if (catalogLabelSignature(oldName) === catalogLabelSignature(newName)) {
+    return 'TYPOGRAPHY_ONLY';
+  }
+  const numerics = (s: string) => s.match(/\d+(?:[.,]\d+)*/gu) ?? [];
+  if (JSON.stringify(numerics(oldName)) !== JSON.stringify(numerics(newName))) {
+    return 'TECHNICAL_CHANGE_BLOCKED';
+  }
+  const tokens = (s: string) => s.toLocaleLowerCase('id-ID').match(/[\p{L}\p{N}]+/gu) ?? [];
+  const a = tokens(oldName);
+  const b = tokens(newName);
+  if (a.length !== b.length || a.length < 2) return 'TECHNICAL_CHANGE_BLOCKED';
+  let changed = 0;
+  const smallEdit = (aToken: string, bToken: string) => {
+    if (aToken.length > 30 || bToken.length > 30) return false;
+    const row = Array.from({ length: bToken.length + 1 }, (_, index) => index);
+    for (let i = 1; i <= aToken.length; i++) {
+      let prev = row[0];
+      row[0] = i;
+      for (let j = 1; j <= bToken.length; j++) {
+        const prior = row[j];
+        row[j] = Math.min(
+          row[j] + 1,
+          row[j - 1] + 1,
+          prev + (aToken[i - 1] === bToken[j - 1] ? 0 : 1),
+        );
+        prev = prior;
+      }
+    }
+    return row[bToken.length] <= 2;
+  };
+  // Guard familiar dimensional/strength notation from masquerading as typo.
+  // These are DENIAL controls, not a replacement for Unit Kernel normalization.
+  const protectedUnits = new Set([
+    'mm', 'cm', 'm', 'meter', 'km', 'kg', 'gram', 'liter', 'litre',
+    'mpa', 'psi', 'bar', 'hp', 'kw', 'kva', 'k', 'fc',
+    'hari', 'jam', 'ton', 'tc',
+  ]);
+  for (let i = 0; i < a.length; i++) {
+    if (a[i] === b[i]) continue;
+    const abbreviationCandidate =
+      (a[i] === 'tc' && b[i] === 'ton') ||
+      (a[i] === 'ton' && b[i] === 'tc');
+    if ((protectedUnits.has(a[i]) || protectedUnits.has(b[i])) &&
+        !abbreviationCandidate) return 'TECHNICAL_CHANGE_BLOCKED';
+    changed++;
+    if (changed > 1 || !smallEdit(a[i], b[i])) return 'TECHNICAL_CHANGE_BLOCKED';
+  }
+  return changed === 1 ? 'NOMENCLATURE_REQUIRES_VERIFICATION' : 'TECHNICAL_CHANGE_BLOCKED';
 }
 
 function validateCorrectedName(value: unknown): string {
@@ -57,6 +119,9 @@ export interface CorrectResourceCatalogNameInput {
   reason: string;
   evidence: string;
   sameIdentityConfirmed: boolean;
+  nomenclatureVerified?: boolean;
+  confirmedCatalogCode?: string;
+  sourceReference?: string;
 }
 
 @Injectable()
@@ -79,9 +144,20 @@ export class ResourceCatalogNameCorrectionService {
     if (previousName === correctedName) {
       throw new BadRequestException('CATALOG_CORRECTION_NO_CHANGE');
     }
-    if (catalogLabelSignature(previousName) !== catalogLabelSignature(correctedName)) {
+    const changeClass = classifyCatalogNameChange(previousName, correctedName);
+    if (changeClass === 'TECHNICAL_CHANGE_BLOCKED') {
       throw new ConflictException('CATALOG_CORRECTION_REQUIRES_IDENTITY_ADJUDICATION');
     }
+    const nomenclature = changeClass === 'NOMENCLATURE_REQUIRES_VERIFICATION';
+    if (nomenclature &&
+        (input.nomenclatureVerified !== true ||
+         typeof input.confirmedCatalogCode !== 'string' ||
+         !input.confirmedCatalogCode.trim())) {
+      throw new BadRequestException('CATALOG_NOMENCLATURE_CURATOR_VERIFICATION_REQUIRED');
+    }
+    const reference = nomenclature
+      ? requiredEvidence(input.sourceReference, 12, 350, 'CATALOG_NOMENCLATURE_SOURCE_REQUIRED')
+      : '';
     const expected = new Date(input.expectedUpdatedAt);
     if (!input.expectedUpdatedAt || Number.isNaN(expected.getTime()) ||
         expected.toISOString() !== input.expectedUpdatedAt) {
@@ -107,7 +183,7 @@ export class ResourceCatalogNameCorrectionService {
 
       const resource = await tx.resourceCatalog.findFirst({
         where: { id: input.resourceCatalogId, workspaceId: input.workspaceId, status: 'ACTIVE' },
-        select: { id: true, name: true, type: true, baseUnit: true, updatedAt: true },
+        select: { id: true, name: true, code: true, type: true, baseUnit: true, updatedAt: true },
       });
       if (!resource) throw new NotFoundException('RESOURCE_CATALOG_NOT_FOUND');
       if (resource.name !== input.previousName ||
@@ -115,8 +191,14 @@ export class ResourceCatalogNameCorrectionService {
           resource.type !== initial.type) {
         throw new ConflictException('CATALOG_CORRECTION_STALE_DECISION');
       }
-      if (catalogLabelSignature(resource.name) !== catalogLabelSignature(correctedName)) {
-        throw new ConflictException('CATALOG_CORRECTION_REQUIRES_IDENTITY_ADJUDICATION');
+      if (classifyCatalogNameChange(resource.name, correctedName) !== changeClass) {
+        throw new ConflictException('CATALOG_CORRECTION_STALE_DECISION');
+      }
+      if (nomenclature &&
+          (resource.code === null ||
+           resource.code.toLocaleLowerCase('id-ID') !==
+             input.confirmedCatalogCode?.trim().toLocaleLowerCase('id-ID'))) {
+        throw new ConflictException('CATALOG_NOMENCLATURE_CODE_MISMATCH');
       }
 
       // This is a spelling-collision check, NOT a new identity matcher.
@@ -161,13 +243,16 @@ export class ResourceCatalogNameCorrectionService {
          "priorUpdatedAt", "newUpdatedAt")
         VALUES (${randomUUID()}::uuid, ${input.workspaceId}::uuid,
           ${resource.id}::uuid, ${input.actorAccountId}::uuid,
-          ${resource.name}, ${correctedName}, ${reason}, ${evidence},
+          ${resource.name}, ${correctedName},
+          ${nomenclature ? '[NOMENCLATURE_VERIFIED] ' + reason : reason},
+          ${nomenclature ? 'REFERENSI: ' + reference + '\nBUKTI: ' + evidence : evidence},
           ${resource.updatedAt}, ${after.updatedAt})
       `);
       return {
         corrected: true,
         previousName: resource.name,
         correctedName,
+        correctionClass: changeClass,
         catalogIdentityPreserved: true,
         sourceTextPreserved: true,
         basicPricesUntouched: true,
