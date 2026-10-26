@@ -460,27 +460,31 @@ export class BasicPricePrivateAssetService {
 
           // BP-C2: an imported row is not an independent price identity.
           // If the same publisher already has a private price for this
-          // canonical resource, locality and effective date, hold instead of
-          // creating a competing Explorer offer. Different specifications are
+          // canonical resource and locality, hold instead of producing another
+          // independent Explorer offer, EVEN if the import states a later
+          // effective day. Legitimate newer prices must use the EXISTING
+          // audited Harga Terbaru observation writer; wrong old prices use
+          // existing Koreksi Harga. Different technical specifications are
           // distinguished by ResourceCatalog identity BEFORE reaching here.
           // This gate does not decide whether the new workbook is a correction
           // or a newer observation; existing Detail writers own that decision.
           const sourceIdentity = sourceNameFromBatch(batch);
           const normalizedSource = sourceIdentity?.normalize('NFKC')
             .replace(/\s+/gu, ' ').trim().toLocaleLowerCase('id-ID') ?? null;
-          // Serialize across different batches in the same workspace; the
-          // batch lock above alone cannot prevent two parallel imported files
-          // from both seeing no predecessor. The key contains only server-side
-          // canonical facts and is released automatically by PostgreSQL.
+          // Serialize across ALL publishers and effective days for this
+          // workspace/resource/locality, including unknown-source imports.
+          // Locking by publisher/day would let a concurrent unknown-source
+          // import race a known publisher, or two versions race across dates.
+          // Advisory locks expire with the same existing save transaction.
           const contextKey = [
             batch.workspaceId, row.resourceCatalogId, batch.regionId,
-            batch.regionCoverageSetId, temporal.effectiveDate.toISOString().slice(0, 10),
+            batch.regionCoverageSetId,
           ].join('|');
           await tx.$queryRaw<Array<{ ok: number }>>(Prisma.sql`
             SELECT 1::int AS "ok" FROM (
               SELECT pg_advisory_xact_lock(
                 hashtext(${contextKey}::text),
-                hashtext(${normalizedSource ?? '<unknown-publisher>'}::text)
+                hashtext('BASIC_PRICE_SAME_RESOURCE_CONTEXT'::text)
               )
             ) AS "contextGuard"`);
           const competing = await tx.basicPrice.findMany({
@@ -490,7 +494,10 @@ export class BasicPricePrivateAssetService {
               resourceId: row.resourceCatalogId,
               regionId: batch.regionId,
               regionCoverageSetId: batch.regionCoverageSetId,
-              effectiveDate: temporal.effectiveDate,
+              // Date deliberately omitted: changing the import's effective
+              // date does NOT create a second active issuer price. The
+              // observation writer decides whether that date is a real
+              // later source version, and preserves the predecessor history.
               supersededBy: { is: null },
             },
             select: {

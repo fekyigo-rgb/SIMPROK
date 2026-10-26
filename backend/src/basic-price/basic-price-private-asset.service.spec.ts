@@ -246,7 +246,7 @@ describe('BasicPricePrivateAssetService', () => {
         .toBe(healthyResourceId);
     });
 
-    it('scopes cross-batch guard to resource, workspace, locality and applicability day', async () => {
+    it('scopes cross-batch guard to resource, workspace and locality, never to exact day', async () => {
       makeTx({ batch: {
         ...baseBatch(), sourceOrganizationName: 'Tim Simprok', sourceVendorName: null,
       } });
@@ -256,11 +256,27 @@ describe('BasicPricePrivateAssetService', () => {
           resourceId: resourceCatalogId,
           workspaceId,
           regionId,
-          effectiveDate: baseBatch().effectiveDate,
           supersededBy: { is: null },
         }),
       }));
+      const competingQuery = tx.basicPrice.findMany.mock.calls[0][0];
+      expect(competingQuery.where).not.toHaveProperty('effectiveDate');
       expect(tx.basicPrice.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('holds a different effective date from the same publisher instead of creating a second price root', async () => {
+      makeTx({ batch: {
+        ...baseBatch(), sourceOrganizationName: 'Tim Simprok', sourceVendorName: null,
+        effectiveDate: new Date('2026-09-01T00:00:00.000Z'),
+      } });
+      tx.basicPrice.findMany.mockResolvedValue([competingPrice('Tim Simprok')]);
+      const held = await service.keepBatchPrivate({ batchId, actor });
+      expect(held.createdCount).toBe(0);
+      expect(held.heldRows).toEqual([{
+        rowId, reasonCode: 'SAME_PUBLISHER_PRICE_CONTEXT_REQUIRES_REVIEW',
+      }]);
+      expect(tx.basicPrice.findMany.mock.calls[0][0].where).not.toHaveProperty('effectiveDate');
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
     });
   });
 

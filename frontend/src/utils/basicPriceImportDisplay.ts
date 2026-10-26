@@ -2924,7 +2924,7 @@ export const smartSaveOutcomeMessage = (outcome: {
   }
   if ((outcome.kept.heldRows?.length ?? 0) > 0) {
     parts.push(
-      `${outcome.kept.heldRows!.length} baris harga ditahan: resource dan penerbit sudah memiliki harga untuk wilayah/tanggal berlaku yang sama. Harga lama tidak diubah. Periksa sumber dan tentukan Koreksi Harga atau Harga Terbaru di detail Basic Price; jangan membuat resource duplikat.`,
+      `${outcome.kept.heldRows!.length} baris harga ditahan: resource dan penerbit sudah memiliki harga untuk wilayah yang sama; tanggal impor baru tidak otomatis berarti versi harga terbaru. Harga lama tidak diubah. Periksa sumber dan tentukan Koreksi Harga atau Harga Terbaru di detail Basic Price; jangan membuat resource duplikat.`,
     );
   }
   // The writer can return NEEDS_REVIEW for a same-identity collision without
