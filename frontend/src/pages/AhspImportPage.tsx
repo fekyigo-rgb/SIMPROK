@@ -99,6 +99,7 @@ import {
   type SamenessView,
 } from '../utils/ahspSamenessDisplay';
 import { ActionOutcomeNotice } from '../components/ahsp/ActionOutcomeNotice';
+import { ObservedNameReviewPanel } from '../components/ahsp/ObservedNameReviewPanel';
 import '../styles/ahsp.css';
 
 type SamenessDecision = 'USE_EXISTING' | 'KEEP_SEPARATE' | 'SKIP';
@@ -281,6 +282,8 @@ export function AhspImportPage() {
   const observations = observationsRead.rows;
   const observationsPhase = observationsRead.phase;
   const [curationBusy, setCurationBusy] = useState<CurationBusy | null>(null);
+  const [nameReviewBusy, setNameReviewBusy] = useState(false);
+  const [nameReviewReceipt, setNameReviewReceipt] = useState<string | null>(null);
   // A ref, not state: a second press in the same tick must be refused before React re-renders.
   // It holds the action that owns the controls, and a refusal of the list takes them from it.
   const curationLock = useRef<ActionTicket | null>(null);
@@ -380,6 +383,8 @@ export function AhspImportPage() {
     setObservationScope(null);
     curationLock.current = null;
     setCurationBusy(null);
+    setNameReviewBusy(false);
+    setNameReviewReceipt(null);
   };
   const forgetImports = () => {
     setJobDecisions({});
@@ -707,7 +712,7 @@ export function AhspImportPage() {
   }) => {
     const { group } = request;
     // Nothing may be decided from rows this reader has just been refused.
-    if (curationLock.current !== null || request.ids.length === 0 || observationsPhase === 'UNAUTHORIZED') return;
+    if (nameReviewBusy || curationLock.current !== null || request.ids.length === 0 || observationsPhase === 'UNAUTHORIZED') return;
     // The action this decision is. What it writes later is judged against it: a
     // receipt from another session, or for a list refused since it began, never
     // reaches the screen — not even once the list has come back.
@@ -1087,8 +1092,11 @@ export function AhspImportPage() {
     const members = group.ids.map((id) => wireById.get(id));
     // Offered, or its absence explained — from the server's own facts only.
     const learning = describeGroupLearning(members, view);
-    const remember = learning.offered && rememberFor[group.key] === true;
-    const locked = curationBusy !== null;
+    const correctedHere = members.some((member) => member?.reviewedName && member.reviewedName !== member.rawName);
+    // A spelling correction belongs to ONE observation; do not teach it globally.
+    const mayRemember = learning.offered && !correctedHere;
+    const remember = mayRemember && rememberFor[group.key] === true;
+    const locked = curationBusy !== null || nameReviewBusy;
     const busyOn = (action: string) => curationBusy?.key === group.key && curationBusy.action === action;
     const blockedReasonId = 'ahsp-new-blocked-' + at;
     // CALM PAGE, CLEAR ACTIONS. Each question shows what it IS, the evidence a
@@ -1119,13 +1127,26 @@ export function AhspImportPage() {
         </span>
         {/* Said plainly, because one click will answer for all of them. */}
         {repeated ? <span className="ahsp-line" style={{ color: MUTED }}>{repeated}</span> : null}
+        {/* Only append/read the correction of the addressed observation, not the group. */}
+        {group.ids.map((observationId) => (
+          <ObservedNameReviewPanel
+            key={observationId}
+            observationId={observationId}
+            onBusyChange={setNameReviewBusy}
+            onSaved={async () => {
+              await loadObservations('REFRESH');
+              setNameReviewReceipt('Koreksi nama berhasil disimpan dan dibaca kembali. Daftar telah diminta diperbarui; keputusan identitas tetap terpisah.');
+            }}
+          />
+        ))}
         {view.candidateLine ? <span className="ahsp-line" style={{ color: MUTED }}>{view.candidateLine}</span> : null}
         {/* A decision already offered for learning is WAITING on someone else —
             that is this question's state, not an explanation, so it stays here. */}
         {learning.stateLine && learning.stateTone === 'PENDING' ? (
           <span className="ahsp-line ahsp-line--emas">{learning.stateLine}</span>
         ) : null}
-        {learning.offered ? (
+        {correctedHere ? <span className="ahsp-line ahsp-line--abu">Koreksi ini berlaku hanya pada observasi tersebut, tanpa pembelajaran bersama.</span> : null}
+        {mayRemember ? (
           <label className="ahsp-check">
             <input
               type="checkbox"
@@ -2198,6 +2219,7 @@ export function AhspImportPage() {
           style={{ ...CARD, marginBottom: 'var(--space-4)', outline: 'none' }}
         >
           {curationIntro}
+          {nameReviewReceipt ? <p role="status" className="ahsp-line" style={{ color: '#24513A' }}>{nameReviewReceipt}</p> : null}
           {observationScope ? (
             <p role="status" style={{ fontSize: 'var(--text-sm)', color: NAVY, margin: '0 0 var(--space-2)' }}>
               Menampilkan pertanyaan untuk dokumen yang Anda buka dari Ringkasan.

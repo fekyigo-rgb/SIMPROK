@@ -13,7 +13,7 @@ import {
   ReviewStatus,
 } from '@prisma/client';
 import { identicalQuestionKey } from '../../resource-catalog/identical-question-key';
-import { neutralQuestionOfHandBuiltLine } from '../../resource-catalog/resource-observation.service';
+import { neutralQuestionOfHandBuiltLine, observedSourceRowKey, ResourceObservationService } from '../../resource-catalog/resource-observation.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AhspAuditService } from './ahsp-audit.service';
 import { AhspSnapshotService } from './ahsp-snapshot.service';
@@ -51,6 +51,7 @@ describe('AhspService', () => {
   };
   let unitLookup: { searchUnits: jest.Mock };
   let units: { resolve: jest.Mock };
+  let decisions: { decidedIdentityForSourceRows: jest.Mock };
 
   const ahsp = {
     id: 'ahsp-1',
@@ -134,6 +135,7 @@ describe('AhspService', () => {
       }),
     };
 
+    decisions = { decidedIdentityForSourceRows: jest.fn().mockResolvedValue(new Map()) };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AhspService,
@@ -156,6 +158,10 @@ describe('AhspService', () => {
         {
           provide: UnitKernelService,
           useValue: units,
+        },
+        {
+          provide: ResourceObservationService,
+          useValue: decisions,
         },
       ],
     }).compile();
@@ -1256,4 +1262,87 @@ describe('AhspService', () => {
     );
     expect(prisma.unitDefinition.findMany).not.toHaveBeenCalled();
   });
+  it('Detail AHSP consumes saved lawful source-row decisions and retains immutable source fields', async () => {
+    const saved = {
+      id: 'saved-line', resourceId: 'FALT BED TRUCK 4 TON',
+      resourceType: 'EQUIPMENT', baseUnit: 'jam',
+      coefficient: new Prisma.Decimal('0.125'),
+      sourceSha256: 'A'.repeat(64), sheetName: 'AHSP', sourceRowNumber: 88,
+      rawName: 'FALT BED TRUCK 4 TON', rawCode: 'E11', rawUnit: 'jam',
+      parserContractVersion: 'reader-v1',
+    };
+    const catalogId = '99ad6a3c-62c5-4625-a8fa-c176b041ee6a';
+    prisma.aHSP.findFirst.mockResolvedValue({
+      ...ahsp, versions: [{ id: 'version-immutable', resources: [saved] }],
+    });
+    decisions.decidedIdentityForSourceRows.mockImplementation(async (workspace: string, rows: unknown[]) => {
+      expect(workspace).toBe(ahsp.workspaceId);
+      expect(rows).toEqual([{
+        sourceSha256: saved.sourceSha256, sheetName: saved.sheetName,
+        sourceRowNumber: saved.sourceRowNumber, rawName: saved.rawName,
+        resourceType: saved.resourceType, rawCode: saved.rawCode,
+        rawUnit: saved.rawUnit, parserContractVersion: saved.parserContractVersion,
+      }]);
+      return new Map([[observedSourceRowKey(saved), catalogId]]);
+    });
+    prisma.resourceCatalog.findMany.mockResolvedValue([{ id: catalogId, name: 'FLAT BED TRUCK 4 TON' }]);
+    const result = await service.getById(ahsp.id, ahsp.workspaceId);
+    expect(result.versions[0].resources[0]).toMatchObject({
+      resourceId: saved.resourceId, rawName: saved.rawName, rawCode: saved.rawCode,
+      rawUnit: saved.rawUnit, coefficient: saved.coefficient,
+      resourceName: 'FLAT BED TRUCK 4 TON',
+      resolvedCatalogName: 'FLAT BED TRUCK 4 TON',
+    });
+    expect(prisma.resourceCatalog.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        id: { in: [catalogId] }, status: 'ACTIVE',
+        OR: [{ workspaceId: ahsp.workspaceId }, { workspaceId: null }],
+      }),
+    }));
+    expect(prisma.aHSP.update).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('Detail AHSP does not invent a match after the existing kernel refuses replay', async () => {
+    const saved = {
+      id: 'crane-line', resourceId: 'CRANE ON TRACK 10-15 TON',
+      resourceType: 'EQUIPMENT',
+      sourceSha256: 'B'.repeat(64), sheetName: 'AHSP', sourceRowNumber: 92,
+      rawName: 'CRANE ON TRACK 10-15 TON',
+      rawCode: 'E07', rawUnit: 'jam', parserContractVersion: 'reader-v1',
+    };
+    prisma.aHSP.findFirst.mockResolvedValue({
+      ...ahsp, versions: [{ id: 'version-immutable', resources: [saved] }],
+    });
+    decisions.decidedIdentityForSourceRows.mockResolvedValue(new Map());
+    const result = await service.getById(ahsp.id, ahsp.workspaceId);
+    expect(result.versions[0].resources[0]).toEqual(saved);
+    expect(prisma.resourceCatalog.findMany).not.toHaveBeenCalled();
+    expect(prisma.aHSP.update).not.toHaveBeenCalled();
+  });
+
+  it('Detail AHSP refuses cross-workspace access before reading source decisions', async () => {
+    prisma.aHSP.findFirst.mockResolvedValue({
+      ...ahsp, versions: [{ id: 'version-immutable', resources: [] }],
+    });
+    await expect(service.getById(ahsp.id, 'other-workspace')).rejects.toThrow(NotFoundException);
+    expect(decisions.decidedIdentityForSourceRows).not.toHaveBeenCalled();
+  });
+
+  it('Detail AHSP refuses replay without exact source locator and declared facts', async () => {
+    const saved = {
+      resourceId: 'Pasir', resourceType: 'MATERIAL',
+      sourceSha256: 'C'.repeat(64), sheetName: null,
+      sourceRowNumber: 32, rawName: 'Pasir', rawCode: null,
+      rawUnit: 'm3', parserContractVersion: 'reader-v1',
+    };
+    prisma.aHSP.findFirst.mockResolvedValue({
+      ...ahsp, versions: [{ id: 'version-immutable', resources: [saved] }],
+    });
+    const result = await service.getById(ahsp.id, ahsp.workspaceId);
+    expect(result.versions[0].resources[0]).toEqual(saved);
+    expect(decisions.decidedIdentityForSourceRows).not.toHaveBeenCalled();
+  });
+
+
 });

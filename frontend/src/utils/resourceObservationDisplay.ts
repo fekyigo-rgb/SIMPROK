@@ -73,6 +73,8 @@ export const isConfirmableCandidate = (
 export interface CuratableObservationWire {
   id: string;
   rawName: string;
+  /** A correction is one observation's interpretation, not the Excel source. */
+  reviewedName?: string | null;
   rawCode?: string | null;
   rawUnit?: string | null;
   resourceType?: string | null;
@@ -706,6 +708,8 @@ export const groupIdenticalObservations = (
           );
     const question = [
       exactQuestion,
+      // Prevent one grouped curation decision from crossing corrected spellings.
+      JSON.stringify(observation.reviewedName ?? observation.rawName),
       candidateContext,
       JSON.stringify([
         verdictWire?.status ?? null,

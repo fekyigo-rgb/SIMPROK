@@ -230,6 +230,16 @@ test("G6: a different spelling is never merged — the reader is shown what the 
   assert.deepEqual(groups.map((g) => g.view.title), ["Alat Bantu (Ls)", "alat bantu (Ls)"]);
 });
 
+test("RI-01: same raw name with different per-observation corrections never groups or propagates", () => {
+  const groups = groupIdenticalObservations([
+    obs({ id: "raw", rawName: "FALT BED TRUCK 4 TON", reviewedName: null }),
+    obs({ id: "corrected", rawName: "FALT BED TRUCK 4 TON", reviewedName: "FLAT BED TRUCK 4 TON" }),
+    obs({ id: "different", rawName: "FALT BED TRUCK 4 TON", reviewedName: "FLAT BED TRUCK 5 TON" }),
+  ]);
+  assert.equal(groups.length, 3);
+  assert.deepEqual(groups.map((group) => group.ids), [["raw"], ["corrected"], ["different"]]);
+});
+
 test("G7: a different proven unit is never merged, even when the words match exactly", () => {
   const groups = groupIdenticalObservations([
     obs({ id: "p" }),

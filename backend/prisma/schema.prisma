@@ -46,6 +46,7 @@ model Account {
   projectTimeZoneEvents                       ProjectTimeZoneEvent[]
   ahspResourceIdentityDecisions               AhspResourceIdentityDecision[]       @relation("AhspResourceIdentityDecisionActor")
   resourceIdentityQuestionDecisions           ResourceIdentityQuestionDecision[]   @relation("ResourceIdentityQuestionDecisionActor")
+  observedResourceNameReviews                 ObservedResourceNameReview[]          @relation("ObservedResourceNameReviewActor")
   ingestionConnectorsActingFor                IngestionConnector[]                 @relation("IngestionConnectorActsOnBehalfOf")
   /// Platform governance, as SUBJECT and as EXECUTOR — two distinct roles that
   /// must never collapse into one relation.
@@ -1736,13 +1737,43 @@ model ObservedResource {
   /// IQL-01 — governance events whose provenance is this observation. A
   /// relation only: no column on this table changes.
   identityQuestionDecisions ResourceIdentityQuestionDecision[]
+  /// Spelling interpretations are append-only events. They never replace the
+  /// original source spelling or become an identity decision by themselves.
+  nameReviews              ObservedResourceNameReview[]
 
   /// One import row is observed once. Nulls in provenance make hand-built rows
   /// distinct (Postgres NULL semantics), which is correct: only a real,
   /// fully-located source row dedupes on re-import.
   @@unique([workspaceId, sourceSha256, sheetName, sourceRowNumber, rawName, resourceType])
+  /// Composite target for tenant-bound name-review events.
+  @@unique([id, workspaceId], map: "observed_resources_id_workspace_key")
   @@index([workspaceId, status])
   @@map("observed_resources")
+}
+
+/// RI-01 STEP 3B — one human-reviewed spelling interpretation of ONE observed
+/// source resource. Original source facts remain on ObservedResource and are
+/// never rewritten. Every save appends the next version; PostgreSQL rejects
+/// UPDATE/DELETE and binds observation + workspace with a composite FK.
+model ObservedResourceNameReview {
+  id                     String   @id @default(uuid()) @db.Uuid
+  workspaceId            String   @db.Uuid
+  observationId          String   @db.Uuid
+  version                Int
+  reviewedName           String
+  actorAccountId         String   @db.Uuid
+  reason                 String   @db.Text
+  evidence               String   @db.Text
+  sourceFactsFingerprint String   @db.VarChar(64)
+  createdAt              DateTime @default(now())
+
+  observation ObservedResource @relation(fields: [observationId, workspaceId], references: [id, workspaceId], onDelete: Restrict, map: "observed_resource_name_reviews_observation_workspace_fkey")
+  actor       Account          @relation("ObservedResourceNameReviewActor", fields: [actorAccountId], references: [id], onDelete: Restrict)
+
+  @@unique([observationId, version], map: "observed_resource_name_reviews_observation_version_key")
+  @@index([workspaceId, observationId, version], map: "observed_name_reviews_workspace_observation_version_idx")
+  @@index([actorAccountId], map: "observed_name_reviews_actor_idx")
+  @@map("observed_resource_name_reviews")
 }
 
 /// OBSERVED = seen, not yet decided. RESOLVED_EXISTING = a human mapped it to an
