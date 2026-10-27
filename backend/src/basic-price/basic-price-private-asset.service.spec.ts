@@ -65,7 +65,7 @@ describe('BasicPricePrivateAssetService', () => {
 
   const makeTx = (overrides: { batch?: any; rows?: Array<{ id: string }> } = {}) => {
     const batch = overrides.batch === undefined ? baseBatch() : overrides.batch;
-    const rows = overrides.rows ?? [{ id: rowId }];
+    const rows = (overrides.rows ?? [{ id: rowId }]).map((row) => ({ ...row, version: 2 }));
     let queryCall = 0;
     tx = {
       $queryRaw: jest.fn().mockImplementation(() => {
@@ -92,6 +92,64 @@ describe('BasicPricePrivateAssetService', () => {
   beforeEach(() => {
     prisma = { $transaction: jest.fn() };
     service = new BasicPricePrivateAssetService(prisma as any);
+  });
+
+  describe('BP-C3 narrow selective private persistence (reuse canonical writer)', () => {
+    const other = '70000000-0000-4000-8000-000000000002';
+
+    it('persists ONLY the explicitly selected READY row and leaves another READY row untouched', async () => {
+      makeTx({ rows: [{ id: rowId }, { id: other }] });
+      const result = await service.keepBatchPrivate({ batchId, actor, onlyRowId: rowId, expectedRowVersion: 2 });
+      expect(result.createdCount).toBe(1);
+      expect(tx.basicPrice.create).toHaveBeenCalledTimes(1);
+      expect(tx.basicPrice.create.mock.calls[0][0].data.sourceImportRowId).toBe(rowId);
+      expect(tx.basicPriceImportRow.findUniqueOrThrow).toHaveBeenCalledTimes(1);
+      expect(tx.basicPriceImportRow.findUniqueOrThrow).toHaveBeenCalledWith({ where: { id: rowId } });
+    });
+
+    it('rejects a selected row that is NOT READY in the owned batch instead of expanding the scope', async () => {
+      makeTx({ rows: [{ id: rowId }] });
+      await expect(service.keepBatchPrivate({ batchId, actor, onlyRowId: other, expectedRowVersion: 2 }))
+        .rejects.toThrow('PRIVATE_ROW_NOT_READY_IN_BATCH');
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses malformed selected row ID without touching any price', async () => {
+      makeTx();
+      await expect(service.keepBatchPrivate({ batchId, actor, onlyRowId: 'bad-id' }))
+        .rejects.toThrow('INVALID_PRIVATE_ROW_ID');
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    });
+
+    it('denies a stale selected row, and denies a missing version', async () => {
+      makeTx();
+      await expect(service.keepBatchPrivate({
+        batchId, actor, onlyRowId: rowId, expectedRowVersion: 1,
+      })).rejects.toThrow('ROW_VERSION_STALE');
+      makeTx(); // fresh transaction mock for the second independent request
+      await expect(service.keepBatchPrivate({
+        batchId, actor, onlyRowId: rowId,
+      })).rejects.toThrow('EXPECTED_PRIVATE_ROW_VERSION_REQUIRED');
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    });
+
+    it('preserves whole-batch behavior when no row scope was supplied', async () => {
+      makeTx({ rows: [{ id: rowId }, { id: other }] });
+      tx.basicPriceImportRow.findUniqueOrThrow.mockImplementation(({ where }: any) =>
+        Promise.resolve({ ...baseRow(), id: where.id }));
+      const result = await service.keepBatchPrivate({ batchId, actor });
+      expect(result.createdCount).toBe(2);
+      expect(tx.basicPrice.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('retains idempotence on an already-priced selected row', async () => {
+      makeTx({ rows: [{ id: rowId }, { id: other }] });
+      tx.basicPrice.findFirst.mockResolvedValue(createdRow());
+      const result = await service.keepBatchPrivate({ batchId, actor, onlyRowId: rowId, expectedRowVersion: 2 });
+      expect(result.createdCount).toBe(0);
+      expect(result.alreadyPrivateCount).toBe(1);
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('the ownership and provenance a private price is born with', () => {

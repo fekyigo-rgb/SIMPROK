@@ -538,6 +538,7 @@ export class BasicPriceImportController {
   async keepBatchPrivate(
     @Req() request: any,
     @Param('batchId') batchId: string,
+    @Body() body?: { onlyRowId?: string; expectedRowVersion?: number },
   ) {
     // Both halves of the identity come from the server: the workspace from
     // PermissionsGuard's resolved context, the account from the verified JWT.
@@ -547,7 +548,11 @@ export class BasicPriceImportController {
       request.workspaceContext,
       request.user?.id,
     );
-    return this.privateAssetService.keepBatchPrivate({ batchId, actor });
+    return this.privateAssetService.keepBatchPrivate({
+      batchId, actor,
+      onlyRowId: body?.onlyRowId,
+      expectedRowVersion: body?.expectedRowVersion,
+    });
   }
 
   /**

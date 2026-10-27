@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import {
   smartSaveBatch,
+  keepBasicPriceImportBatchPrivate,
   getBasicPriceImportBatch,
   updateBasicPriceImportBatch,
   rejectBasicPriceImportRow,
@@ -1036,6 +1037,36 @@ export function BasicPriceReviewPage() {
    * why presenting it as the only way out of this room was the defect, not the
    * gate itself.
    */
+  /** Exact single-row intent, never a hidden batch-wide Smart Save.
+   * The existing server writer rechecks ownership, READY, provenance and price context.
+   * No identity or monetary decision is delegated to the browser. */
+  const handleKeepSinglePrivate = async (row: BasicPriceImportRowSummary) => {
+    if (!batchId || row.status !== 'READY_FOR_SUBMISSION' ||
+        row.savedAsPrivatePrice || row.privateBasicPriceId) return;
+    if (!window.confirm(
+      `Simpan HANYA harga privat baris #${row.sourceRowNumber} — ${row.name} (Rp${row.proposedCanonicalPrice ?? 'sesuai sumber'})? Baris lain, termasuk M60, tidak akan disimpan oleh tindakan ini.`,
+    )) return;
+    setIsBusy(true);
+    setStatusMessage(`Memeriksa dan menyimpan hanya baris #${row.sourceRowNumber}...`);
+    try {
+      const saved = await keepBasicPriceImportBatchPrivate(batchId, row.id, row.version);
+      const message = saved.createdCount === 1
+        ? `Berhasil: satu harga privat baris #${row.sourceRowNumber} tersimpan. Baris lain tidak diproses.`
+        : saved.alreadyPrivateCount === 1
+          ? `Harga privat baris #${row.sourceRowNumber} sudah ada; tidak dibuat duplikat.`
+          : saved.heldRows.length
+            ? `Harga baris #${row.sourceRowNumber} ditahan karena ada harga sumber yang harus ditinjau. Tidak ada harga baru.`
+            : `Baris #${row.sourceRowNumber} belum menghasilkan harga baru. Periksa status dan bukti sumber.`;
+      setRowNotice({ rowId: row.id, text: message });
+      setStatusMessage(message);
+      await loadBatch(false);
+    } catch (error) {
+      setStatusMessage(smartSaveFailure(error));
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const handleSubmitBatch = async () => {
     if (!batchId) return;
     setIsBusy(true);
@@ -2129,6 +2160,16 @@ export function BasicPriceReviewPage() {
                         <button type="button" className="bp-btn bp-btn--danger-quiet" onClick={() => void handleReject(row)} disabled={isBusy} aria-disabled={isBusy}>Tolak baris harga ini</button>
                       </>
                     ) : <p className="bp-field__help">{rowStateLabel(row)}</p>}
+                    {row.status === 'READY_FOR_SUBMISSION' && !row.savedAsPrivatePrice && !row.privateBasicPriceId ? (
+                      <div className="bp-field" aria-label={`Simpan Privat satu baris #${row.sourceRowNumber}`}>
+                        <button type="button" className="bp-btn bp-btn--primary"
+                          disabled={isBusy}
+                          onClick={() => void handleKeepSinglePrivate(row)}>
+                          Simpan Privat baris ini saja
+                        </button>
+                        <span className="bp-field__help">Hanya baris ini. Tidak menerima kandidat otomatis dan tidak menyimpan M60/baris lain.</span>
+                      </div>
+                    ) : null}
                     {(row.status === 'REJECTED' || row.status === 'READY_FOR_SUBMISSION') &&
                       !row.savedAsPrivatePrice && !row.privateBasicPriceId ? (
                       <div className="bp-field" aria-label={`Koreksi keputusan baris ${row.sourceRowNumber}`}>

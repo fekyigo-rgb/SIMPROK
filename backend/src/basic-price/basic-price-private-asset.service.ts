@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   Injectable,
   NotFoundException,
@@ -448,8 +449,12 @@ export class BasicPricePrivateAssetService {
   async keepBatchPrivate(params: {
     batchId: string;
     actor: TrustedBasicPriceActor;
+    /** Optional exact user-selected READY import row. Absent = existing whole-batch behavior. */
+    onlyRowId?: string;
+    /** Must equal the locked row version for a single-row decision. */
+    expectedRowVersion?: number;
   }): Promise<KeepBatchPrivateResult> {
-    const { batchId, actor } = params;
+    const { batchId, actor, onlyRowId, expectedRowVersion } = params;
 
     return this.prisma.$transaction(
       async (tx) => {
@@ -518,21 +523,42 @@ export class BasicPricePrivateAssetService {
         // used to check them inline — so every existing caller still sees the
         // same code for the same batch. What changed is that a user can now be
         // TOLD the reason before acting instead of meeting a dead button.
-        const readyRows = await tx.$queryRaw<Array<{ id: string }>>(
-          Prisma.sql`SELECT "id" FROM "basic_price_import_rows"
+        if (onlyRowId !== undefined &&
+            (typeof onlyRowId !== 'string' ||
+             !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(onlyRowId))) {
+          throw new BadRequestException('INVALID_PRIVATE_ROW_ID');
+        }
+        if (onlyRowId !== undefined &&
+            (!Number.isSafeInteger(expectedRowVersion) || (expectedRowVersion as number) < 0)) {
+          throw new BadRequestException('EXPECTED_PRIVATE_ROW_VERSION_REQUIRED');
+        }
+        const readyRows = await tx.$queryRaw<Array<{ id: string; version: number }>>(
+          Prisma.sql`SELECT "id", "version" FROM "basic_price_import_rows"
                     WHERE "batchId" = ${batchId}::uuid
                       AND "status" = 'READY_FOR_SUBMISSION'
                     ORDER BY "sourceRowNumber" ASC
                     FOR UPDATE`,
         );
 
+        // Scope is validated against LOCKED READY rows in THIS already-authorized
+        // batch, not against client-provided catalog or financial facts.
+        // No matching row -> no write; never fall back to all READY rows.
+        if (onlyRowId !== undefined && !readyRows.some((row) => row.id === onlyRowId)) {
+          throw new ConflictException('PRIVATE_ROW_NOT_READY_IN_BATCH');
+        }
+        const selectedReadyRows = onlyRowId === undefined
+          ? readyRows
+          : readyRows.filter((row) => row.id === onlyRowId);
+        if (onlyRowId !== undefined && selectedReadyRows[0].version !== expectedRowVersion) {
+          throw new ConflictException('ROW_VERSION_STALE');
+        }
         const blocked = privateUseBlockReason({
           status: batch.status,
           effectiveDate: batch.effectiveDate,
           regionId: batch.regionId,
           sourceOrigin: batch.sourceOrigin,
           sourceType: batch.sourceType,
-          readyForSubmissionRows: readyRows.length,
+          readyForSubmissionRows: selectedReadyRows.length,
           // SAME THREE FACTS THE REVIEW GATE READS. Omitting them made the
           // writer skip REGION_SCOPE_COMPATIBILITY_UNCONFIRMED while the
           // review room refused — a private price could be minted under a
@@ -564,7 +590,7 @@ export class BasicPricePrivateAssetService {
         let alreadyPrivateCount = 0;
         const heldRows: Array<{ rowId: string; reasonCode: string }> = [];
 
-        for (const { id: rowId } of readyRows) {
+        for (const { id: rowId } of selectedReadyRows) {
           const existing = await tx.basicPrice.findFirst({
             where: { sourceImportRowId: rowId },
             select: PRIVATE_PRICE_SELECT,

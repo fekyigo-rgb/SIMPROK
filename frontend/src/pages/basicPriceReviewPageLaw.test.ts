@@ -227,10 +227,16 @@ test("HS-13b. the browser never sequences the two halves of one intent", () => {
     /acceptMachineProvenRows\(/,
     "the page must not call the binding half itself",
   );
+  // The whole-batch Smart Save must never be implemented as client-side
+  // accept + keep. The separately authorized single READY row is one writer
+  // request, with no accept-machine-proven step, so it is not this prohibited
+  // two-request orchestration.
+  const bulkHandler = page.match(/const handleKeepPrivate = async \(\) => \{[\s\S]*?\n  \};/)?.[0] ?? '';
+  assert.match(bulkHandler, /smartSaveBatch\(/);
   assert.doesNotMatch(
-    page,
+    bulkHandler,
     /keepBasicPriceImportBatchPrivate\(/,
-    "the page must not call the keeping half itself",
+    "the whole-batch door must not call the keeping half itself",
   );
 });
 
@@ -749,7 +755,18 @@ test("BP-C3 E11a UX: bulk refusal remains one EXPLICIT reviewer decision scoped 
 });
 
 
-test("BP-C3 E11a: old stored 4-Ton mapping is displayed as unproven history, not current identity", () => {
+test("BP-C3 isolated save door is explicit, READY-only and delegates to the existing canonical price writer", () => {
+  assert.match(page, /keepBasicPriceImportBatchPrivate,/);
+  assert.match(page, /const handleKeepSinglePrivate = async \(row: BasicPriceImportRowSummary\)/);
+  assert.match(page, /row\.status !== 'READY_FOR_SUBMISSION'/);
+  assert.match(page, /window\.confirm\(/);
+  assert.match(page, /keepBasicPriceImportBatchPrivate\(batchId, row\.id, row\.version\)/);
+  assert.match(renderable, /Simpan Privat baris ini saja/);
+  assert.match(renderable, /handleKeepSinglePrivate\(row\)/);
+  assert.match(renderable, /row\.status === 'READY_FOR_SUBMISSION' && !row\.savedAsPrivatePrice/);
+});
+
+test("BP-C3 E11a: old stored 4-Ton mapping is displayed as unproven history", () => {
   assert.match(page, /collisionReviewQuestion,/);
   assert.match(body, /const collisionLabel = collisionReviewQuestion\(row\);/);
   assert.match(renderable, /row\.status === 'NEEDS_REVIEW' \? 'Padanan katalog yang pernah dicatat \(belum terbukti cocok\): '/);

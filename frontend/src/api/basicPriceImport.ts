@@ -750,8 +750,14 @@ export async function correctPrivateKdn(
  */
 export async function keepBasicPriceImportBatchPrivate(
   batchId: string,
+  onlyRowId?: string,
+  expectedRowVersion?: number,
 ): Promise<KeepBatchPrivateResult> {
-  const response = await apiFetch(`/basic-price-imports/${batchId}/keep-private`, { method: 'POST' });
+  const response = await apiFetch(`/basic-price-imports/${batchId}/keep-private`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(onlyRowId ? { onlyRowId, expectedRowVersion } : {}),
+  });
   if (!response.ok) {
     throw new ImportRequestError(response.status, await response.text());
   }
