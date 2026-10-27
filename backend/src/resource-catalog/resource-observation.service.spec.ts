@@ -15,6 +15,7 @@ import {
 } from './resource-admission.service';
 import { selectionRefusal } from './resource-identity-resolution.kernel';
 import { identicalQuestionKey } from './identical-question-key';
+import { observedResourceSourceFactsFingerprint } from './observed-resource-name-review.service';
 
 /**
  * THE shared OBSERVED → HUMAN → CANONICAL lifecycle. Proves an unknown resource
@@ -60,6 +61,9 @@ describe('ResourceObservationService', () => {
             Promise.resolve({ ...OBSERVATION, ...data }),
           ),
       },
+      observedResourceNameReview: {
+        findMany: jest.fn().mockResolvedValue([]),
+      },
       resourceCatalog: {
         findFirst: jest.fn().mockResolvedValue({ id: 'cat-existing' }),
       },
@@ -68,6 +72,7 @@ describe('ResourceObservationService', () => {
           .fn()
           .mockResolvedValue({ id: 'unit-m3', code: 'M3', isActive: true }),
       },
+      $executeRaw: jest.fn().mockResolvedValue(1),
       $transaction: (fn: any) => fn(prisma),
     };
     admission = {
@@ -471,6 +476,12 @@ describe('ResourceObservationService', () => {
       actorAccountId: 'acct-1',
       reason: 'same as our aggregate',
     });
+    // The pending spelling event and this identity choice share a per-row
+    // transaction lock, acquired BEFORE reading the current source/review.
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.observedResource.findFirst.mock.invocationCallOrder[0],
+    );
     expect(prisma.resourceCatalog.findFirst).toHaveBeenCalled();
     expect(prisma.observedResource.update).toHaveBeenCalledTimes(1);
     expect(updated).toMatchObject({
@@ -478,6 +489,56 @@ describe('ResourceObservationService', () => {
       resolvedResourceCatalogId: 'cat-existing',
       decidedByAccountId: 'acct-1',
     });
+    expect(admission.admitObservedResource).not.toHaveBeenCalled();
+  });
+
+  it('D: re-proves an existing selection with the latest reviewed spelling, without minting', async () => {
+    const misspelled = {
+      ...OBSERVATION,
+      rawName: 'FALT BED TRUCK 4 TON',
+      rawCode: 'E-04',
+      rawUnit: 'Jam',
+      resourceType: 'EQUIPMENT',
+    };
+    prisma.observedResource.findFirst.mockResolvedValue({
+      ...misspelled,
+      nameReviews: [
+        {
+          reviewedName: 'FLAT BED TRUCK 4 TON',
+          sourceFactsFingerprint:
+            observedResourceSourceFactsFingerprint(misspelled),
+        },
+      ],
+    });
+    identity.resolve.mockResolvedValue({
+      status: 'NEEDS_REVIEW',
+      authority: 'EVIDENCE_CANDIDATE',
+      resolvedResourceCatalogId: null,
+      candidates: [
+        {
+          resourceCatalogId: 'cat-existing',
+          name: 'FLAT BED TRUCK 4 TON',
+          identityBasis: 'RECORDED_FACT',
+        },
+      ],
+      reasonCodes: ['STRONG_CANDIDATE_NEEDS_REVIEW'],
+    });
+
+    await service.curateExisting({
+      workspaceId: 'ws-1',
+      observationId: 'obs-1',
+      selectedResourceCatalogId: 'cat-existing',
+      actorAccountId: 'acct-1',
+    });
+
+    expect(identity.resolve).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        rawName: 'FLAT BED TRUCK 4 TON',
+        resourceType: 'EQUIPMENT',
+      }),
+      expect.anything(),
+    );
     expect(admission.admitObservedResource).not.toHaveBeenCalled();
   });
 
@@ -733,6 +794,10 @@ describe('ResourceObservationService', () => {
     // M3 — a canonical code with a context-free self-alias resolves either
     // way — but the question is no longer asked with less than SIMPROK knows.
     expect(unitKernel.resolve).toHaveBeenCalledWith('M3', 'M3', undefined, 'MATERIAL');
+    expect(prisma.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(prisma.$executeRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      prisma.observedResource.findFirst.mock.invocationCallOrder[0],
+    );
     expect(admission.admitObservedResource).toHaveBeenCalledTimes(1);
     const admitArgs = admission.admitObservedResource.mock.calls[0][1];
     expect(admitArgs).toMatchObject({
@@ -750,6 +815,42 @@ describe('ResourceObservationService', () => {
       status: 'ADMITTED_NEW',
       resolvedResourceCatalogId: 'cat-new',
     });
+  });
+
+  it('E: passes the latest reviewed spelling as canonicalName to the existing admission authority', async () => {
+    const misspelled = {
+      ...OBSERVATION,
+      rawName: 'FALT BED TRUCK 4 TON',
+      rawCode: 'E-04',
+      rawUnit: 'Jam',
+      resourceType: 'EQUIPMENT',
+    };
+    prisma.observedResource.findFirst.mockResolvedValue({
+      ...misspelled,
+      nameReviews: [
+        {
+          reviewedName: 'FLAT BED TRUCK 4 TON',
+          sourceFactsFingerprint:
+            observedResourceSourceFactsFingerprint(misspelled),
+        },
+      ],
+    });
+
+    await service.curateNew({
+      workspaceId: 'ws-1',
+      observationId: 'obs-1',
+      unitDefinitionId: 'unit-m3',
+      actorAccountId: 'acct-1',
+    });
+
+    expect(admission.admitObservedResource).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        rawName: 'FALT BED TRUCK 4 TON',
+        canonicalName: 'FLAT BED TRUCK 4 TON',
+        resourceType: 'EQUIPMENT',
+      }),
+    );
   });
 
   it('E: curateNew fails closed if the identity turns out to still be known', async () => {
@@ -1096,6 +1197,42 @@ describe('ResourceObservationService', () => {
           asked(over),
         ]);
         expect(decided.size).toBe(0);
+      });
+
+      it('RI-01 3B: readthrough re-proves reviewed spelling, keeping the RAW source locator unchanged', async () => {
+        const raw = asked({
+          rawName: 'FALT BED TRUCK 4 TON',
+          rawCode: 'E-04',
+          rawUnit: 'Jam',
+          resourceType: 'EQUIPMENT',
+        });
+        const source = settledRow(raw);
+        const fingerprint = observedResourceSourceFactsFingerprint(source);
+        findMany.mockResolvedValue([
+          {
+            ...source,
+            nameReviews: [{
+              reviewedName: 'FLAT BED TRUCK 4 TON',
+              sourceFactsFingerprint: fingerprint,
+            }],
+          },
+        ]);
+        resolve.mockResolvedValue({
+          ...confirmableToday,
+          status: 'RESOLVED',
+          resolvedResourceCatalogId: 'cat-timbunan',
+        });
+        const result = await reader().decidedIdentityForSourceRows('ws-1', [raw]);
+        expect(result.get(observedSourceRowKey(raw))).toBe('cat-timbunan');
+        expect(resolve).toHaveBeenCalledWith(
+          expect.anything(),
+          expect.objectContaining({
+            rawName: 'FLAT BED TRUCK 4 TON',
+            rawCode: 'E-04',
+            rawUnit: 'Jam',
+            resourceType: 'EQUIPMENT',
+          }),
+        );
       });
 
       it('F1: when the machine proves it by itself, that is its own answer', async () => {

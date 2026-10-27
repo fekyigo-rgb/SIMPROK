@@ -35,6 +35,8 @@ describe('ResourceObservationController — permission boundary', () => {
     'list',
     'curateExisting',
     'curateNew',
+    'readNameReviews',
+    'appendNameReview',
     'supersedeQuestion',
     'revokeQuestion',
     'correctCatalogName',
@@ -51,6 +53,8 @@ describe('ResourceObservationController — permission boundary', () => {
     const controller = new ResourceObservationController(
       { listQuestions } as never,
       { resolve } as never,
+      {} as never,
+      {} as never,
     );
     const request = {
       user: { id: 'acct-verifier' },
@@ -78,6 +82,42 @@ describe('ResourceObservationController — permission boundary', () => {
     await controller.listQuestions(request);
     expect(listQuestions).toHaveBeenLastCalledWith('ws-A', 'acct-verifier', {
       mayDecide: false,
+    });
+  });
+
+  it('binds name-review read/write to guard-derived workspace and actor only', async () => {
+    const read = jest.fn().mockResolvedValue({ currentVersion: 0 });
+    const append = jest.fn().mockResolvedValue({ version: 1 });
+    const controller = new ResourceObservationController(
+      {} as never,
+      {} as never,
+      {} as never,
+      { read, append } as never,
+    );
+    const request = {
+      user: { id: 'acct-curator' },
+      workspaceContext: { workspaceId: 'ws-A' },
+    };
+
+    await controller.readNameReviews(request, 'obs-1');
+    expect(read).toHaveBeenCalledWith('ws-A', 'obs-1');
+
+    await controller.appendNameReview(request, 'obs-1', {
+      expectedVersion: 0,
+      sourceFactsFingerprint: 'a'.repeat(64),
+      reviewedName: 'FLAT BED TRUCK 4 TON',
+      reason: 'Transposisi huruf.',
+      evidence: 'Judul sumber.',
+    });
+    expect(append).toHaveBeenCalledWith({
+      workspaceId: 'ws-A',
+      observationId: 'obs-1',
+      actorAccountId: 'acct-curator',
+      expectedVersion: 0,
+      expectedSourceFactsFingerprint: 'a'.repeat(64),
+      reviewedName: 'FLAT BED TRUCK 4 TON',
+      reason: 'Transposisi huruf.',
+      evidence: 'Judul sumber.',
     });
   });
 });

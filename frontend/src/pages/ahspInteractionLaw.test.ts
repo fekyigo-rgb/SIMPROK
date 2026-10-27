@@ -179,7 +179,9 @@ test("ACG-01.1 U1: the preview never calls a possibility a match — neutral for
 
 test("D: learning is offered or its absence explained from ONE display function", () => {
   assert.ok(importPage.includes("describeGroupLearning(members, view)"));
-  assert.ok(importPage.includes("learning.offered ? ("));
+  // Original offer remains available only for observations without row-local correction.
+  assert.ok(importPage.includes("const mayRemember = learning.offered && !correctedHere;"));
+  assert.ok(importPage.includes("mayRemember ? ("));
   assert.ok(importPage.includes("learning.unavailableLine"));
   assert.ok(!importPage.includes("groupCanRemember("));
 });

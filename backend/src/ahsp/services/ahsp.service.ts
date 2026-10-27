@@ -6,7 +6,7 @@ import { MethodType, LocationType, OwnershipType, ReviewStatus, Prisma, Resource
 import { AhspOwnershipPolicy, OwnershipViolationError, AhspEntity } from '../domain/ahsp-ownership.policy';
 import type { AhspIdentityRow } from '../document/ahsp-identity-classifier';
 import { identicalQuestionKey } from '../../resource-catalog/identical-question-key';
-import { neutralQuestionOfHandBuiltLine } from '../../resource-catalog/resource-observation.service';
+import { neutralQuestionOfHandBuiltLine, observedSourceRowKey, ResourceObservationService } from '../../resource-catalog/resource-observation.service';
 import { isResourceCatalogIdShape } from '../../resource-catalog/resource-identity-resolution.kernel';
 import { BasicPriceImportLookupService } from '../../basic-price/basic-price-import-lookup.service';
 import { UnitKernelService } from '../../unit-kernel/unit-kernel.service';
@@ -62,6 +62,7 @@ export class AhspService {
     private readonly snapshots: AhspSnapshotService,
     private readonly unitLookup: BasicPriceImportLookupService,
     private readonly units: UnitKernelService,
+    private readonly observations: ResourceObservationService,
   ) {}
 
   private runPolicy(action: (policy: AhspOwnershipPolicy) => void) {
@@ -430,17 +431,50 @@ export class AhspService {
    */
   private async withCatalogResourceNames<
     T extends {
+      workspaceId?: string | null;
       versions: Array<{
         resources: Array<{ resourceId: string } & Record<string, unknown>>;
       }>;
     },
   >(ahsp: T, workspaceId?: string): Promise<T> {
+    // Reuse the ALREADY PROVEN AHSP saved-decision readthrough (1c8a15b).
+    // This projects catalog names only. No second identity engine or admission.
+    type SourceFact = Parameters<ResourceObservationService['decidedIdentityForSourceRows']>[1][number];
+    const samePrivateWorkspace = Boolean(workspaceId && ahsp.workspaceId === workspaceId);
+    const sourceFactOf = (row: { resourceId: string } & Record<string, unknown>): SourceFact | null => {
+      if (!samePrivateWorkspace || isCatalogUuid(row.resourceId)) return null;
+      if (typeof row.sourceSha256 !== 'string' || !row.sourceSha256 ||
+          typeof row.sheetName !== 'string' || !row.sheetName ||
+          typeof row.sourceRowNumber !== 'number' || !Number.isInteger(row.sourceRowNumber) ||
+          typeof row.rawName !== 'string' || !row.rawName ||
+          typeof row.resourceType !== 'string') return null;
+      for (const field of ['rawCode', 'rawUnit', 'parserContractVersion'] as const) {
+        if (row[field] !== null && typeof row[field] !== 'string') return null;
+      }
+      return {
+        sourceSha256: row.sourceSha256,
+        sheetName: row.sheetName,
+        sourceRowNumber: row.sourceRowNumber,
+        rawName: row.rawName,
+        resourceType: row.resourceType,
+        rawCode: row.rawCode as string | null,
+        rawUnit: row.rawUnit as string | null,
+        parserContractVersion: row.parserContractVersion as string | null,
+      };
+    };
+    const sourceFacts = ahsp.versions.flatMap((version) =>
+      version.resources.map(sourceFactOf).filter((row): row is SourceFact => row !== null),
+    );
+    const chosen = sourceFacts.length > 0 && workspaceId
+      ? await this.observations.decidedIdentityForSourceRows(workspaceId, sourceFacts)
+      : new Map<string, string>();
     const ids = [
-      ...new Set(
-        ahsp.versions.flatMap((version) =>
+      ...new Set([
+        ...ahsp.versions.flatMap((version) =>
           version.resources.map((row) => row.resourceId).filter(isCatalogUuid),
         ),
-      ),
+        ...chosen.values(),
+      ]),
     ];
     const names = new Map<string, string>();
     if (ids.length > 0) {
@@ -502,10 +536,17 @@ export class AhspService {
           const resolvedCatalogName = question
             ? resolvedNames.get(identicalQuestionKey(question)) ?? null
             : null;
+          const sourceFact = sourceFactOf(row);
+          const selectedId = sourceFact
+            ? chosen.get(observedSourceRowKey(sourceFact)) ?? null
+            : null;
+          const sourceCatalogName = selectedId ? names.get(selectedId) ?? null : null;
           return {
             ...row,
-            resourceName: names.get(row.resourceId) ?? null,
-            resolvedCatalogName,
+            // Display-only projection: provenance, resourceId, coefficient,
+            // current price and immutable AHSP versions remain untouched.
+            resourceName: names.get(row.resourceId) ?? sourceCatalogName,
+            resolvedCatalogName: resolvedCatalogName ?? sourceCatalogName,
           };
         }),
       })),

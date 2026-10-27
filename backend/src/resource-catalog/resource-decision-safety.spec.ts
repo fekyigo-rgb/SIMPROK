@@ -533,6 +533,7 @@ describe('P-2 — admission proves the chosen unit against the source unit', () 
     const admit = jest.fn().mockResolvedValue({ id: 'cat-new' });
     const resolve = jest.fn();
     const tx: any = {
+      $executeRaw: jest.fn().mockResolvedValue(1),
       observedResource: {
         findFirst: jest.fn().mockResolvedValue(observationRow(over)),
         update: jest.fn().mockResolvedValue({ id: 'obs-1', status: 'ADMITTED_NEW' }),

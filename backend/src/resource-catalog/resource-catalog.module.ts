@@ -9,6 +9,7 @@ import { ResourceObservationController } from './resource-observation.controller
 import { GhxDecisionContextTokenService } from './ghx-decision-context-token.service';
 import { AhspImportService } from '../ahsp/services/ahsp-import.service';
 import { AhspAuditService } from '../ahsp/services/ahsp-audit.service';
+import { ObservedResourceNameReviewService } from './observed-resource-name-review.service';
 
 /**
  * The shared resource-catalog domain: one identity authority, one mint
@@ -24,6 +25,7 @@ import { AhspAuditService } from '../ahsp/services/ahsp-audit.service';
     ResourceIdentityResolutionService,
     ResourceAdmissionService,
     ResourceObservationService,
+    ObservedResourceNameReviewService,
     ResourceCatalogNameCorrectionService,
     // IQL-01 — the existing stateless signed-context service, second purpose.
     GhxDecisionContextTokenService,
@@ -37,6 +39,7 @@ import { AhspAuditService } from '../ahsp/services/ahsp-audit.service';
     ResourceIdentityResolutionService,
     ResourceAdmissionService,
     ResourceObservationService,
+    ObservedResourceNameReviewService,
   ],
 })
 export class ResourceCatalogModule {}
