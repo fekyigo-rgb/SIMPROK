@@ -1349,11 +1349,16 @@ export class BasicPriceImportService {
       resultingVersion: number;
     }>,
   ) {
-    // ONE FACT, TWO SHAPES. The count the action projection needs and the
-    // per-row flag the row label needs are the SAME truth, so it is derived
-    // once and never measured twice.
+    // ACTIONABLE means READY minus READY ALREADY SAVED, not every price ever
+    // saved from this batch. A previously kept row can later be SUBMISSION_CREATED;
+    // its price stays linked for readback but must not subtract from READY.
+    // Reuse the same per-row price map; no new query or persistence.
     const alreadyPrivateRows = privatePriceByRowId
-      ? privatePriceByRowId.size
+      ? rows.filter(
+          (row) =>
+            row.status === 'READY_FOR_SUBMISSION' &&
+            privatePriceByRowId.has(row.id),
+        ).length
       : undefined;
     const machineRows = rows.filter(
       (r) => !r.resolutionCompensations?.length && proposals?.get(r.id)?.identityPairProven === true,

@@ -807,6 +807,29 @@ describe('BasicPriceImportService', () => {
       prisma.basicPriceImportRow.findMany.mockResolvedValue([]);
     });
 
+    it('BP-C2 COUNT: a saved SUBMISSION_CREATED row must not reduce new READY prices to save', async () => {
+      prisma.basicPriceImportRow.findMany.mockResolvedValue([
+        { id: 'ready-saved', status: 'READY_FOR_SUBMISSION', sourceRowNumber: 1, rawResourceNameText: 'Already kept', reasonCodes: [] },
+        { id: 'ready-new-1', status: 'READY_FOR_SUBMISSION', sourceRowNumber: 2, rawResourceNameText: 'E11a', reasonCodes: [] },
+        { id: 'ready-new-2', status: 'READY_FOR_SUBMISSION', sourceRowNumber: 3, rawResourceNameText: 'M60', reasonCodes: [] },
+        { id: 'submitted-saved', status: 'SUBMISSION_CREATED', sourceRowNumber: 4, rawResourceNameText: 'Already submitted', reasonCodes: [] },
+      ]);
+      prisma.basicPrice.findMany.mockResolvedValue([
+        { id: 'price-a', sourceImportRowId: 'ready-saved' },
+        { id: 'price-b', sourceImportRowId: 'submitted-saved' },
+      ]);
+
+      const result = await service.getBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID);
+
+      expect(result.readyForSubmissionRows).toBe(3);
+      expect(result.alreadyPrivateRows).toBe(1);
+      expect(result.actions.privateUse.actionableRows).toBe(2);
+      // Per-row evidence must still say both saved prices exist, even the submitted one.
+      expect(result.rows.find((r) => r.id === 'submitted-saved')?.savedAsPrivatePrice).toBe(true);
+      expect(result.rows.find((r) => r.id === 'ready-saved')?.savedAsPrivatePrice).toBe(true);
+      expect(result.rows.find((r) => r.id === 'ready-new-1')?.savedAsPrivatePrice).toBe(false);
+    });
+
     it('positive: the uploader can read their own batch', async () => {
       const result = await service.getBatch(
         WORKSPACE_ID,
