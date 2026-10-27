@@ -32,7 +32,7 @@ import { BasicPriceJourneyStepper } from '../components/basic-price/BasicPriceJo
 import { ROW_TONE_CLASS, reviewCounters, rowTone } from '../utils/basicPriceJourney';
 import {
   batchStatusLabel,
-  collisionWarningLabel,
+  collisionReviewQuestion,
   completionBlockReason,
   formatBatchProgress,
   formatMachineFirstSummary,
@@ -1483,7 +1483,7 @@ export function BasicPriceReviewPage() {
           );
           const resourceProven = machinePickedResource(row) !== null;
           const unitProven = machinePickedUnit(row) !== null;
-          const collisionLabel = collisionWarningLabel(row.collisionType);
+          const collisionLabel = collisionReviewQuestion(row);
           // EVERY human-visible sentence of the machine block, derived once from
           // structured facts. The page prints these and composes none of its
           // own, so what the pure test asserts is what the reviewer reads.
@@ -1623,7 +1623,7 @@ export function BasicPriceReviewPage() {
                     <div className="bp-rowcard__editable-line">
                       <p className="bp-rowcard__source-name">{row.name}</p>
                       {row.canonicalResourceName && row.canonicalResourceName !== row.name ? (
-                        <p className="bp-rowcard__facts">Nama katalog tersimpan: <strong>{row.canonicalResourceName}</strong></p>
+                        <p className="bp-rowcard__facts">{row.status === 'NEEDS_REVIEW' ? 'Padanan katalog yang pernah dicatat (belum terbukti cocok): ' : 'Nama katalog tersimpan: '}<strong>{row.canonicalResourceName}</strong></p>
                       ) : null}
                       {row.nomenclatureCorrectionName ? (
                         <p className="bp-rowcard__facts" role="status">Koreksi nomenklatur tercatat: <strong>{row.nomenclatureCorrectionName}</strong>. Ini catatan padanan baris, bukan penggantian nama katalog.</p>

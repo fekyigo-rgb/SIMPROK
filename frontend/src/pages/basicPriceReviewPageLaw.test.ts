@@ -747,3 +747,13 @@ test("BP-C3 E11a UX: bulk refusal remains one EXPLICIT reviewer decision scoped 
   assert.match(body, /await admitResourceForImportRow\(/);
   assert.doesNotMatch(body, /useEffect\([^)]*admitResourceForImportRow/);
 });
+
+
+test("BP-C3 E11a: old stored 4-Ton mapping is displayed as unproven history, not current identity", () => {
+  assert.match(page, /collisionReviewQuestion,/);
+  assert.match(body, /const collisionLabel = collisionReviewQuestion\(row\);/);
+  assert.match(renderable, /row\.status === 'NEEDS_REVIEW' \? 'Padanan katalog yang pernah dicatat \(belum terbukti cocok\): '/);
+  assert.match(renderable, /: 'Nama katalog tersimpan: '/);
+  assert.match(renderable, /\{row\.canonicalResourceName\}/);
+  assert.doesNotMatch(renderable, /useEffect\([^)]*handleAdmit/);
+});

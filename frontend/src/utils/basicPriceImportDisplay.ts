@@ -765,6 +765,15 @@ const COLLISION_LABELS: Record<BasicPriceImportRowSummary['collisionType'], stri
 export const collisionWarningLabel = (collisionType: BasicPriceImportRowSummary['collisionType']): string | null =>
   COLLISION_LABELS[collisionType];
 
+/** A collision marker is not proof that an unresolved source item shares an identity.
+ * Keep the raw collision unchanged for audit; only qualify the human-facing question. */
+export const collisionReviewQuestion = (
+  row: Pick<BasicPriceImportRowSummary, 'status' | 'collisionType'>,
+): string | null =>
+  row.status === 'NEEDS_REVIEW' && row.collisionType === 'SAME_IDENTITY_DIFFERENT_VALUE'
+    ? 'Ada indikasi benturan padanan atau harga. Kesamaan identitas belum terbukti; periksa kapasitas dan spesifikasi item.'
+    : collisionWarningLabel(row.collisionType);
+
 /**
  * Batch-level progress line for the review page header. Never claims
  * completeness while any row is still NEEDS_REVIEW.

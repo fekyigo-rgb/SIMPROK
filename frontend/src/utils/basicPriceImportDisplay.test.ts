@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   batchStatusLabel,
   collisionWarningLabel,
+  collisionReviewQuestion,
   formatBatchProgress,
   formatPrivateUseOutcome,
   lifecycleActionFailureMessage,
@@ -2034,4 +2035,14 @@ test("BP-UX-07: optional missing code remains in history, behind Mengapa", () =>
   }, true);
   assert.equal(proven.primary, null);
   assert.equal(proven.secondary.length, 2);
+});
+
+
+test("BP-C3 E11a: unresolved identity-price conflict never asserts same technical resource", () => {
+  const pending = collisionReviewQuestion({ status: 'NEEDS_REVIEW', collisionType: 'SAME_IDENTITY_DIFFERENT_VALUE' });
+  assert.match(pending ?? '', /Kesamaan identitas belum terbukti/);
+  assert.match(pending ?? '', /kapasitas dan spesifikasi/);
+  assert.doesNotMatch(pending ?? '', /Identitas sama, nilai BERBEDA/);
+  assert.equal(collisionReviewQuestion({ status: 'READY_FOR_SUBMISSION', collisionType: 'SAME_IDENTITY_DIFFERENT_VALUE' }), collisionWarningLabel('SAME_IDENTITY_DIFFERENT_VALUE'));
+  assert.equal(collisionReviewQuestion({ status: 'NEEDS_REVIEW', collisionType: 'NONE' }), null);
 });
