@@ -860,6 +860,9 @@ export function BasicPriceReviewPage() {
       }
       updateDraft(row.id, {
         admitOpen: true,
+        // Reuse the Unit Kernel verdict already proven for this exact source row.
+        // A manual user selection always wins; unknown units still need review.
+        unit: draft.unit ?? machinePickedUnit(row),
         admitResourceType:
           review.typeConfirmations.length === 1
             ? review.typeConfirmations[0].resourceType
@@ -2016,10 +2019,12 @@ export function BasicPriceReviewPage() {
                                   return next;
                                 });
                                 updateDraft(row.id, {
-                                admitOpen: true,
-                                admitResourceType: admissionReview.typeConfirmations.length === 1
-                                  ? admissionReview.typeConfirmations[0].resourceType
-                                  : draft.admitResourceType,
+                                  admitOpen: true,
+                                  // Safe default from the existing Unit Kernel; not a guessed unit.
+                                  unit: draft.unit ?? machinePickedUnit(row),
+                                  admitResourceType: admissionReview.typeConfirmations.length === 1
+                                    ? admissionReview.typeConfirmations[0].resourceType
+                                    : draft.admitResourceType,
                                 });
                               }}
                               disabled={isBusy}
@@ -2067,6 +2072,24 @@ export function BasicPriceReviewPage() {
                                     <span className="bp-field__label">Alasan koreksi satuan Excel (wajib)</span>
                                     <input className="bp-input" type="text" maxLength={900} value={draft.unitCorrectionReason} onChange={(event) => updateDraft(row.id, { unitCorrectionReason: event.target.value })} placeholder="Jelaskan bukti salah ketik atau interpretasi satuan" />
                                     <span className="bp-field__help">Excel: {row.unit ?? "tidak tercantum"}. Pilihan: {draft.unit.code}. Sumber asli tidak diubah.</span>
+                                  </label>
+                                ) : null}
+                                {refusalChoices.length > 1 ? (
+                                  <label className="bp-field__help">
+                                    <input
+                                      type="checkbox"
+                                      aria-label="Konfirmasi semua kandidat berbeda"
+                                      checked={refusalsConfirmed}
+                                      disabled={isBusy}
+                                      onChange={(event) => updateDraft(row.id, {
+                                        // This is ONE explicit reviewer decision on the server-listed
+                                        // candidates, never a machine refusal or a forced admission.
+                                        refusedCandidateIds: event.target.checked
+                                          ? [...admissionReview.humanRefusableCandidateIds]
+                                          : [],
+                                      })}
+                                    />{' '}
+                                    Saya sudah memeriksa seluruh {refusalChoices.length} kandidat di bawah dan memastikan semuanya berbeda dari item pada berkas.
                                   </label>
                                 ) : null}
                                 {refusalChoices.map((choice) => (

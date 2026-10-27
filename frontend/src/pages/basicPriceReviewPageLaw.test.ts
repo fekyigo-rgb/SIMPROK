@@ -726,3 +726,24 @@ test("GRADE-A: immutable mapping reason can be clarified and read back without a
   assert.match(page, /Simpan Klarifikasi Audit/u);
   assert.match(page, /loadBatch\(false, \(fresh\) =>/u);
 });
+
+test("BP-C3 E11a UX: reuse a verified Unit Kernel selection without inventing units", () => {
+  assert.equal(
+    (body.match(/unit: draft\.unit \?\? machinePickedUnit\(row\)/g) ?? []).length,
+    2,
+    "both admission entry points must prefill only the existing proven unit, while preserving a manual selection",
+  );
+  assert.match(body, /draft\.unitCorrectionReason\.trim\(\)\.length < 10/);
+  assert.match(body, /review\.typeConfirmations\.length === 1/);
+});
+
+test("BP-C3 E11a UX: bulk refusal remains one EXPLICIT reviewer decision scoped to current server candidates", () => {
+  assert.match(renderable, /aria-label="Konfirmasi semua kandidat berbeda"/);
+  assert.match(renderable, /refusalChoices\.length > 1/);
+  assert.match(body, /refusedCandidateIds: event\.target\.checked[\s\S]*?\.\.\.admissionReview\.humanRefusableCandidateIds/);
+  assert.match(renderable, /Saya sudah memeriksa seluruh \{refusalChoices\.length\} kandidat/);
+  assert.match(renderable, /refusalChoices\.map\(\(choice\) =>/);
+  assert.match(body, /reviewBindingFingerprint/);
+  assert.match(body, /await admitResourceForImportRow\(/);
+  assert.doesNotMatch(body, /useEffect\([^)]*admitResourceForImportRow/);
+});
