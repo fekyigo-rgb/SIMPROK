@@ -44,6 +44,7 @@ import {
   describeResourceDecisionSuccess,
   groupIdenticalObservations,
   isGovernedQuestionShown,
+  nextBusyNameReviewOwners,
   learningOutcomeOf,
   observationOccurrenceLine,
   previewCandidateNames,
@@ -282,7 +283,11 @@ export function AhspImportPage() {
   const observations = observationsRead.rows;
   const observationsPhase = observationsRead.phase;
   const [curationBusy, setCurationBusy] = useState<CurationBusy | null>(null);
-  const [nameReviewBusy, setNameReviewBusy] = useState(false);
+  // Track ownership by observation, not one shared Boolean: the first save to
+  // finish must not unlock curation while a second observation is still saving.
+  const nameReviewBusyOwners = useRef<Set<string>>(new Set());
+  const [nameReviewBusyCount, setNameReviewBusyCount] = useState(0);
+  const nameReviewBusy = nameReviewBusyCount > 0;
   const [nameReviewReceipt, setNameReviewReceipt] = useState<string | null>(null);
   // A ref, not state: a second press in the same tick must be refused before React re-renders.
   // It holds the action that owns the controls, and a refusal of the list takes them from it.
@@ -383,7 +388,8 @@ export function AhspImportPage() {
     setObservationScope(null);
     curationLock.current = null;
     setCurationBusy(null);
-    setNameReviewBusy(false);
+    nameReviewBusyOwners.current.clear();
+    setNameReviewBusyCount(0);
     setNameReviewReceipt(null);
   };
   const forgetImports = () => {
@@ -712,7 +718,7 @@ export function AhspImportPage() {
   }) => {
     const { group } = request;
     // Nothing may be decided from rows this reader has just been refused.
-    if (nameReviewBusy || curationLock.current !== null || request.ids.length === 0 || observationsPhase === 'UNAUTHORIZED') return;
+    if (nameReviewBusyOwners.current.size > 0 || curationLock.current !== null || request.ids.length === 0 || observationsPhase === 'UNAUTHORIZED') return;
     // The action this decision is. What it writes later is judged against it: a
     // receipt from another session, or for a list refused since it began, never
     // reaches the screen — not even once the list has come back.
@@ -1132,7 +1138,14 @@ export function AhspImportPage() {
           <ObservedNameReviewPanel
             key={observationId}
             observationId={observationId}
-            onBusyChange={setNameReviewBusy}
+            onBusyChange={(busy) => {
+              nameReviewBusyOwners.current = nextBusyNameReviewOwners(
+                nameReviewBusyOwners.current,
+                observationId,
+                busy,
+              );
+              setNameReviewBusyCount(nameReviewBusyOwners.current.size);
+            }}
             onSaved={async () => {
               await loadObservations('REFRESH');
               setNameReviewReceipt('Koreksi nama berhasil disimpan dan dibaca kembali. Daftar telah diminta diperbarui; keputusan identitas tetap terpisah.');

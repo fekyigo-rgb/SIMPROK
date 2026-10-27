@@ -70,6 +70,18 @@ export const isConfirmableCandidate = (
 };
 
 /** An open observation, enriched by GET /resource-observations for curation. */
+/** A save belongs to one observation. Finishing A must not unlock B. */
+export function nextBusyNameReviewOwners(
+  current: ReadonlySet<string>,
+  observationId: string,
+  busy: boolean,
+): Set<string> {
+  const owners = new Set(current);
+  if (busy) owners.add(observationId);
+  else owners.delete(observationId);
+  return owners;
+}
+
 export interface CuratableObservationWire {
   id: string;
   rawName: string;

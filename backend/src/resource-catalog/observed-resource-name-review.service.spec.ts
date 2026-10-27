@@ -166,6 +166,57 @@ describe('ObservedResourceNameReviewService', () => {
     }
   });
 
+  it('RI01 P1: refuses material family/type/spec substitutions disguised as one-character typos', () => {
+    for (const [rawName, reviewedName] of [
+      ['PIPA PVC', 'PIPA CPVC'],
+      ['PIPA CPVC', 'PIPA PVC'],
+      ['PIPA PE', 'PIPA PEX'],
+      ['PIPA PEX', 'PIPA PE'],
+      ['PIPA PPR', 'PIPA PRP'],
+      ['PIPA PPRC', 'PIPA PRPC'],
+      ['PIPA HDPE', 'PIPA HDPEE'],
+      ['BETON MUTU K250', 'BETON MUTU K350'],
+      ['PIPA PVC 4 INCH', 'PIPA CPVC 4 INCH'],
+    ]) {
+      expect(() => assertSpellingOnlyNameReview(rawName, reviewedName)).toThrow(
+        BadRequestException,
+      );
+    }
+  });
+
+  it('RI01 P1: retains bounded legitimate source spelling reviews', () => {
+    expect(() => assertSpellingOnlyNameReview(
+      'FALT BED TRUCK 4 TON',
+      'FLAT BED TRUCK 4 TON',
+    )).not.toThrow();
+    expect(() => assertSpellingOnlyNameReview(
+      'BATU SUNGAI KUARSA SINTETIKK',
+      'BATU SUNGAI KUARSA SINTETIK',
+    )).not.toThrow();
+    // No semantics can be assumed for arbitrary insertion/deletion.
+    expect(() => assertSpellingOnlyNameReview(
+      'SEMEN PORTLAND',
+      'SEMEN PORTLAD',
+    )).toThrow(BadRequestException);
+  });
+
+  it('RI01 P1: a rejected technical substitution never appends a review or changes identity', async () => {
+    const raw = {
+      ...observation,
+      rawName: 'PIPA PVC',
+      resourceType: 'MATERIAL',
+      rawUnit: 'm',
+    };
+    prisma.observedResource.findFirst.mockResolvedValue(raw);
+    const fp = observedResourceSourceFactsFingerprint(raw);
+    await expect(append({
+      reviewedName: 'PIPA CPVC',
+      expectedSourceFactsFingerprint: fp,
+    })).rejects.toThrow(BadRequestException);
+    expect(prisma.observedResourceNameReview.create).not.toHaveBeenCalled();
+    expect(prisma.observedResource.update).not.toHaveBeenCalled();
+  });
+
   it('projects only a current, revalidated latest name for curation', () => {
     expect(
       reviewedNameForCuration({

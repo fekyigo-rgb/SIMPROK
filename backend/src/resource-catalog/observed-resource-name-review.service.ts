@@ -117,32 +117,29 @@ function oneAdjacentTransposition(left: string, right: string): boolean {
 function oneInsertionOrDeletion(left: string, right: string): boolean {
   const shorter = left.length < right.length ? left : right;
   const longer = left.length < right.length ? right : left;
-  if (longer.length - shorter.length !== 1) return false;
-  let shortIndex = 0;
-  let longIndex = 0;
-  let skipped = false;
-  while (shortIndex < shorter.length && longIndex < longer.length) {
-    if (shorter[shortIndex] === longer[longIndex]) {
-      shortIndex += 1;
-      longIndex += 1;
-      continue;
-    }
-    if (skipped) return false;
-    skipped = true;
-    longIndex += 1;
-  }
-  return true;
+  // A one-character insertion is NOT, by itself, proof of a spelling error:
+  // PVC -> CPVC and PE -> PEX are different materials. Accept only the narrow
+  // repeated-final-letter typo of a substantial alphabetic word
+  // (SINTETIKK -> SINTETIK). All other length changes need the ordinary
+  // governed identity/specification decision rather than a spelling review.
+  if (shorter.length < 6 || longer.length !== shorter.length + 1) return false;
+  if (!/^[\p{L}]+$/u.test(shorter) || !/^[\p{L}]+$/u.test(longer)) return false;
+  return longer === shorter + shorter[shorter.length - 1];
 }
 
 function isNarrowSpellingChange(left: string, right: string): boolean {
   if (left === right) return true;
-  // Transposed characters (FALT -> FLAT) and one omitted/extra character are
-  // narrow spelling evidence. A same-length substitution is ambiguous with a
-  // different technical word (PUMP -> DUMP), so it fails closed.
-  return (
-    oneAdjacentTransposition(left, right) ||
-    oneInsertionOrDeletion(left, right)
-  );
+  // Short technical acronyms/models (PVC, PPR, etc.) must NOT be rearranged
+  // under a free-text spelling policy. FALT -> FLAT is a transposition in an
+  // ordinary word; consonant-only model codes remain outside this door.
+  const ordinaryWordTransposition =
+    left.length >= 4 &&
+    /[AEIOU]/u.test(left) &&
+    /[AEIOU]/u.test(right) &&
+    oneAdjacentTransposition(left, right);
+  // A generic insertion/deletion is ambiguous with a different material
+  // (PVC -> CPVC), even if the diff is only one character.
+  return ordinaryWordTransposition || oneInsertionOrDeletion(left, right);
 }
 
 /**

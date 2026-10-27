@@ -14,6 +14,7 @@ import {
   groupIdenticalObservations,
   learningOutcomeOf,
   observationOccurrenceLine,
+  nextBusyNameReviewOwners,
   previewCandidateMentions,
   previewCandidateNames,
   looksLikeInternalIdentifier,
@@ -27,6 +28,20 @@ import type {
  * The curation surface must speak human, show candidates by NAME, never
  * auto-select, and never leak a code or UUID.
  */
+
+test("RI01 P2: two concurrent review saves cannot unlock each other", () => {
+  let owners = new Set<string>();
+  owners = nextBusyNameReviewOwners(owners, "obs-A", true);
+  owners = nextBusyNameReviewOwners(owners, "obs-B", true);
+  assert.equal(owners.size, 2);
+  owners = nextBusyNameReviewOwners(owners, "obs-A", false);
+  assert.equal(owners.has("obs-B"), true);
+  assert.equal(owners.size > 0, true);
+  owners = nextBusyNameReviewOwners(owners, "obs-A", false);
+  assert.equal(owners.size, 1);
+  owners = nextBusyNameReviewOwners(owners, "obs-B", false);
+  assert.equal(owners.size, 0);
+});
 
 // A — the curator sees candidates by name, with the id kept for the action only.
 test("A: candidates are shown by name; the catalogue id rides along for the action, unseen", () => {
