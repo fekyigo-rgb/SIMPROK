@@ -533,12 +533,34 @@ export class BasicPriceImportController {
    * No verifier control, no publisher control, no review queue, no publication
    * queue is exposed here or anywhere else to a general user.
    */
+  /**
+   * Fail closed on older QA/runtime backends. A single-row action MUST NOT use
+   * the pre-existing batch endpoint: that endpoint has no idea which row the
+   * new UI intended and would legally persist every READY row.
+   * This is just a scoped doorway to the SAME canonical transactional writer.
+   */
+  @Post(':batchId/rows/:rowId/keep-private')
+  @Permissions(PERMISSIONS.BASIC_PRICE_SUBMIT)
+  async keepOneReadyRowPrivate(
+    @Req() request: any,
+    @Param('batchId') batchId: string,
+    @Param('rowId') rowId: string,
+    @Body() body?: { expectedRowVersion?: number },
+  ) {
+    const actor = await this.trustedActor.resolveActor(
+      request.workspaceContext, request.user?.id,
+    );
+    return this.privateAssetService.keepBatchPrivate({
+      batchId, actor, onlyRowId: rowId,
+      expectedRowVersion: body?.expectedRowVersion,
+    });
+  }
+
   @Post(':batchId/keep-private')
   @Permissions(PERMISSIONS.BASIC_PRICE_SUBMIT)
   async keepBatchPrivate(
     @Req() request: any,
     @Param('batchId') batchId: string,
-    @Body() body?: { onlyRowId?: string; expectedRowVersion?: number },
   ) {
     // Both halves of the identity come from the server: the workspace from
     // PermissionsGuard's resolved context, the account from the verified JWT.
@@ -548,11 +570,7 @@ export class BasicPriceImportController {
       request.workspaceContext,
       request.user?.id,
     );
-    return this.privateAssetService.keepBatchPrivate({
-      batchId, actor,
-      onlyRowId: body?.onlyRowId,
-      expectedRowVersion: body?.expectedRowVersion,
-    });
+    return this.privateAssetService.keepBatchPrivate({ batchId, actor });
   }
 
   /**

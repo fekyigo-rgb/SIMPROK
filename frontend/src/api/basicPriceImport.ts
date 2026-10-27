@@ -750,17 +750,31 @@ export async function correctPrivateKdn(
  */
 export async function keepBasicPriceImportBatchPrivate(
   batchId: string,
-  onlyRowId?: string,
-  expectedRowVersion?: number,
 ): Promise<KeepBatchPrivateResult> {
-  const response = await apiFetch(`/basic-price-imports/${batchId}/keep-private`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(onlyRowId ? { onlyRowId, expectedRowVersion } : {}),
-  });
+  const response = await apiFetch(`/basic-price-imports/${batchId}/keep-private`, { method: 'POST' });
   if (!response.ok) {
     throw new ImportRequestError(response.status, await response.text());
   }
+  return response.json() as Promise<KeepBatchPrivateResult>;
+}
+
+/** Separate fail-closed URL: an older backend cannot ignore a scope header/body
+ * and accidentally save every READY row. Calls the existing writer, never a new engine.
+ */
+export async function keepSingleBasicPriceImportRowPrivate(
+  batchId: string,
+  rowId: string,
+  expectedRowVersion: number,
+): Promise<KeepBatchPrivateResult> {
+  const response = await apiFetch(
+    `/basic-price-imports/${batchId}/rows/${rowId}/keep-private`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedRowVersion }),
+    },
+  );
+  if (!response.ok) throw new ImportRequestError(response.status, await response.text());
   return response.json() as Promise<KeepBatchPrivateResult>;
 }
 

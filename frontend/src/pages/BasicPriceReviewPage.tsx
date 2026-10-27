@@ -3,7 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import {
   smartSaveBatch,
-  keepBasicPriceImportBatchPrivate,
+  keepSingleBasicPriceImportRowPrivate,
   getBasicPriceImportBatch,
   updateBasicPriceImportBatch,
   rejectBasicPriceImportRow,
@@ -1049,7 +1049,7 @@ export function BasicPriceReviewPage() {
     setIsBusy(true);
     setStatusMessage(`Memeriksa dan menyimpan hanya baris #${row.sourceRowNumber}...`);
     try {
-      const saved = await keepBasicPriceImportBatchPrivate(batchId, row.id, row.version);
+      const saved = await keepSingleBasicPriceImportRowPrivate(batchId, row.id, row.version);
       const message = saved.createdCount === 1
         ? `Berhasil: satu harga privat baris #${row.sourceRowNumber} tersimpan. Baris lain tidak diproses.`
         : saved.alreadyPrivateCount === 1

@@ -756,11 +756,11 @@ test("BP-C3 E11a UX: bulk refusal remains one EXPLICIT reviewer decision scoped 
 
 
 test("BP-C3 isolated save door is explicit, READY-only and delegates to the existing canonical price writer", () => {
-  assert.match(page, /keepBasicPriceImportBatchPrivate,/);
+  assert.match(page, /keepSingleBasicPriceImportRowPrivate,/);
   assert.match(page, /const handleKeepSinglePrivate = async \(row: BasicPriceImportRowSummary\)/);
   assert.match(page, /row\.status !== 'READY_FOR_SUBMISSION'/);
   assert.match(page, /window\.confirm\(/);
-  assert.match(page, /keepBasicPriceImportBatchPrivate\(batchId, row\.id, row\.version\)/);
+  assert.match(page, /keepSingleBasicPriceImportRowPrivate\(batchId, row\.id, row\.version\)/);
   assert.match(renderable, /Simpan Privat baris ini saja/);
   assert.match(renderable, /handleKeepSinglePrivate\(row\)/);
   assert.match(renderable, /row\.status === 'READY_FOR_SUBMISSION' && !row\.savedAsPrivatePrice/);
@@ -773,4 +773,14 @@ test("BP-C3 E11a: old stored 4-Ton mapping is displayed as unproven history", ()
   assert.match(renderable, /: 'Nama katalog tersimpan: '/);
   assert.match(renderable, /\{row\.canonicalResourceName\}/);
   assert.doesNotMatch(renderable, /useEffect\([^)]*handleAdmit/);
+});
+
+test("BP-C3 selective save has a distinct fail-closed route; never send selection to old batch writer", () => {
+  const api = readFileSync("src/api/basicPriceImport.ts", "utf8");
+  assert.match(api, /export async function keepSingleBasicPriceImportRowPrivate\(/);
+  assert.match(api, /\/rows\/\$\{rowId\}\/keep-private/);
+  assert.match(api, /JSON\.stringify\(\{ expectedRowVersion \}\)/);
+  const legacy = api.match(/export async function keepBasicPriceImportBatchPrivate\([\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(legacy, /\/keep-private/);
+  assert.doesNotMatch(legacy, /onlyRowId|expectedRowVersion/);
 });
