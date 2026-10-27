@@ -391,7 +391,7 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
         update: jest.Mock;
         updateMany: jest.Mock;
       };
-      basicPriceProvenanceCorrection: { create: jest.Mock };
+      basicPriceProvenanceCorrection: { create: jest.Mock; findFirst: jest.Mock };
     };
 
     beforeEach(() => {
@@ -410,6 +410,7 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
         },
         basicPriceProvenanceCorrection: {
           create: jest.fn().mockResolvedValue({}),
+          findFirst: jest.fn().mockResolvedValue(null),
         },
       };
       const prisma = {

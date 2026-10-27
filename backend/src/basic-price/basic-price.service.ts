@@ -382,8 +382,8 @@ export class BasicPriceService {
             AND next."resourceId" = chain."resourceId"
             AND next."regionId" IS NOT DISTINCT FROM chain."regionId"
             AND next."regionCoverageSetId" IS NOT DISTINCT FROM chain."regionCoverageSetId"
-            AND next."sourceType" = chain."sourceType"
-            AND next."sourceOrigin" = chain."sourceOrigin"
+            -- sourceType/sourceOrigin classify the NEW evidence, not publisher
+            -- identity. The explicit birth audit owns the SAME source claim.
             AND audit.before->>'semantic' = 'NEW_OBSERVATION'
             AND audit.after->>'semantic' = 'NEW_OBSERVATION'
             AND audit.after->>'sameSourceIdentity' = 'true'
@@ -443,7 +443,9 @@ export class BasicPriceService {
           AND child."resourceId" = parent."resourceId"
           AND child."regionId" IS NOT DISTINCT FROM parent."regionId"
           AND child."regionCoverageSetId" IS NOT DISTINCT FROM parent."regionCoverageSetId"
-          AND child."sourceType" = parent."sourceType"
+          -- A genuine later field report may be MARKET_SURVEY even when the
+          -- source's earlier documentary evidence was VENDOR_QUOTE. Exact
+          -- same-source audit, not sourceType, establishes the link.
           AND child."effectiveDate" >= parent."effectiveDate"
           AND child."effectiveDate" <= ${asOf}
       ),

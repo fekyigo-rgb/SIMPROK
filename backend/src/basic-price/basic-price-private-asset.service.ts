@@ -1980,6 +1980,7 @@ export class BasicPricePrivateAssetService {
         resourceId: string;
         regionId: string | null;
         regionCoverageSetId: string | null;
+        effectiveDate: Date;
         value: Prisma.Decimal;
         kdnPercent: Prisma.Decimal | null;
         kdnEstablishment: string | null;
@@ -2019,7 +2020,26 @@ export class BasicPricePrivateAssetService {
     if (kdnValue !== null && params.kdnEstablishment === null) {
       throw new ConflictException('KDN_ESTABLISHMENT_REQUIRED');
     }
+    // A newer fact from the SAME source must actually be later. Equal-date
+    // contradictory readings need review, not an automatic monetary winner.
+    if (params.sameSourceIdentity && observationDate <= predecessor.effectiveDate) {
+      throw new ConflictException('SAME_SOURCE_OBSERVATION_DATE_NOT_LATER');
+    }
 
+    // Idempotency is identity of the SAME recorded observation, not equality
+    // of money. Two different publishers may lawfully quote the same amount.
+    const sameBirthAudit: Prisma.BasicPriceProvenanceCorrectionWhereInput = {
+      workspaceId: actor.workspaceId,
+      AND: [
+        { before: { path: ['semantic'], equals: 'NEW_OBSERVATION' } },
+        { before: { path: ['observedAfterBasicPriceId'], equals: predecessor.id } },
+        { after: { path: ['semantic'], equals: 'NEW_OBSERVATION' } },
+        { after: { path: ['sameSourceIdentity'], equals: params.sameSourceIdentity } },
+        ...(params.sourceIdentityName === null ? [] : [
+          { after: { path: ['sourceIdentityName'], equals: params.sourceIdentityName } },
+        ]),
+      ],
+    };
     const existing = await tx.basicPrice.findFirst({
       where: {
         workspaceId: actor.workspaceId,
@@ -2031,7 +2051,10 @@ export class BasicPricePrivateAssetService {
         value: new Prisma.Decimal(proposedValue),
         recordsNewObservation: true,
         reportedByAccountId: actor.accountId,
+        sourceType: params.sourceType,
+        sourceOrigin: params.sourceOrigin,
         kdnPercent: kdnValue,
+        provenanceCorrections: { some: sameBirthAudit },
       },
       select: { id: true, value: true, kdnPercent: true },
     });
@@ -2042,6 +2065,28 @@ export class BasicPricePrivateAssetService {
         kdnPercent: storedKdnOf(existing.kdnPercent),
         unchanged: true,
       };
+    }
+
+    // lockPrivatePredecessor() already holds this exact row FOR UPDATE for
+    // the entire transaction. A second SAME-SOURCE child cannot branch from
+    // that row, including when the first child was withdrawn. Callers must
+    // continue from the latest proven child or use the existing review path.
+    if (params.sameSourceIdentity) {
+      const child = await tx.basicPriceProvenanceCorrection.findFirst({
+        where: {
+          workspaceId: actor.workspaceId,
+          AND: [
+            { before: { path: ['semantic'], equals: 'NEW_OBSERVATION' } },
+            { before: { path: ['observedAfterBasicPriceId'], equals: predecessor.id } },
+            { after: { path: ['semantic'], equals: 'NEW_OBSERVATION' } },
+            { after: { path: ['sameSourceIdentity'], equals: true } },
+          ],
+        },
+        select: { basicPriceId: true },
+      });
+      if (child) {
+        throw new ConflictException('SAME_SOURCE_OBSERVATION_PREDECESSOR_STALE');
+      }
     }
 
     try {
@@ -2105,29 +2150,10 @@ export class BasicPricePrivateAssetService {
         error instanceof Prisma.PrismaClientKnownRequestError &&
         error.code === 'P2002'
       ) {
-        const again = await tx.basicPrice.findFirst({
-          where: {
-            workspaceId: actor.workspaceId,
-            assetScope: BasicPriceAssetScope.WORKSPACE_PRIVATE,
-            resourceId: predecessor.resourceId,
-            regionId: predecessor.regionId,
-            regionCoverageSetId: predecessor.regionCoverageSetId,
-            effectiveDate: observationDate,
-            value: new Prisma.Decimal(proposedValue),
-            recordsNewObservation: true,
-            reportedByAccountId: actor.accountId,
-            kdnPercent: kdnValue,
-          },
-          select: { id: true, value: true, kdnPercent: true },
-        });
-        if (again) {
-          return {
-            basicPriceId: again.id,
-            value: toDecimalString2(again.value),
-            kdnPercent: storedKdnOf(again.kdnPercent),
-            unchanged: true,
-          };
-        }
+        // After a PostgreSQL uniqueness error, the transaction is aborted.
+        // Querying AGAIN inside it produces 25P02, not an idempotent result.
+        // Exact retries are already resolved BEFORE the insert under the
+        // locked predecessor; any remaining uniqueness failure is a conflict.
         throw new ConflictException('NEW_OBSERVATION_CONFLICT');
       }
       throw error;
