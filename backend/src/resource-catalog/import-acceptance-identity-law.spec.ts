@@ -94,6 +94,7 @@ function inMemoryWorkspace(
     basicPriceImportRowResourceMapping: {
       findMany: jest.fn(() => Promise.resolve([])),
     },
+    observedResourceNameReview: { findMany: jest.fn(async () => []) },
     observedResource: {
       findMany: jest.fn(({ where }: { where: Where }) =>
         Promise.resolve(

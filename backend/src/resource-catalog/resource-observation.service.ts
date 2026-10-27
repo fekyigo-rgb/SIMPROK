@@ -61,6 +61,7 @@ import {
   planSupersede,
   planTeach,
 } from './identical-question-governance';
+import { lockObservedResourceNameReviewDecision, reviewedNameForCuration } from './observed-resource-name-review.service';
 
 /**
  * IQL-01 — the lock that serializes governance of ONE exact question. The same
@@ -726,6 +727,21 @@ export class ResourceObservationService {
   ) {
     const observations = await this.listOpen(workspaceId, scope);
     if (observations.length === 0) return [];
+    // One bounded lookup of row-local spelling decisions. No re-matching, no
+    // global alias propagation and no mutation of immutable Excel source facts.
+    const latestReviews = await this.prisma.observedResourceNameReview.findMany({
+      where: { workspaceId, observationId: { in: observations.map((row) => row.id) } },
+      orderBy: [{ observationId: 'asc' }, { version: 'desc' }],
+      distinct: ['observationId'],
+      select: {
+        observationId: true,
+        reviewedName: true,
+        sourceFactsFingerprint: true,
+      },
+    });
+    const reviewByObservation = new Map(
+      latestReviews.map((row) => [row.observationId, row]),
+    );
     const questionKeys = new Map(
       observations.map((observation) => [
         observation.id,
@@ -740,9 +756,16 @@ export class ResourceObservationService {
     );
     const rows = await Promise.all(
       observations.map(async (observation) => {
+        const nameReview = reviewByObservation.get(observation.id);
+        const reviewedName = nameReview
+          ? reviewedNameForCuration({
+              ...observation,
+              nameReviews: [nameReview],
+            })
+          : observation.rawName;
         const resolution = await this.identity.resolve(
           evidence,
-          this.referenceOf(observation),
+          this.referenceOf({ ...observation, rawName: reviewedName }),
         );
         // IMPORT-SEAM-06 — MACHINE WORK IS NOT RETURNED TO THE HUMAN. Asking a
         // person to "confirm" an identity the kernel already proved is the
@@ -830,6 +853,8 @@ export class ResourceObservationService {
         return {
           id: observation.id,
           rawName: observation.rawName,
+          // Presentation only, never replace the Excel's canonical source fact.
+          reviewedName: reviewedName === observation.rawName ? null : reviewedName,
           rawCode: observation.rawCode,
           rawUnit: observation.rawUnit,
           resourceType: observation.resourceType,
@@ -1125,6 +1150,14 @@ export class ResourceObservationService {
         parserContractVersion: true,
         resourceType: true,
         resolvedResourceCatalogId: true,
+        nameReviews: {
+          orderBy: { version: 'desc' },
+          take: 1,
+          select: {
+            reviewedName: true,
+            sourceFactsFingerprint: true,
+          },
+        },
       },
     });
     if (settled.length === 0) return decided;
@@ -1169,9 +1202,13 @@ export class ResourceObservationService {
     for (const [key, entry] of chosenByOccurrence) {
       if (entry.choices.size !== 1) continue;
       const chosen = [...entry.choices][0];
+      // The locator and stated source facts above remain RAW for exact replay.
+      // Only the Kernel's present-day identity examination sees the persisted
+      // row-local reviewed spelling that curation already used.
+      const reviewedName = reviewedNameForCuration(entry.row);
       const verdict = await this.identity.resolve(
         evidence,
-        this.referenceOf(entry.row),
+        this.referenceOf({ ...entry.row, rawName: reviewedName }),
       );
       // The machine may have come to prove it by itself since; that is its own
       // answer and this method has nothing to add to it.
@@ -1238,6 +1275,7 @@ export class ResourceObservationService {
           params.workspaceId,
           params.observationId,
         );
+        const reviewedName = reviewedNameForCuration(observation);
         const catalog = await tx.resourceCatalog.findFirst({
           where: {
             id: params.selectedResourceCatalogId,
@@ -1255,7 +1293,7 @@ export class ResourceObservationService {
         const refusal = await this.refusalOfSelection(
           tx,
           params.workspaceId,
-          this.referenceOf(observation),
+          this.referenceOf({ ...observation, rawName: reviewedName }),
           catalog.id,
         );
         if (refusal) throw new ConflictException(refusal);
@@ -1570,6 +1608,7 @@ export class ResourceObservationService {
           params.workspaceId,
           params.observationId,
         );
+        const reviewedName = reviewedNameForCuration(observation);
 
         const unitDefinition = await tx.unitDefinition.findFirst({
           where: { id: params.unitDefinitionId, isActive: true },
@@ -1699,6 +1738,9 @@ export class ResourceObservationService {
         const admissionInput: AdmitObservedResourceInput = {
           workspaceId: params.workspaceId,
           rawName: observation.rawName,
+          ...(reviewedName !== observation.rawName
+            ? { canonicalName: reviewedName }
+            : {}),
           rawCode: observation.rawCode,
           rawUnit: observation.rawUnit,
           resourceType: observation.resourceType,
@@ -2026,6 +2068,15 @@ export class ResourceObservationService {
             params.workspaceId,
             params.observationId,
           );
+          const reviewedName = reviewedNameForCuration(observation);
+          if (reviewedName !== observation.rawName) {
+            // A row-local spelling interpretation cannot become IQL memory or
+            // propagate to sibling observations. Curate the row without the
+            // "remember" option instead.
+            throw new ConflictException(
+              'NAME_REVIEW_CANNOT_TEACH_IDENTICAL_QUESTIONS',
+            );
+          }
           if (
             identicalQuestionKey(this.questionOf(observation)) !== questionKey
           ) {
@@ -2676,8 +2727,21 @@ export class ResourceObservationService {
     workspaceId: string,
     observationId: string,
   ) {
+    // Serialize identity curation with pending spelling saves for this exact
+    // observation. The same transaction owns this lock until its final decision.
+    await lockObservedResourceNameReviewDecision(tx, workspaceId, observationId);
     const observation = await tx.observedResource.findFirst({
       where: { id: observationId, workspaceId },
+      include: {
+        nameReviews: {
+          orderBy: { version: 'desc' },
+          take: 1,
+          select: {
+            reviewedName: true,
+            sourceFactsFingerprint: true,
+          },
+        },
+      },
     });
     if (!observation) throw new NotFoundException('OBSERVATION_NOT_FOUND');
     if (observation.status !== ObservedResourceStatus.OBSERVED) {
