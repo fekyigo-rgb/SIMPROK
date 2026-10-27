@@ -14,6 +14,7 @@ import {
   groupIdenticalObservations,
   learningOutcomeOf,
   observationOccurrenceLine,
+  nextBusyNameReviewOwners,
   previewCandidateMentions,
   previewCandidateNames,
   looksLikeInternalIdentifier,
@@ -27,6 +28,20 @@ import type {
  * The curation surface must speak human, show candidates by NAME, never
  * auto-select, and never leak a code or UUID.
  */
+
+test("RI01 P2: two concurrent review saves cannot unlock each other", () => {
+  let owners = new Set<string>();
+  owners = nextBusyNameReviewOwners(owners, "obs-A", true);
+  owners = nextBusyNameReviewOwners(owners, "obs-B", true);
+  assert.equal(owners.size, 2);
+  owners = nextBusyNameReviewOwners(owners, "obs-A", false);
+  assert.equal(owners.has("obs-B"), true);
+  assert.equal(owners.size > 0, true);
+  owners = nextBusyNameReviewOwners(owners, "obs-A", false);
+  assert.equal(owners.size, 1);
+  owners = nextBusyNameReviewOwners(owners, "obs-B", false);
+  assert.equal(owners.size, 0);
+});
 
 // A — the curator sees candidates by name, with the id kept for the action only.
 test("A: candidates are shown by name; the catalogue id rides along for the action, unseen", () => {
@@ -228,6 +243,16 @@ test("G6: a different spelling is never merged — the reader is shown what the 
   ]);
   assert.equal(groups.length, 2);
   assert.deepEqual(groups.map((g) => g.view.title), ["Alat Bantu (Ls)", "alat bantu (Ls)"]);
+});
+
+test("RI-01: same raw name with different per-observation corrections never groups or propagates", () => {
+  const groups = groupIdenticalObservations([
+    obs({ id: "raw", rawName: "FALT BED TRUCK 4 TON", reviewedName: null }),
+    obs({ id: "corrected", rawName: "FALT BED TRUCK 4 TON", reviewedName: "FLAT BED TRUCK 4 TON" }),
+    obs({ id: "different", rawName: "FALT BED TRUCK 4 TON", reviewedName: "FLAT BED TRUCK 5 TON" }),
+  ]);
+  assert.equal(groups.length, 3);
+  assert.deepEqual(groups.map((group) => group.ids), [["raw"], ["corrected"], ["different"]]);
 });
 
 test("G7: a different proven unit is never merged, even when the words match exactly", () => {

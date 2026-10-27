@@ -115,6 +115,7 @@ describe('IQL-01 governed exact-question learning — service lifecycle', () => 
     const prisma: any = {
       $transaction: (fn: (tx: unknown) => unknown) => fn(prisma),
       $executeRaw: jest.fn(async () => 0),
+      observedResourceNameReview: { findMany: jest.fn(async () => []) },
       observedResource: {
         findMany: jest.fn(async (args: any) =>
           observations.filter(

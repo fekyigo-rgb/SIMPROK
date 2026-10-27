@@ -224,6 +224,45 @@ describe('ResourceAdmissionService', () => {
     expect(tx.resourceCatalog.create).not.toHaveBeenCalled();
   });
 
+  it('rechecks a corrected canonical spelling and refuses to mint when it matches an existing identity', async () => {
+    identity.resolve
+      // Original source spelling remains exhausted and is never rewritten.
+      .mockResolvedValueOnce(EXHAUSTED)
+      // The reviewed spelling is a separate question under the same lock.
+      .mockResolvedValueOnce({
+        ...EXHAUSTED,
+        status: 'RESOLVED',
+        authority: 'EXACT_CANONICAL_MATCH',
+        resolvedResourceCatalogId: 'cat-flat-bed',
+        reasonCodes: ['EXACT_CANONICAL_MATCH'],
+      });
+
+    await expect(
+      service.admitObservedResource(
+        tx,
+        input({
+          rawName: 'FALT BED TRUCK 4 TON',
+          canonicalName: 'FLAT BED TRUCK 4 TON',
+          rawCode: 'E-04',
+          rawUnit: 'Jam',
+          resourceType: 'EQUIPMENT',
+          baseUnit: 'EQUIPMENT_HOUR',
+        }),
+      ),
+    ).rejects.toBeInstanceOf(ResourceAdmissionNotExhaustedError);
+    expect(identity.resolve).toHaveBeenNthCalledWith(
+      2,
+      expect.anything(),
+      expect.objectContaining({
+        rawName: 'FLAT BED TRUCK 4 TON',
+        resourceType: 'EQUIPMENT',
+      }),
+      tx,
+    );
+    expect(tx.resourceCatalog.create).not.toHaveBeenCalled();
+    expect(tx.resourceSourceIdentity.create).not.toHaveBeenCalled();
+  });
+
   it('refuses to mint without complete provenance — shared memory cannot be written half-located', async () => {
     await expect(
       service.admitObservedResource(

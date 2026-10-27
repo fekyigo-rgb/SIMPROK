@@ -20,6 +20,7 @@ import {
   AhspImportService,
   ahspSourceRowKey,
 } from '../ahsp/services/ahsp-import.service';
+import { ObservedResourceNameReviewService } from './observed-resource-name-review.service';
 
 /**
  * THE shared curation door for observed resources — the backend behind
@@ -48,6 +49,8 @@ export class ResourceObservationController {
      * observed-resource lifecycle.
      */
     private readonly ahspJournal: AhspImportService,
+    /** Append-only spelling interpretation; never an identity authority. */
+    private readonly nameReviews: ObservedResourceNameReviewService,
   ) {}
 
   private workspaceId(request: any): string {
@@ -267,6 +270,55 @@ export class ResourceObservationController {
       actorAccountId: this.actor(request),
       decisionContextToken: body?.decisionContextToken ?? null,
       reason: body?.reason ?? null,
+    });
+  }
+
+  /** Reloadable, append-only spelling-review history for one observation. */
+  @Get(':id/name-reviews')
+  @Permissions('AHSP_RESOURCE_IDENTITY_DECIDE')
+  async readNameReviews(
+    @Req() request: any,
+    @Param('id') id: string,
+  ) {
+    return this.nameReviews.read(this.workspaceId(request), id);
+  }
+
+  /**
+   * Save one spelling interpretation before identity curation. This does not
+   * update the observation and does not decide, mint, merge, teach or alias.
+   */
+  @Post(':id/name-reviews')
+  @Permissions('AHSP_RESOURCE_IDENTITY_DECIDE')
+  async appendNameReview(
+    @Req() request: any,
+    @Param('id') id: string,
+    @Body()
+    body: {
+      expectedVersion?: unknown;
+      sourceFactsFingerprint?: unknown;
+      reviewedName?: unknown;
+      reason?: unknown;
+      evidence?: unknown;
+    },
+  ) {
+    if (
+      typeof body?.expectedVersion !== 'number' ||
+      typeof body?.sourceFactsFingerprint !== 'string' ||
+      typeof body?.reviewedName !== 'string' ||
+      typeof body?.reason !== 'string' ||
+      typeof body?.evidence !== 'string'
+    ) {
+      throw new BadRequestException('NAME_REVIEW_INPUT_INVALID');
+    }
+    return this.nameReviews.append({
+      workspaceId: this.workspaceId(request),
+      observationId: id,
+      actorAccountId: this.actor(request),
+      expectedVersion: body.expectedVersion,
+      expectedSourceFactsFingerprint: body.sourceFactsFingerprint,
+      reviewedName: body.reviewedName,
+      reason: body.reason,
+      evidence: body.evidence,
     });
   }
 
