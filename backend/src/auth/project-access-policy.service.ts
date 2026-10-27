@@ -111,7 +111,7 @@ export class ProjectAccessPolicyService {
       revokedAt: null,
       ...(projectId ? { projectId } : {}),
       project: {
-        is: { workspaceId },
+        is: { workspaceId, deletedAt: null },
       },
     };
   }
@@ -161,10 +161,10 @@ export class ProjectAccessPolicyService {
   ): Promise<ProjectAccessResolution> {
     const project = await this.prisma.project.findUnique({
       where: { id: projectId },
-      select: { id: true, workspaceId: true, status: true },
+      select: { id: true, workspaceId: true, status: true, deletedAt: true },
     });
 
-    if (!project) {
+    if (!project || project.deletedAt != null) {
       return { kind: 'PROJECT_NOT_FOUND' };
     }
 

@@ -4,6 +4,7 @@ import { ArrowRight, MessageSquare, Search, SlidersHorizontal, Trash2 } from 'lu
 import { getProjectNoteSummary } from '../projectNotes';
 
 import { apiFetch } from '../utils/apiClient';
+import { useAuth } from '../contexts/AuthContext';
 import {
   buildDetailPath,
   buildRabPath,
@@ -26,6 +27,7 @@ interface ProjectItem {
   nilai: string;
   keterangan: string;
   rabLifecycle?: RabLifecycleProjection;
+  isPrimaryProjectOwner: boolean;
 }
 
 function mapProjectToItem(backendProject: Record<string, unknown>): ProjectItem {
@@ -40,6 +42,8 @@ function mapProjectToItem(backendProject: Record<string, unknown>): ProjectItem 
     nilai: budget,
     keterangan: (backendProject.description as string) || 'Belum ada keterangan',
     rabLifecycle: backendProject.rabLifecycle as RabLifecycleProjection | undefined,
+    isPrimaryProjectOwner: (backendProject.access as { isPrimaryAssignment?: boolean; roleInProject?: string } | undefined)?.isPrimaryAssignment === true &&
+      (backendProject.access as { roleInProject?: string } | undefined)?.roleInProject === 'OWNER',
   };
 }
 
@@ -62,6 +66,7 @@ const buildNotesPath = (id: string) => `/project/${id}/catatan`;
 
 export function ProjectListPage() {
   const navigate = useNavigate();
+  const { hasPermission } = useAuth();
   const [query, setQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<ProjectPresentationStatus | 'semua'>('semua');
   const [involvementFilter, setInvolvementFilter] = useState<UserInvolvement | 'semua'>('semua');
@@ -71,6 +76,8 @@ export function ProjectListPage() {
   const [error, setError] = useState<string | null>(null);
 
   const [retryCount, setRetryCount] = useState(0);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [deleteFeedback, setDeleteFeedback] = useState<string | null>(null);
 
   useEffect(() => {
     async function loadProjects() {
@@ -138,6 +145,37 @@ export function ProjectListPage() {
     navigate(buildNotesPath(id));
   };
 
+  const canDeleteDraft = (project: ProjectItem) =>
+    hasPermission('PROJECT_VIEW') && hasPermission('RAB_DRAFT_EDIT') &&
+    project.isPrimaryProjectOwner && project.rabLifecycle?.canEditDraft === true;
+
+  const deleteDraft = async (project: ProjectItem) => {
+    if (!canDeleteDraft(project) || deletingId) return;
+    if (!window.confirm(`Hapus draft proyek “${project.nama}” dari Proyek Saya?\n\nHanya draft yang belum terkunci/disetujui dapat dihapus. Data tidak dihapus secara fisik. Kode proyek tetap tercatat dan tidak otomatis dapat dipakai ulang.`)) return;
+    setDeletingId(project.id);
+    setDeleteFeedback(null);
+    try {
+      const response = await apiFetch(`/projects/${encodeURIComponent(project.id)}/draft`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ projectName: project.nama }),
+      });
+      if (!response.ok) {
+        if (response.status === 403) throw new Error('Anda tidak memiliki izin untuk menghapus draft proyek ini.');
+        if (response.status === 409) throw new Error('Draft berubah atau memiliki data resmi. Muat ulang untuk memeriksa statusnya.');
+        if (response.status === 404) throw new Error('Draft proyek tidak ditemukan atau tidak lagi dapat diakses.');
+        throw new Error('Draft belum dapat dihapus. Tidak ada perubahan pada daftar.');
+      }
+      setProjects((current) => current.filter((item) => item.id !== project.id));
+      setDeleteFeedback(`Draft “${project.nama}” telah dihapus dari daftar proyek.`);
+      setRetryCount((count) => count + 1);
+    } catch (error) {
+      setDeleteFeedback(error instanceof Error ? error.message : 'Draft belum dapat dihapus.');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
   const resetFilters = () => {
     setQuery('');
     setStatusFilter('semua');
@@ -200,6 +238,8 @@ export function ProjectListPage() {
           </button>
         </div>
       </header>
+
+      {deleteFeedback ? <p role="status" className="simprok-projects__feedback">{deleteFeedback}</p> : null}
 
       {loading ? (
         <div className="simprok-projects__empty">
@@ -289,9 +329,10 @@ export function ProjectListPage() {
                     <button
                       className="simprok-project-card__danger"
                       type="button"
-                      aria-label="Hapus draft - belum aktif"
-                      title="Hapus draft belum aktif"
-                      disabled
+                      aria-label={`Hapus draft ${project.nama}`}
+                      title={canDeleteDraft(project) ? 'Hapus draft' : 'Hanya owner berizin yang dapat menghapus draft yang masih dapat diedit'}
+                      disabled={!canDeleteDraft(project) || deletingId !== null}
+                      onClick={() => void deleteDraft(project)}
                     >
                       <Trash2 size={16} aria-hidden="true" />
                     </button>

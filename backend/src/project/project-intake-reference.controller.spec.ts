@@ -21,6 +21,7 @@ describe('ProjectIntakeReferenceController', () => {
       controller: new ProjectIntakeReferenceController(
         classification as any,
         regions as any,
+        { region: { findUnique: jest.fn() } } as any,
       ),
     };
   }

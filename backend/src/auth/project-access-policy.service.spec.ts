@@ -179,6 +179,7 @@ describe('ProjectAccessPolicyService', () => {
             project: {
               is: {
                 workspaceId: 'w1',
+                deletedAt: null,
               },
             },
           },
@@ -200,6 +201,7 @@ describe('ProjectAccessPolicyService', () => {
             project: {
               is: {
                 workspaceId: 'w1',
+                deletedAt: null,
               },
             },
           },
