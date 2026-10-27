@@ -1,3 +1,6 @@
+import { ForbiddenException } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { PermissionsGuard } from '../auth/guards/permissions.guard';
 import {
   PERMISSIONS_ALL_KEY,
   PERMISSIONS_KEY,
@@ -120,4 +123,89 @@ describe('ResourceObservationController — permission boundary', () => {
       evidence: 'Judul sumber.',
     });
   });
+});
+
+
+describe('BP-C3 shared catalog curation — real PermissionsGuard boundary (no database writes)', () => {
+  const guardedRoutes = [
+    'correctCatalogName',
+    'readNameReviews',
+    'appendNameReview',
+  ] as const;
+
+  const setupGuard = (
+    handler: (typeof guardedRoutes)[number],
+    workspaceId = 'workspace-a',
+  ) => {
+    const resolver = { resolve: jest.fn() };
+    const guard = new PermissionsGuard(
+      new Reflector(),
+      resolver as never,
+    );
+    const request: any = {
+      user: { id: 'account-a' },
+      headers: { 'x-workspace-id': workspaceId },
+      query: {},
+      params: {},
+      method: handler === 'readNameReviews' ? 'GET' : 'POST',
+      route: { path: '/resource-observations/_guarded' },
+    };
+    const context = {
+      switchToHttp: () => ({ getRequest: () => request }),
+      getHandler: () => ResourceObservationController.prototype[handler],
+      getClass: () => ResourceObservationController,
+    } as never;
+    return { guard, resolver, request, context };
+  };
+
+  it.each(guardedRoutes)(
+    '%s denies question-only/noncurator actor BEFORE any service call',
+    async (handler) => {
+      const x = setupGuard(handler);
+      x.resolver.resolve.mockResolvedValue({
+        membershipId: 'membership-a',
+        permissions: ['AHSP_RESOURCE_IDENTITY_QUESTION_APPROVE'],
+      });
+      await expect(x.guard.canActivate(x.context)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(x.resolver.resolve).toHaveBeenCalledWith(
+        'account-a',
+        'workspace-a',
+      );
+      expect(x.request.workspaceContext).toBeUndefined();
+    },
+  );
+
+  it.each(guardedRoutes)(
+    '%s denies workspace without membership even for a catalog-curator role elsewhere',
+    async (handler) => {
+      const x = setupGuard(handler, 'workspace-foreign');
+      x.resolver.resolve.mockResolvedValue(null);
+      await expect(x.guard.canActivate(x.context)).rejects.toBeInstanceOf(
+        ForbiddenException,
+      );
+      expect(x.resolver.resolve).toHaveBeenCalledWith(
+        'account-a',
+        'workspace-foreign',
+      );
+      expect(x.request.workspaceContext).toBeUndefined();
+    },
+  );
+
+  it.each(guardedRoutes)(
+    '%s accepts curator only in its resolved workspace, with no mutation',
+    async (handler) => {
+      const x = setupGuard(handler);
+      x.resolver.resolve.mockResolvedValue({
+        membershipId: 'membership-a',
+        permissions: ['AHSP_RESOURCE_IDENTITY_DECIDE'],
+      });
+      await expect(x.guard.canActivate(x.context)).resolves.toBe(true);
+      expect(x.request.workspaceContext).toEqual({
+        workspaceId: 'workspace-a',
+        membershipId: 'membership-a',
+      });
+    },
+  );
 });
