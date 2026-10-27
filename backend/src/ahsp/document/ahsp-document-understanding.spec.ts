@@ -50,6 +50,127 @@ describe('AHSP document understanding', () => {
     expect(knowledge.source.readerId).toBe('XLSX_EXCELJS');
   });
 
+  it('accepts a row-grouped resource table without inventing missing units or coefficients', async () => {
+    const book = new ExcelJS.Workbook();
+    const sheet = book.addWorksheet('ANALISA SUMBER');
+    sheet.getCell('A1').value = 'AHSP - RINCIAN KOMPONEN';
+    sheet.getCell('A5').value = 1;
+    sheet.getCell('B5').value = 'Pengukuran Ulang Topografi Seluas 1 Ha';
+    sheet.getCell('C5').value = 'SATUAN: Ls';
+    sheet.getCell('F5').value = 'Kode 1';
+    const header = (row: number) => {
+      sheet.getCell('A' + row).value = 'NO.';
+      sheet.getCell('B' + row).value = 'URAIAN PEKERJAAN';
+      sheet.getCell('C' + row).value = 'KELOMPOK';
+      sheet.getCell('D' + row).value = 'KOMPONEN SIPASTI';
+      sheet.getCell('E' + row).value = 'KOEFISIEN';
+      sheet.getCell('F' + row).value = 'SAT. HSD';
+    };
+    header(6);
+    sheet.getCell('C7').value = 'Material';
+    sheet.getCell('D7').value = 'Patok ukur kayu 5/7';
+    sheet.getCell('E7').value = 0.151;
+    sheet.getCell('C8').value = 'Tenaga Kerja';
+    sheet.getCell('D8').value = 'Pekerja';
+    sheet.getCell('C9').value = 'Peralatan';
+    sheet.getCell('D9').value = 'N/A';
+    sheet.getCell('E9').value = 0;
+    sheet.getCell('C10').value = 'INPUT LANGSUNG';
+    sheet.getCell('D10').value = 'Harga satuan langsung';
+    sheet.getCell('C11').value = 'TOTAL AHSP';
+    sheet.getCell('D11').value = 'HARGA SATUAN PEKERJAAN';
+    sheet.getCell('A13').value = 2;
+    sheet.getCell('B13').value = '1 m3 Urukan Kembali Galian Tanah';
+    sheet.getCell('C13').value = 'SATUAN: m3';
+    sheet.getCell('F13').value = 'Kode 2';
+    header(14);
+    sheet.getCell('C15').value = 'Material';
+    sheet.getCell('D15').value = 'Pasir Pasang';
+    sheet.getCell('E15').value = 1.25;
+    sheet.getCell('F15').value = 'm3';
+    sheet.getCell('C16').value = 'TOTAL AHSP';
+    sheet.getCell('D16').value = 'HARGA SATUAN PEKERJAAN';
+    const { knowledge } = await understandBuffer(
+      Buffer.from(await book.xlsx.writeBuffer()),
+      'row-grouped-analysis.xlsx',
+    );
+    // Document-level READY means at least one item may be ready; it does not
+    // override the held state of the first, incomplete work item.
+    expect(knowledge.status).toBe('READY');
+    expect(knowledge.workItems).toHaveLength(2);
+    const [first, second] = knowledge.workItems;
+    expect(first.workType?.raw).toBe('Kode 1');
+    expect(first.methodName?.raw).toBe('Pengukuran Ulang Topografi Seluas 1 Ha');
+    expect(first.outputUnitRaw?.raw).toBe('Ls');
+    expect(first.resources).toHaveLength(2);
+    expect(first.resources[0]).toMatchObject({
+      group: 'MATERIAL',
+      rawName: 'Patok ukur kayu 5/7',
+      coefficient: 0.151,
+      rawUnit: null,
+      status: 'UNRESOLVED',
+    });
+    expect(first.resources[0].nameEvidence?.locator).toBe('D7');
+    expect(first.resources[0].coefficientEvidence?.locator).toBe('E7');
+    expect(first.resources[0].reasonCodes).toContain(AHSP_DOCUMENT_REASON.MISSING_UNIT);
+    expect(first.resources[1]).toMatchObject({
+      group: 'LABOR',
+      rawName: 'Pekerja',
+      coefficient: null,
+      rawUnit: null,
+      status: 'UNRESOLVED',
+    });
+    expect(first.resources[1].reasonCodes).toContain(AHSP_DOCUMENT_REASON.INVALID_COEFFICIENT);
+    expect(second.workType?.raw).toBe('Kode 2');
+    expect(second.outputUnitRaw?.raw).toBe('m3');
+    expect(second.resources).toHaveLength(1);
+    expect(second.resources[0]).toMatchObject({
+      group: 'MATERIAL',
+      rawName: 'Pasir Pasang',
+      coefficient: 1.25,
+      rawUnit: 'm3',
+      status: 'READY',
+    });
+    expect(second.resources[0].nameEvidence?.locator).toBe('D15');
+    expect(second.resources[0].unitEvidence?.locator).toBe('F15');
+    // N/A with an actual positive coefficient is NOT a lawful placeholder.
+    // Hold the row's work rather than discard contradictory source evidence.
+    sheet.getCell('E9').value = 1;
+    const { knowledge: contradictory } = await understandBuffer(
+      Buffer.from(await book.xlsx.writeBuffer()),
+      'contradictory-placeholder.xlsx',
+    );
+    expect(contradictory.workItems[0].resources).toHaveLength(2);
+    expect(contradictory.workItems[0].reasonCodes).toContain(
+      AHSP_DOCUMENT_REASON.SEMANTIC_AMBIGUITY,
+    );
+  });
+
+  it('keeps an unavailable component breakdown as a held work item, never a catalog resource', async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('ANALISA KOMPONEN');
+    sheet.getCell('A5').value = 1;
+    sheet.getCell('B5').value = 'Pemasangan 1 m2 Kaca Polos Tebal 8 mm';
+    sheet.getCell('C5').value = 'SATUAN: m2';
+    sheet.getCell('F5').value = 'Kode 19';
+    sheet.getCell('C6').value = 'KELOMPOK';
+    sheet.getCell('D6').value = 'KOMPONEN SIPASTI';
+    sheet.getCell('E6').value = 'KOEFISIEN';
+    sheet.getCell('F6').value = 'SAT. HSD';
+    sheet.getCell('C7').value = 'Tidak tersedia';
+    sheet.getCell('D7').value = 'Rincian SIPASTI tidak ditampilkan pada PDF';
+    sheet.getCell('C8').value = 'TOTAL AHSP';
+    sheet.getCell('D8').value = 'HARGA SATUAN PEKERJAAN';
+    const { knowledge } = await understandBuffer(
+      Buffer.from(await workbook.xlsx.writeBuffer()),
+      'unavailable-analysis.xlsx',
+    );
+    expect(knowledge.workItems).toHaveLength(1);
+    expect(knowledge.workItems[0].status).toBe('UNRESOLVED');
+    expect(knowledge.workItems[0].resources).toHaveLength(0);
+    expect(knowledge.workItems[0].reasonCodes).toContain(AHSP_DOCUMENT_REASON.MISSING_RESOURCE);
+  });
+
   it('does not treat a price-table workbook as an AHSP analisa', async () => {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('HARGA');

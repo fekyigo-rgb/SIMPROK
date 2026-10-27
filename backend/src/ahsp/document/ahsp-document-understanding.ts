@@ -90,6 +90,8 @@ const ROLE_ALIASES: Record<ColumnRole, readonly string[]> = {
 interface BoundColumns {
   roles: Partial<Record<ColumnRole, number>>;
   ambiguous: boolean;
+  /** A source can state LABOR/MATERIAL/EQUIPMENT on each component row. */
+  inlineGroupColumn?: number;
 }
 
 function locatorOf(
@@ -120,6 +122,33 @@ function bindHeaderRoles(table: SourceTable, row: SourceRow): BoundColumns {
     const role = matched[0];
     if (roles[role] !== undefined) ambiguous = true;
     else roles[role] = column;
+  }
+  // Another real AHSP sheet shape states its group on EACH component row:
+  // KELOMPOK | KOMPONEN ... | KOEFISIEN | SAT. HSD. This is a binding of
+  // captions in the EXISTING reader, not a second format engine or an assertion
+  // that missing component units were ever provided by the source.
+  const grouped = { group: [] as number[], component: [] as number[], unit: [] as number[] };
+  for (let column = 1; column <= table.columnCount; column += 1) {
+    const folded = foldHeader(textAt(row, column) ?? '');
+    if (folded === 'kelompok') grouped.group.push(column);
+    if (/^komponen(?: [a-z0-9 -]+)?$/.test(folded)) grouped.component.push(column);
+    if (['sat hsd', 'sat. hsd', 'satuan hsd'].includes(folded)) grouped.unit.push(column);
+  }
+  if (
+    !ambiguous && grouped.group.length === 1 &&
+    grouped.component.length === 1 && grouped.unit.length === 1 &&
+    roles.KOEFISIEN !== undefined &&
+    new Set([grouped.group[0], grouped.component[0], grouped.unit[0], roles.KOEFISIEN]).size === 4
+  ) {
+    return {
+      roles: {
+        URAIAN: grouped.component[0],
+        SATUAN: grouped.unit[0],
+        KOEFISIEN: roles.KOEFISIEN,
+      },
+      ambiguous: false,
+      inlineGroupColumn: grouped.group[0],
+    };
   }
   return { roles, ambiguous };
 }
@@ -635,10 +664,23 @@ function parseBlock(
   // ("Harga Satuan Pekerjaan per - m3 ("), an explicit "satuan : m" row, the work
   // title ("Pemasangan 1 m2 …"), established by the one rule above.
   const bodyStatement = readOutputUnit(table, bodyRows);
+  // In a row-grouped sheet the same title row can also state "SATUAN: Ls"
+  // alongside its work name. It is NOT a standalone unit statement.
+  const inlineUnitText =
+    titleRow && columns.inlineGroupColumn !== undefined
+      ? textAt(titleRow, columns.inlineGroupColumn)
+      : null;
+  const inlineUnitMatch = inlineUnitText
+    ? UNIT_STATEMENT_PATTERN.exec(inlineUnitText)
+    : null;
+  const inlineUnit = titleRow && inlineUnitMatch && columns.inlineGroupColumn !== undefined
+    ? locatorOf(table, titleRow, columns.inlineGroupColumn, inlineUnitMatch[1])
+    : null;
   const titleStatement = readTitleOutputUnit(identity.methodName);
   const established = establishOutputUnit([
     ...(bodyStatement ? [bodyStatement] : []),
     ...readStatedOutputUnits(table, titleRow, headerRow),
+    ...(inlineUnit ? [inlineUnit] : []),
     ...(titleStatement ? [titleStatement] : []),
   ]);
   const reasons: AhspDocumentReasonCode[] = [...identity.reasons];
@@ -650,7 +692,41 @@ function parseBlock(
   let closed = false;
   const resources: AhspResourceKnowledge[] = [];
   for (const row of bodyRows) {
+    if (closed && columns.inlineGroupColumn !== undefined) continue;
     if (isColumnNumberRow(table, row) || isCurrencyBannerRow(table, row)) continue;
+    if (columns.inlineGroupColumn !== undefined) {
+      const sourceGroup = textAt(row, columns.inlineGroupColumn);
+      if (sourceGroup && /^total ahsp$/i.test(sourceGroup.trim())) {
+        closed = true;
+        continue;
+      }
+      if (sourceGroup && /^input langsung$/i.test(sourceGroup.trim())) continue;
+      // Source explicitly says there is no component breakdown. Keep the WORK
+      // held; a descriptive absence note is not a new catalog resource.
+      if (sourceGroup && /^tidak tersedia$/i.test(sourceGroup.trim())) {
+        reasons.push(AHSP_DOCUMENT_REASON.MISSING_RESOURCE);
+        continue;
+      }
+      const rowGroup = sectionGroup(sourceGroup);
+      const sourceName = columns.roles.URAIAN !== undefined
+        ? textAt(row, columns.roles.URAIAN)
+        : null;
+      if (rowGroup && (!sourceName || sourceName.trim().toUpperCase() === 'N/A')) {
+        // Placeholder with coefficient 0 is not a resource. A positive value
+        // against a missing/N/A name is a CONTRADICTION, not a silent skip.
+        const column = columns.roles.KOEFISIEN;
+        if (column !== undefined && parsePositiveCoefficient(cellAt(row, column)).ok) {
+          reasons.push(AHSP_DOCUMENT_REASON.SEMANTIC_AMBIGUITY);
+        }
+        continue;
+      }
+      if (rowGroup || (sourceGroup && sourceName)) {
+        const resource = readResourceRow(table, row, columns.roles, rowGroup);
+        if (resource) resources.push(resource);
+        if (!rowGroup) reasons.push(AHSP_DOCUMENT_REASON.SEMANTIC_AMBIGUITY);
+      }
+      continue;
+    }
     if (closed) {
       // Nothing below the closing total is a component. A row there that still
       // states a code, unit or quantity cannot be read either way, so the item
