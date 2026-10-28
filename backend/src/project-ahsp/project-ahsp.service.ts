@@ -31,6 +31,7 @@ import {
 import { UNIT_REASON } from '../unit-kernel/unit-kernel.contracts';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
+import { sameProvenBoqSourceFact } from './rab-auto-source-proof';
 import {
   AhspResourceResolutionOrchestrator,
   E1A_RESOLUTION_POLICY_VERSION,
@@ -54,6 +55,8 @@ export interface SelectAhspForBoqItemInput {
   businessPricingAsOfDate: string;
   referenceRegionId: string;
   idempotencyKey: string;
+  /** RAB-AUTO-04: strictly proven same-project source row; absent for manual selection. */
+  reuseSourceBoqItemId?: string;
 }
 
 type ResolutionCreate =
@@ -356,6 +359,7 @@ export class ProjectAhspService {
       businessPricingAsOfDate: input.businessPricingAsOfDate,
       referenceRegionId: input.referenceRegionId,
       resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
+      ...(input.reuseSourceBoqItemId ? { reuseSourceBoqItemId: input.reuseSourceBoqItemId } : {}),
     });
 
     try {
@@ -409,7 +413,67 @@ export class ProjectAhspService {
         throw new ConflictException('BOQ_ITEM_NOT_WORK_ITEM');
       }
 
-      const region = await tx.region.findFirst({
+      // RAB-AUTO-04: a prior human-governed decision can be inherited only
+          // for the same canonical BOQ source fact, re-proven AFTER the project
+          // lock. Manual selection has no reuseSourceBoqItemId and is unchanged.
+          if (input.reuseSourceBoqItemId) {
+            if (
+              item.ahspVersionId ||
+              item.workingOccurrenceId ||
+              item.calculationOccurrenceId ||
+              item.priceOrigin
+            ) {
+              throw new ConflictException('RAB_AUTO_TARGET_ALREADY_DECIDED');
+            }
+            const source = await tx.boqItem.findFirst({
+              where: {
+                id: input.reuseSourceBoqItemId,
+                boqStructureId: structure.id,
+                itemType: 'WORK_ITEM',
+              },
+              include: {
+                workingOccurrence: true,
+                calculationOccurrence: true,
+              },
+            });
+            if (
+              !source ||
+              source.id === item.id ||
+              !sameProvenBoqSourceFact(source, item) ||
+              source.ahspVersionId !== input.ahspVersionId ||
+              source.priceOrigin === 'MANUAL_CLIENT'
+            ) {
+              throw new ConflictException('RAB_AUTO_SOURCE_FACT_NOT_PROVEN');
+            }
+            const provenOccurrence =
+              source.workingOccurrence ?? source.calculationOccurrence;
+            if (
+              !provenOccurrence ||
+              provenOccurrence.projectId !== input.projectId ||
+              provenOccurrence.workspaceId !== input.workspaceId ||
+              provenOccurrence.createdByAccountId == null ||
+              provenOccurrence.idempotencyKey.startsWith('rab-auto-04-') ||
+              provenOccurrence.ahspVersionId !== input.ahspVersionId ||
+              provenOccurrence.referenceRegionId !== input.referenceRegionId ||
+              provenOccurrence.businessPricingAsOfDate?.getTime() !==
+                asOf.getTime()
+            ) {
+              throw new ConflictException('RAB_AUTO_SOURCE_CONTEXT_NOT_PROVEN');
+            }
+            // Project's own selected region, not geolocation or AI inference.
+            const regionSelection = await tx.projectRegionSelection.findFirst({
+              where: {
+                projectId: input.projectId,
+                regionId: input.referenceRegionId,
+              },
+              select: { id: true },
+            });
+            if (!regionSelection) {
+              throw new ConflictException('RAB_AUTO_REGION_NOT_AUTHORIZED');
+            }
+          }
+
+          const region = await tx.region.findFirst({
         where: { id: input.referenceRegionId, isActive: true },
       });
       if (!region) throw new NotFoundException('REFERENCE_REGION_NOT_FOUND');

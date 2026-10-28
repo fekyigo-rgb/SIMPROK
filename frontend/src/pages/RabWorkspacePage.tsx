@@ -654,6 +654,10 @@ export function RabWorkspacePage() {
   const [selectedRegionId, setSelectedRegionId] = useState('');
   const [isSelectingAhsp, setIsSelectingAhsp] = useState(false);
   const [isAutoPricing, setIsAutoPricing] = useState(false);
+  const [isReusingProven, setIsReusingProven] = useState(false);
+  const [autoReuseNotice, setAutoReuseNotice] = useState<{
+    projectId: string; date: string; message: string;
+  } | null>(null);
   // The analysis remains primary; the editor is opened only by explicit user intent.
   const [showAhspSelection, setShowAhspSelection] = useState(false);
   const persistGenerationRef = useRef(0);
@@ -1785,6 +1789,80 @@ export function RabWorkspacePage() {
       }
     } finally {
       setIsAutoPricing(false);
+    }
+  };
+
+  /**
+   * One RAB-level, provenance-gated work action. Reuse only an existing human
+   * decision for the SAME canonical WBS source fact; the server revalidates
+   * within the existing selectForBoqItem transaction. Nothing inferred from
+   * lexical AHSP recommendations can enter this path.
+   */
+  const handleReuseProvenAhsp = async () => {
+    if (!projectId || !workingDraftLoaded || !canEditDraft ||
+        draftDirty || isReusingProven || isAutoPricing) return;
+    const startedRevision = draftRevisionRef.current;
+    const startedProject = projectId;
+    setIsReusingProven(true);
+    setAutoReuseNotice(null);
+    let reused = 0;
+    let reviewed = 0;
+    try {
+      for (let page = 1; page <= 20; page++) {
+        const query = new URLSearchParams({ page: String(page), limit: '25' });
+        const response = await apiFetch(
+          `/projects/${projectId}/ahsp-occurrences/boq-items/working-draft/auto-reuse-proven?${query}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ businessPricingAsOfDate: calculationAsOfDate }),
+          },
+        );
+        if (!response.ok) throw new Error('AUTO_REUSE_NOT_AVAILABLE');
+        const payload: unknown = await response.json();
+        if (!payload || typeof payload !== 'object' ||
+            !('projectId' in payload) || payload.projectId !== projectId ||
+            !('hasNext' in payload) || typeof payload.hasNext !== 'boolean' ||
+            !('results' in payload) || !Array.isArray(payload.results) ||
+            payload.results.length > 25 ||
+            !payload.results.every((row: unknown) => row && typeof row === 'object' &&
+              'boqItemId' in row && typeof row.boqItemId === 'string' &&
+              'kind' in row && typeof row.kind === 'string')) {
+          throw new Error('AUTO_REUSE_INVALID_RESULT');
+        }
+        reviewed += payload.results.length;
+        reused += payload.results.filter((row: { kind: string }) =>
+          row.kind === 'PROVEN_ASSOCIATION_REUSED').length;
+        if (draftRevisionRef.current !== startedRevision ||
+            currentProjectIdRef.current !== startedProject) {
+          setStatusMessage('Draft berubah selama pemeriksaan otomatis. Muat ulang secara aman setelah menyimpan perubahan lokal.');
+          return;
+        }
+        if (!payload.hasNext) {
+          const message = reused > 0
+            ? `${reused} hubungan AHSP yang sudah terbukti digunakan kembali. Harga diperiksa melalui Cost Kernel; baris lainnya tetap menunggu bukti.`
+            : `${reviewed} baris diperiksa. Belum ada keputusan asosiasi kanonis yang dapat dipakai ulang; SIMPROK tidak menebak kecocokan AHSP.`;
+          setAutoReuseNotice({ projectId: startedProject, date: calculationAsOfDate, message });
+          setStatusMessage(message);
+          if (reused > 0) {
+            await handleAutoPriceReady();
+          } else {
+            setRetryToken((n) => n + 1);
+          }
+          return;
+        }
+      }
+      throw new Error('AUTO_REUSE_INCOMPLETE_PAGINATION');
+    } catch {
+      const message = 'Pemeriksaan otomatis tidak selesai seluruhnya. Periksa kembali hasil tersimpan; keberhasilan sebagian tidak dianggap selesai.';
+      setAutoReuseNotice({ projectId: startedProject, date: calculationAsOfDate, message });
+      setStatusMessage(message);
+      if (draftRevisionRef.current === startedRevision &&
+          currentProjectIdRef.current === startedProject) {
+        setRetryToken((n) => n + 1);
+      }
+    } finally {
+      setIsReusingProven(false);
     }
   };
 
@@ -3056,6 +3134,13 @@ export function RabWorkspacePage() {
                 ? 'Tersimpan di server — dapat dibaca dan ditelusuri, tidak dapat diubah'
                 : 'Draft tersimpan di server — edit bebas, simpan kapan saja'}
             </span>
+            {autoReuseNotice?.projectId === projectId &&
+              autoReuseNotice.date === calculationAsOfDate ? (
+                <small role="status" aria-label="Hasil terakhir RAB Otomatis"
+                  style={{ display: 'block', color: 'var(--simprok-catatan-muted)', maxWidth: '68ch' }}>
+                  {autoReuseNotice.message}
+                </small>
+              ) : null}
             {draftAssessmentDisplay ? (
               <small role="status" aria-label="Pemeriksaan AHSP otomatis"
                 style={{ display: 'block', color: 'var(--simprok-catatan-muted)', maxWidth: '68ch' }}>
@@ -3076,6 +3161,17 @@ export function RabWorkspacePage() {
                   draft that already had rows and no sub-heading offered no way
                   to add anything at all. Same function, same row types, same
                   design language; only the door is restored. */}
+              {canEditDraft && workingDraftLoaded && draftAssessmentDisplay &&
+                draftAssessmentDisplay.checked > draftAssessmentDisplay.linked +
+                  draftAssessmentDisplay.persisted + draftAssessmentDisplay.manual ? (
+                <button type="button" className="simprok-rab-add-item"
+                  disabled={draftDirty || isReusingProven || isAutoPricing}
+                  onClick={() => { void handleReuseProvenAhsp(); }}
+                  title="Gunakan kembali keputusan AHSP yang sudah terbukti untuk identitas WBS dan sumber BOQ yang sama; kandidat belum terbukti tidak dihubungkan"
+                  aria-label="Lengkapi otomatis hubungan AHSP yang sudah terbukti">
+                  {isReusingProven ? 'Memeriksa bukti...' : 'Lengkapi Otomatis'}
+                </button>
+              ) : null}
               {canEditDraft && draftAssessmentDisplay && draftAssessmentDisplay.linked > 0 ? (
                 <button type="button" className="simprok-rab-add-item"
                   disabled={draftDirty || isAutoPricing || !workingDraftLoaded}
