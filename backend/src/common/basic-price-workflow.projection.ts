@@ -350,6 +350,8 @@ export function mapPrivateBasicPriceItem(
 /** A resource identity that also carries its base unit, for the Explorer list. */
 export interface ExplorerResourceIdentity extends ResourceIdentity {
   baseUnit: string;
+  /** Verified display of THIS price's denominator; never converted money. */
+  displayUnit?: string | null;
 }
 
 export function mapExplorerResourceIdentity(resource: {
@@ -466,6 +468,7 @@ export interface ExplorerRowSource {
   } | null;
   sourceSubmission?: {
     importRow?: {
+      unitDefinitionId?: string | null;
       batch?: ImportBatchSourceNames | null;
     } | null;
   } | null;
@@ -475,6 +478,8 @@ export interface ExplorerRowSource {
    * PriceSubmission in between — not a second provenance subsystem.
    */
   sourceImportRow?: {
+    /** The source offer's proven denominator, not the catalog's default. */
+    unitDefinitionId?: string | null;
     /** Read-only proposal evidence; never emitted by mapExplorerItem. */
     priceSubmissionId?: string | null;
     batch?: ImportBatchSourceNames | null;

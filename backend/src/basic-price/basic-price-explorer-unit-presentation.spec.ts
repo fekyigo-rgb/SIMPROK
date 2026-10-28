@@ -36,3 +36,54 @@ describe('BP-C3 - Explorer canonical display unit from existing Unit Kernel', ()
     expect(prisma.unitDefinition.findMany).toHaveBeenCalledTimes(1);
   });
 });
+
+
+describe('BP-UNIT-DISPLAY - per-offer unit truth, not catalog-forced conversion', () => {
+  it('retains distinct source hour/day/week/month identities with uniform human labels', async () => {
+    const source = new Map([
+      ['h', { id: 'h', code: 'PERSON_HOUR', symbol: 'jam-orang', dimension: 'PERSON_TIME' }],
+      ['d', { id: 'd', code: 'PERSON_DAY', symbol: 'PERSON_DAY', dimension: 'PERSON_TIME' }],
+      ['w', { id: 'w', code: 'PERSON_WEEK', symbol: 'person/week', dimension: 'PERSON_TIME' }],
+      ['m', { id: 'm', code: 'PERSON_MONTH', symbol: 'Org/Bulan', dimension: 'PERSON_TIME' }],
+    ]);
+    const prisma = {
+      unitDefinition: {
+        findMany: jest.fn().mockImplementation(async (args: { where: { id: { in: string[] } } }) =>
+          args.where.id.in.map(id => source.get(id)).filter(Boolean)),
+      },
+    };
+    const kernel = {
+      resolveCanonicalUnitIdentities: jest.fn().mockImplementation(async (units: string[], context: string) => {
+        expect(context).toBe('LABOR');
+        return units.map(rawUnit => ({
+          rawUnit, status: 'RESOLVED',
+          unitDefinition: { id: 'd', code: 'PERSON_DAY', dimension: 'PERSON_TIME' },
+        }));
+      }),
+    };
+    const resource = { id: 'one-worker', name: 'Pekerja', code: 'L.01', type: 'LABOR', baseUnit: 'Org/Hari' };
+    const rows = [
+      { id: 'hourly', resource, sourceImportRow: { unitDefinitionId: 'h' } },
+      { id: 'daily', resource, sourceImportRow: { unitDefinitionId: 'd' } },
+      { id: 'weekly', resource, sourceSubmission: { importRow: { unitDefinitionId: 'w' } } },
+      { id: 'monthly', resource, sourceImportRow: { unitDefinitionId: 'm' } },
+      { id: 'unknown', resource, sourceImportRow: { unitDefinitionId: null } },
+      { id: 'catalog-only', resource },
+      { id: 'correction-without-unit-evidence', resource, supersedesBasicPriceId: 'previous' },
+    ];
+    const service = new BasicPriceService(prisma as never, {} as never, kernel as never);
+    const displays = await (service as unknown as {
+      explorerVerifiedPriceUnitDisplays: (r: unknown[]) => Promise<Map<string, string | null>>
+    }).explorerVerifiedPriceUnitDisplays(rows);
+    expect([...displays.entries()]).toEqual([
+      ['hourly', 'Orang-Jam'],
+      ['daily', 'Orang-Hari'],
+      ['weekly', 'Orang-Minggu'],
+      ['monthly', 'Orang-Bulan'],
+      ['unknown', null],
+      ['catalog-only', 'Orang-Hari'],
+      ['correction-without-unit-evidence', null],
+    ]);
+    expect(prisma.unitDefinition.findMany).toHaveBeenCalledTimes(2);
+  });
+});

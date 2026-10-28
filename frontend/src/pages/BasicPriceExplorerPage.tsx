@@ -959,7 +959,7 @@ onClick={() => { replaceSelectedIds(new Set()); setPage(1); }}
                       {formatExplorerPrice(item.price)}
                     </td>
                     <td data-label="Satuan" className="bp-cell-unit">
-                      <span title={item.resource.displayUnit === null ? 'Satuan katalog perlu diverifikasi oleh Unit Kernel' : 'Satuan tampilan baku dari Unit Kernel'}>
+                      <span title={item.resource.displayUnit === null ? 'Satuan harga perlu diverifikasi oleh Unit Kernel' : 'Satuan harga terverifikasi (tanpa konversi)'}>
                         {explorerVerifiedUnitLabel(item.resource)}
                       </span>
                     </td>

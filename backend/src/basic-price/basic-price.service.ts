@@ -97,6 +97,7 @@ const EXPLORER_ROW_SELECT = {
     select: {
       importRow: {
         select: {
+          unitDefinitionId: true,
           batch: {
             select: {
               sourceOrganizationName: true,
@@ -113,6 +114,7 @@ const EXPLORER_ROW_SELECT = {
   sourceImportRow: {
     select: {
       priceSubmissionId: true,
+      unitDefinitionId: true,
       batch: {
         select: {
           sourceOrganizationName: true,
@@ -165,11 +167,12 @@ const DETAIL_EVIDENCE_BATCH_SELECT = {
 
 const DETAIL_PROVENANCE_SELECT = {
   sourceSubmission: {
-    select: { importRow: { select: { batch: DETAIL_EVIDENCE_BATCH_SELECT } } },
+    select: { importRow: { select: { unitDefinitionId: true, batch: DETAIL_EVIDENCE_BATCH_SELECT } } },
   },
   sourceImportRow: {
     select: {
       priceSubmissionId: true,
+      unitDefinitionId: true,
       priceSubmission: { select: { status: true, workspaceId: true } },
       sourceKdnHeaderText: true,
       batch: {
@@ -1242,9 +1245,7 @@ export class BasicPriceService {
       explorerRows,
       workspaceId,
     );
-    const unitDisplays = this.unitKernel
-      ? await this.explorerVerifiedUnitDisplays(explorerRows)
-      : new Map<string, string | null>();
+    const unitDisplays = await this.explorerVerifiedPriceUnitDisplays(explorerRows);
     // Same existing provenance-reference law as removeOwnPrivatePrice.
     // One bounded read for the visible page, never a per-row search.
     const privateIds = explorerRows
@@ -1272,11 +1273,11 @@ export class BasicPriceService {
         const inherited = inheritedNames.get(row.id);
         return {
           ...item,
-          ...(this.unitKernel ? { resource: {
+          resource: {
             ...item.resource,
-            // Presentation ONLY: canonical UnitDefinition symbol, not raw source text.
-            displayUnit: unitDisplays.get(row.resource.id) ?? null,
-          } } : {}),
+            // Each offer's own unit. No price or time conversion.
+            displayUnit: unitDisplays.get(row.id) ?? null,
+          },
           sourceName: item.sourceName ?? inherited ?? null,
           alreadyProposed:
             row.assetScope === 'WORKSPACE_PRIVATE'
@@ -1304,6 +1305,64 @@ export class BasicPriceService {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  /**
+   * Display one canonical label for the verified denominator of EACH price.
+   * A source PERSON_HOUR stays PERSON_HOUR even when its ResourceCatalog has
+   * baseUnit Org/Hari. Unit Kernel owns identity; this projects its already
+   * persisted unitDefinitionId. Never convert the price or rewrite source.
+   */
+  private async explorerVerifiedPriceUnitDisplays(
+    rows: ExplorerRowSource[],
+  ): Promise<Map<string, string | null>> {
+    const catalogFallback = this.unitKernel
+      ? await this.explorerVerifiedUnitDisplays(rows)
+      : new Map<string, string | null>();
+    const sourceUnitIds = new Map<string, string | null>();
+    for (const row of rows) {
+      const importRow = row.sourceImportRow ?? row.sourceSubmission?.importRow;
+      if (importRow) sourceUnitIds.set(row.id, importRow.unitDefinitionId ?? null);
+    }
+    const ids = [...new Set([...sourceUnitIds.values()].filter(
+      (id): id is string => !!id,
+    ))];
+    const definitions = ids.length
+      ? await this.prisma.unitDefinition.findMany({
+          where: { id: { in: ids }, isActive: true },
+          select: { id: true, code: true, symbol: true, dimension: true },
+        })
+      : [];
+    const byId = new Map(definitions.map((d) => [d.id, d]));
+    const results = new Map<string, string | null>();
+    for (const row of rows) {
+      if (!sourceUnitIds.has(row.id)) {
+        results.set(row.id, row.supersedesBasicPriceId
+          ? null
+          : catalogFallback.get(row.resource.id) ?? null);
+        continue;
+      }
+      const definition = byId.get(sourceUnitIds.get(row.id) ?? '');
+      const context = trustedUnitContext(row.resource.type);
+      const compatible = !!definition && !!context
+        && (definition.dimension !== 'PERSON_TIME' || context === 'LABOR')
+        && (definition.dimension !== 'EQUIPMENT_TIME' || context === 'EQUIPMENT');
+      results.set(row.id, compatible && definition
+        ? this.explorerUnitSymbol(definition.code, definition.symbol)
+        : null);
+    }
+    return results;
+  }
+
+  /** Only the spelling changes. Unit identity still belongs to Unit Kernel. */
+  private explorerUnitSymbol(code: string, symbol: string): string {
+    switch (code) {
+      case 'PERSON_HOUR': return 'Orang-Jam';
+      case 'PERSON_DAY': return 'Orang-Hari';
+      case 'PERSON_WEEK': return 'Orang-Minggu';
+      case 'PERSON_MONTH': return 'Orang-Bulan';
+      default: return symbol;
+    }
   }
 
   /**
@@ -1343,9 +1402,11 @@ export class BasicPriceService {
     if (definitionIds.length === 0) return output;
     const definitions = await this.prisma.unitDefinition.findMany({
       where: { id: { in: definitionIds }, isActive: true },
-      select: { id: true, symbol: true },
+      select: { id: true, code: true, symbol: true },
     });
-    const symbols = new Map(definitions.map((d) => [d.id, d.symbol]));
+    const symbols = new Map(definitions.map((d) => [
+      d.id, this.explorerUnitSymbol(d.code, d.symbol),
+    ]));
     for (const row of rows) {
       const context = trustedUnitContext(row.resource.type);
       const definitionId = context
@@ -1443,6 +1504,11 @@ export class BasicPriceService {
     // The Detail and Explorer must project the same proven source identity.
     // Neither projection inherits the predecessor's MONEY or document bytes.
     const displayedPrice = mapExplorerItem(row, workspaceId, new Date());
+    const unitDisplays = await this.explorerVerifiedPriceUnitDisplays([row]);
+    displayedPrice.resource = {
+      ...displayedPrice.resource,
+      displayUnit: unitDisplays.get(row.id) ?? null,
+    };
     const proposedIds = await this.alreadyProposedPrivateIds(
       [row],
       workspaceId,
