@@ -357,11 +357,49 @@ export class BasicPriceService {
     type LineageMatch = { id: string; depth: number };
     const rows = await this.prisma.$queryRaw<LineageMatch[]>(
       Prisma.sql`
-        WITH RECURSIVE source_chain AS (
+        WITH RECURSIVE source_edge AS (
+          SELECT later.id AS child_id, earlier.id AS parent_id
+          FROM "basic_price_provenance_corrections" audit
+          JOIN "basic_prices" later
+            ON later.id = audit."basicPriceId"
+           AND later."workspaceId" = audit."workspaceId"
+          JOIN "basic_prices" earlier
+            ON earlier.id::text = audit.before->>'observedAfterBasicPriceId'
+           AND earlier."workspaceId" = later."workspaceId"
+          WHERE later."workspaceId" = ${workspaceId}::uuid
+            AND later."assetScope" = 'WORKSPACE_PRIVATE'
+            AND earlier."assetScope" = 'WORKSPACE_PRIVATE'
+            AND later."recordsNewObservation" = TRUE
+            AND audit.before->>'semantic' = 'NEW_OBSERVATION'
+            AND audit.after->>'semantic' = 'NEW_OBSERVATION'
+            AND audit.after->>'sameSourceIdentity' = 'true'
+            AND later."resourceId" = earlier."resourceId"
+            AND later."regionId" IS NOT DISTINCT FROM earlier."regionId"
+            AND later."regionCoverageSetId"
+                IS NOT DISTINCT FROM earlier."regionCoverageSetId"
+          UNION ALL
+          SELECT correction.id AS child_id, predecessor.id AS parent_id
+          FROM "basic_prices" correction
+          JOIN "basic_prices" predecessor
+            ON predecessor.id = correction."supersedesBasicPriceId"
+           AND predecessor."workspaceId" = correction."workspaceId"
+          WHERE predecessor."workspaceId" = ${workspaceId}::uuid
+            AND predecessor."assetScope" = 'WORKSPACE_PRIVATE'
+            AND correction."assetScope" = 'WORKSPACE_PRIVATE'
+            AND correction."recordsNewObservation" = FALSE
+            AND correction."resourceId" = predecessor."resourceId"
+            AND correction."regionId" IS NOT DISTINCT FROM predecessor."regionId"
+            AND correction."regionCoverageSetId"
+                IS NOT DISTINCT FROM predecessor."regionCoverageSetId"
+            AND correction."sourceType" = predecessor."sourceType"
+            AND correction."sourceOrigin" = predecessor."sourceOrigin"
+            AND correction."effectiveDate" = predecessor."effectiveDate"
+        ),
+        source_chain AS (
           SELECT root.id, root."workspaceId", root."resourceId",
                  root."regionId", root."regionCoverageSetId",
                  root."sourceType", root."sourceOrigin",
-                 0::integer AS depth
+                 0::integer AS depth, ARRAY[root.id] AS visited
           FROM "basic_prices" root
           JOIN "basic_price_provenance_corrections" birth
             ON birth."basicPriceId" = root.id
@@ -376,57 +414,24 @@ export class BasicPriceService {
           SELECT next.id, next."workspaceId", next."resourceId",
                  next."regionId", next."regionCoverageSetId",
                  next."sourceType", next."sourceOrigin",
-                 chain.depth + 1
+                 chain.depth + 1, chain.visited || next.id
           FROM source_chain chain
-          JOIN "basic_price_provenance_corrections" audit
-            ON audit.before->>'observedAfterBasicPriceId' = chain.id::text
-           AND audit."workspaceId" = chain."workspaceId"
+          JOIN source_edge edge ON edge.parent_id = chain.id
           JOIN "basic_prices" next
-            ON next.id = audit."basicPriceId"
+            ON next.id = edge.child_id
            AND next."workspaceId" = chain."workspaceId"
           WHERE next."assetScope" = 'WORKSPACE_PRIVATE'
-            AND next."recordsNewObservation" = TRUE
             AND next."resourceId" = chain."resourceId"
             AND next."regionId" IS NOT DISTINCT FROM chain."regionId"
-            AND next."regionCoverageSetId" IS NOT DISTINCT FROM chain."regionCoverageSetId"
-            -- sourceType/sourceOrigin classify the NEW evidence, not publisher
-            -- identity. The explicit birth audit owns the SAME source claim.
-            AND audit.before->>'semantic' = 'NEW_OBSERVATION'
-            AND audit.after->>'semantic' = 'NEW_OBSERVATION'
-            AND audit.after->>'sameSourceIdentity' = 'true'
+            AND next."regionCoverageSetId"
+                IS NOT DISTINCT FROM chain."regionCoverageSetId"
+            -- The edge is proven by the precise same-source audit OR the
+            -- exact correction pointer; never inferred from similar text.
             AND chain.depth < ${BASIC_PRICE_HISTORY_MAX_GENERATIONS}
-        ),
-        -- The correction still has the SAME proved publisher; its own birth
-        -- audit may contain only a monetary correction. Follow the exact
-        -- supersession chain for SOURCE-NAME SEARCH as we do for display.
-        corrected_chain AS (
-          SELECT root.id, root.depth, ARRAY[root.id] AS visited
-          FROM source_chain root
-          UNION ALL
-          SELECT corrected.id, chain.depth + 1,
-                 chain.visited || corrected.id
-          FROM corrected_chain chain
-          JOIN "basic_prices" previous
-            ON previous.id = chain.id
-           AND previous."workspaceId" = ${workspaceId}::uuid
-           AND previous."assetScope" = 'WORKSPACE_PRIVATE'
-          JOIN "basic_prices" corrected
-            ON corrected."supersedesBasicPriceId" = previous.id
-           AND corrected."workspaceId" = previous."workspaceId"
-           AND corrected."assetScope" = 'WORKSPACE_PRIVATE'
-           AND corrected."recordsNewObservation" = FALSE
-           AND corrected."resourceId" = previous."resourceId"
-           AND corrected."regionId" IS NOT DISTINCT FROM previous."regionId"
-           AND corrected."regionCoverageSetId"
-               IS NOT DISTINCT FROM previous."regionCoverageSetId"
-           AND corrected."sourceType" = previous."sourceType"
-           AND corrected."sourceOrigin" = previous."sourceOrigin"
-           AND corrected."effectiveDate" = previous."effectiveDate"
-          WHERE chain.depth < ${BASIC_PRICE_HISTORY_MAX_GENERATIONS}
-            AND NOT (corrected.id = ANY(chain.visited))
+            AND NOT (next.id = ANY(chain.visited))
         )
         SELECT DISTINCT id, depth
-        FROM corrected_chain
+        FROM source_chain
         WHERE depth > 0
         LIMIT 10001
       `,
@@ -484,6 +489,26 @@ export class BasicPriceService {
           -- same-source audit, not sourceType, establishes the link.
           AND child."effectiveDate" >= parent."effectiveDate"
           AND child."effectiveDate" <= ${asOf}
+        UNION ALL
+        -- A correction is an exact-money successor, not a new quotation.
+        -- The single edge graph supports any lawful alternation of later
+        -- observations and corrections without name-based equivalence.
+        SELECT corrected.id AS child_id, previous.id AS parent_id
+        FROM "basic_prices" corrected
+        JOIN "basic_prices" previous
+          ON previous.id = corrected."supersedesBasicPriceId"
+         AND previous."workspaceId" = corrected."workspaceId"
+        WHERE previous."workspaceId" = ${workspaceId}::uuid
+          AND previous."assetScope" = 'WORKSPACE_PRIVATE'
+          AND corrected."assetScope" = 'WORKSPACE_PRIVATE'
+          AND corrected."recordsNewObservation" = FALSE
+          AND corrected."resourceId" = previous."resourceId"
+          AND corrected."regionId" IS NOT DISTINCT FROM previous."regionId"
+          AND corrected."regionCoverageSetId"
+              IS NOT DISTINCT FROM previous."regionCoverageSetId"
+          AND corrected."sourceType" = previous."sourceType"
+          AND corrected."sourceOrigin" = previous."sourceOrigin"
+          AND corrected."effectiveDate" = previous."effectiveDate"
       ),
       lineage AS (
         SELECT child_id AS descendant_id, parent_id AS predecessor_id,
@@ -498,38 +523,10 @@ export class BasicPriceService {
         WHERE chain.depth < ${BASIC_PRICE_HISTORY_MAX_GENERATIONS}
           AND NOT (e.parent_id = ANY(chain.visited))
       )
-      -- Corrections replace the MONEY of an existing observation; they do
-      -- NOT break the exact SAME-SOURCE observation link proved above.
-      -- Extend only by canonical supersedesBasicPriceId, never by names,
-      -- amounts, date proximity, or an inferred source match.
-      , corrected_lineage AS (
-        SELECT chain.predecessor_id, chain.descendant_id, chain.depth,
-               ARRAY[chain.descendant_id] AS visited
-        FROM lineage chain
-        UNION ALL
-        SELECT chain.predecessor_id, corrected.id,
-               chain.depth + 1, chain.visited || corrected.id
-        FROM corrected_lineage chain
-        JOIN "basic_prices" previous ON previous.id = chain.descendant_id
-        JOIN "basic_prices" corrected
-          ON corrected."supersedesBasicPriceId" = previous.id
-         AND corrected."workspaceId" = previous."workspaceId"
-         AND corrected."assetScope" = 'WORKSPACE_PRIVATE'
-         AND corrected."recordsNewObservation" = FALSE
-         AND corrected."resourceId" = previous."resourceId"
-         AND corrected."regionId" IS NOT DISTINCT FROM previous."regionId"
-         AND corrected."regionCoverageSetId"
-             IS NOT DISTINCT FROM previous."regionCoverageSetId"
-         AND corrected."sourceType" = previous."sourceType"
-         AND corrected."sourceOrigin" = previous."sourceOrigin"
-         AND corrected."effectiveDate" = previous."effectiveDate"
-        WHERE chain.depth < ${BASIC_PRICE_HISTORY_MAX_GENERATIONS}
-          AND NOT (corrected.id = ANY(chain.visited))
-      )
       SELECT DISTINCT chain.predecessor_id AS "predecessorId",
                       chain.descendant_id AS "descendantId",
                       chain.depth
-      FROM corrected_lineage chain
+      FROM lineage chain
       JOIN "basic_prices" ancestor ON ancestor.id = chain.predecessor_id
       JOIN "basic_prices" newer ON newer.id = chain.descendant_id
       WHERE newer."effectiveDate" > ancestor."effectiveDate"

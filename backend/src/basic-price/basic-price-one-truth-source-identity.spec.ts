@@ -521,8 +521,8 @@ describe('BP-ONE-TRUTH-01 — same-source observation display, no money inherita
       { strings: readonly string[] },
     ];
     const sql = query.strings.join(' ');
-    expect(sql).toContain('corrected."supersedesBasicPriceId" = previous.id');
-    expect(sql).toContain('corrected."workspaceId" = previous."workspaceId"');
+    expect(sql).toContain('previous.id = corrected."supersedesBasicPriceId"');
+    expect(sql).toContain('previous."workspaceId" = corrected."workspaceId"');
     expect(sql).toContain('corrected."resourceId" = previous."resourceId"');
     expect(sql).toContain('corrected."sourceOrigin" = previous."sourceOrigin"');
     expect(sql).toContain('corrected."effectiveDate" = previous."effectiveDate"');

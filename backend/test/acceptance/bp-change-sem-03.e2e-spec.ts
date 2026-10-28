@@ -504,6 +504,55 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction (e2e)', () => {
       .toContain(predecessorId);
     expect(historical.data.map((row) => row.basicPriceId))
       .not.toContain(corrected.basicPriceId);
+
+    // P1 independent review: the SAME publisher may issue another later
+    // observation AFTER a correction. Neither a legacy quote nor the first
+    // corrected observation may reappear as a competing current offer.
+    const secondObserved = asMutationBody((await request(http())
+      .post(`/basic-price-imports/prices/${corrected.basicPriceId}/observations`)
+      .set(hdr())
+      .send({
+        expectedValue: '104500.00',
+        proposedValue: '106000.00',
+        effectiveDate: '2026-09-02',
+        reason: 'later real price after an earlier corrected observation',
+        sameSource: true,
+      })
+      .expect(201)).body);
+    const secondCorrected = asMutationBody((await request(http())
+      .post(`/basic-price-imports/prices/${secondObserved.basicPriceId}/corrections`)
+      .set(hdr())
+      .send({
+        expectedValue: '106000.00',
+        proposedValue: '105750.00',
+        reason: 'corrected second observation entry, preserving source',
+      })
+      .expect(201)).body);
+    const repeatedList = asListBody((await request(http())
+      .get('/basic-prices')
+      .query({ resourceId: RESOURCE_ID })
+      .set(hdr())
+      .expect(200)).body);
+    expect(repeatedList.data.map((row) => row.basicPriceId))
+      .toEqual([secondCorrected.basicPriceId]);
+    const repeatedSource = asListBody((await request(http())
+      .get('/basic-prices')
+      .query({ resourceId: RESOURCE_ID, sourceName: vendor })
+      .set(hdr())
+      .expect(200)).body);
+    expect(repeatedSource.data.map((row) => row.basicPriceId))
+      .toContain(secondCorrected.basicPriceId);
+    expect(repeatedSource.data.map((row) => row.basicPriceId))
+      .not.toContain(predecessorId);
+    const secondDetail = (await request(http())
+      .get(`/basic-prices/${secondCorrected.basicPriceId}/detail`)
+      .set(hdr()).expect(200)).body as {
+        price: { sourceName: string | null; price: string };
+        evidence: { importBatchLinked: boolean };
+      };
+    expect(secondDetail.price.sourceName).toBe(vendor);
+    expect(secondDetail.price.price).toBe('105750.00');
+    expect(secondDetail.evidence.importBatchLinked).toBe(false);
   });
 
   it('PRICE-EVID-02 — a different-store field observation preserves the predecessor and records the stated source origin', async () => {
