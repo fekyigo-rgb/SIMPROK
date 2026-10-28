@@ -663,3 +663,12 @@ test('import history has one visible heading in either collapsed or expanded sta
   assert.ok(importPage.includes('setDraftDeleteTarget(job)'));
   assert.ok(importPage.includes("job.historyOnlyDeleted ? 'Lihat riwayat' : 'Lanjutkan pemeriksaan'"));
 });
+
+test('second import room keeps one document title, a truthful waiting status, and no second save action', () => {
+  assert.ok(importPage.includes("!isReviewPage ? <span className=\"ahsp-curation-item__title\">{job.title}</span> : null"));
+  assert.ok(importPage.includes("selectedReviewJob.waitingItems.length > 0 ? 'Masih perlu dilengkapi'"));
+  assert.ok(importPage.includes("const quietRecheckLabel = busy ? 'Memproses…' : 'Periksa ulang status'"));
+  assert.ok(importPage.includes('tidak menjamin hasil tersimpan'));
+  assert.ok(importPage.includes('Catatan jurnal dan pekerjaan yang masih menunggu'));
+  assert.equal(importPage.split("'/ahsp/document/jobs/' + job.key + '/continue'").length - 1, 1);
+});

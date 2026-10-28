@@ -1776,6 +1776,7 @@ export function AhspImportPage() {
     const detailId = 'ahsp-import-detail-' + at;
     const decisionItems = job.waitingItems.filter((item) => item.sameness !== null);
     const recheckLabel = busy ? 'Memproses…' : 'Periksa & simpan yang siap';
+    const quietRecheckLabel = busy ? 'Memproses…' : 'Periksa ulang status';
     const recheck = () => void recheckImport(job, at);
     // The blue action is emphasized only where something is worth checking again — a
     // change the server reported, a write to retry, or a decision the reader chose
@@ -1789,8 +1790,8 @@ export function AhspImportPage() {
         return chosen !== undefined && chosen !== 'SKIP';
       });
     return (
-      <li key={job.key} aria-label={'Import ' + job.title} className="ahsp-completion">
-        <span className="ahsp-curation-item__title">{job.title}</span>
+      <li key={job.key} aria-label={'Import ' + job.title} className={isReviewPage ? 'ahsp-completion ahsp-completion--review' : 'ahsp-completion'}>
+        {!isReviewPage ? <span className="ahsp-curation-item__title">{job.title}</span> : null}
         <p className="ahsp-completion__summary">{job.summaryLine}</p>
         {renderAttention(
           job.attention,
@@ -1841,6 +1842,9 @@ export function AhspImportPage() {
             {job.decisionLine ? <span className="ahsp-line" style={{ color: NAVY }}>{job.decisionLine}</span> : null}
           </div>
         ) : null}
+        {isReviewPage && job.canRecheck && !urged ? (
+          <p className="ahsp-import-review-action-note">Belum ada perubahan baru yang ditandai untuk disimpan. Pemeriksaan ulang meminta SIMPROK mengecek kembali status dokumen; tidak menjamin hasil tersimpan.</p>
+        ) : null}
         <div className="ahsp-action-row">
           {/* One check for the whole document; shown only where there is something to check. */}
           {job.canRecheck && urged ? (
@@ -1850,7 +1854,7 @@ export function AhspImportPage() {
           ) : null}
           {job.canRecheck && !urged ? (
             <button type="button" className="ahsp-action ahsp-action--outline" disabled={jobBusy !== null} aria-busy={busy || undefined} onClick={recheck}>
-              {recheckLabel}
+              {isReviewPage ? quietRecheckLabel : recheckLabel}
             </button>
           ) : null}
           <button
@@ -1865,6 +1869,7 @@ export function AhspImportPage() {
         </div>
         {open ? (
           <div id={detailId} className="ahsp-detail">
+            <h3 className="ahsp-import-review-detail-title">Catatan jurnal dan pekerjaan yang masih menunggu</h3>
             <span className="ahsp-line">{job.receivedLine}</span>
             {job.canRecheck ? <span className="ahsp-line">{job.waitingLine}</span> : null}
             <ul className="ahsp-detail-list">
@@ -2638,7 +2643,7 @@ export function AhspImportPage() {
               <h2 className="ahsp-section-title">{selectedReviewJob?.title ?? 'Memuat pekerjaan tersimpan'}</h2>
               {selectedReviewJob?.recordedAtLine ? <p className="ahsp-import-history-summary">Dicatat {selectedReviewJob.recordedAtLine}</p> : null}
             </div>
-            {selectedReviewJob ? <span className="ahsp-import-review-status">{selectedReviewJob.historyOnlyDeleted ? 'Riwayat penghapusan' : 'Dalam pemeriksaan'}</span> : null}
+            {selectedReviewJob ? <span className="ahsp-import-review-status">{selectedReviewJob.historyOnlyDeleted ? 'Riwayat penghapusan' : selectedReviewJob.waitingItems.length > 0 ? 'Masih perlu dilengkapi' : 'Dokumen tersimpan'}</span> : null}
           </div>
           <ReadNotice phase={importPhase} onRetry={() => void loadImportJobs(importJobs.length === 0 ? 'INITIAL' : 'REFRESH')} label="Muat ulang dokumen tersimpan" />
           {selectedReviewJob ? importJobList : importPhase === 'READY' && importMayLoadOlder ? (

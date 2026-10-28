@@ -2098,3 +2098,36 @@ li.ahsp-completion:last-child {
     min-height: 44px;
   }
 }
+
+/* The document-review room shows the source filename exactly once, in its header. */
+.ahsp-import-review-section .ahsp-completion--review {
+  gap: 12px;
+}
+.ahsp-import-review-section .ahsp-completion--review .ahsp-completion__summary {
+  max-width: 100%;
+  font-size: 0.9rem;
+  line-height: 1.65;
+}
+.ahsp-import-review-action-note {
+  margin: 0;
+  font-size: 0.83rem;
+  line-height: 1.6;
+  color: var(--simprok-authority-navy-800);
+  opacity: 0.75;
+}
+.ahsp-import-review-detail-title {
+  color: var(--simprok-authority-navy-800);
+  font-size: 0.9rem;
+  font-weight: 650;
+  margin: 0 0 10px;
+}
+.ahsp-import-review-section .ahsp-detail {
+  margin-top: 8px;
+  padding-top: 14px;
+  border-top: 1px solid rgba(22,41,75,.12);
+}
+@media (max-width: 680px) {
+  .ahsp-import-review-section .ahsp-action-row .ahsp-action {
+    min-height: 44px;
+  }
+}
