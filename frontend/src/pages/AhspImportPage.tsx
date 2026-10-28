@@ -1,5 +1,5 @@
 ﻿import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useBlocker } from 'react-router-dom';
 import { ArrowLeft, AlertTriangle, CheckCircle2, Database, FileText, Info, Sparkles } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
 import { useAuth } from '../contexts/AuthContext';
@@ -218,6 +218,35 @@ const HAIRLINE = '1px solid var(--simprok-engineering-blue-100)';
 const CARD: CSSProperties = { background: '#FFFFFF', border: HAIRLINE, borderRadius: '12px', padding: 'var(--space-4)' };
 const controlBox: CSSProperties = { color: NAVY, padding: 'var(--space-2)', border: HAIRLINE, borderRadius: '8px', background: '#FFFFFF', width: '100%' };
 
+// PostgreSQL JSON fields need key-order-independent comparison. The backend
+// retains canonical classification facts but strips UI-only displayLabels.
+const stableJson = (value: unknown): string => {
+  if (Array.isArray(value)) return '[' + value.map(stableJson).join(',') + ']';
+  if (value && typeof value === 'object') {
+    return '{' + Object.entries(value as Record<string, unknown>)
+      .filter(([, item]) => item !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([key, item]) => JSON.stringify(key) + ':' + stableJson(item))
+      .join(',') + '}';
+  }
+  return JSON.stringify(value) ?? 'null';
+};
+const savedDraftFacts = (context: AssistedClassificationContext | null) => ({
+  jenisPengadaanRootId: context?.jenisPengadaanRootId?.trim() || null,
+  paths: (context?.paths ?? []).map((path) => ({
+    leafNodeId: path.leafNodeId.trim(),
+    provenanceHint: path.provenanceHint === 'FROM_SOURCE' ? 'FROM_SOURCE' : 'FROM_USER',
+    sourceEvidence: path.sourceEvidence ?? null,
+  })),
+  pendingPaths: (context?.pendingPaths ?? []).map((path) => ({
+    kategori: path.kategori.trim(),
+    subkategori: path.subkategori.trim(),
+    jenisPekerjaan: path.jenisPekerjaan.trim(),
+  })),
+  dasarAcuan: context?.dasarAcuan?.trim() || null,
+  penerbit: context?.penerbit?.trim() || null,
+});
+
 export function AhspImportPage() {
   const { hasPermission, activeWorkspaceId } = useAuth();
   const canManage = hasPermission('AHSP_MANAGE');
@@ -342,12 +371,38 @@ export function AhspImportPage() {
   // one human intent be recorded twice. They stay closed until the reader asks
   // SIMPROK to understand the document again.
   const [settled, setSettled] = useState(false);
+  // A saved import is not a new upload. Keep old work discoverable but closed until chosen.
+  const [savedImportsOpen, setSavedImportsOpen] = useState(false);
+  const [selectedSavedImport, setSelectedSavedImport] = useState<string | null>(null);
+  const [learningOpen, setLearningOpen] = useState(false);
+  const [draftBusy, setDraftBusy] = useState(false);
+  const [draftReceipt, setDraftReceipt] = useState<string | null>(null);
+  const [draftSaved, setDraftSaved] = useState(false);
+  const hasUnsavedUpload = file !== null && !settled && !draftSaved;
+  // The intake journal persists source bytes/classification, NOT duplicate choices.
+  // Never treat a draft save as permission to silently discard those choices.
+  const hasUnsavedPreviewChoices = !settled && Object.keys(decisions).length > 0;
+  // Decisions on a reopened job are also unsaved until /continue accepts them.
+  const hasUnsavedSavedJobChoices = Object.keys(jobDecisions).length > 0;
+  const hasUnsavedWork = hasUnsavedUpload || hasUnsavedPreviewChoices || hasUnsavedSavedJobChoices;
+  const navigationBlocker = useBlocker(hasUnsavedWork);
+  useEffect(() => {
+    if (!hasUnsavedWork) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [hasUnsavedWork]);
   // Collision-proof separator (matches the backend decisionMap): a real space
   // would let a different (workType, methodName) split map two distinct items to
   // ONE Record key. The null char never appears in a source name.
   const decisionKey = (item: PreviewItem) => (item.workType?.raw ?? '') + '\u0000' + (item.methodName?.raw ?? '');
-  const setDecision = (item: PreviewItem, action: SamenessDecision) =>
+  const setDecision = (item: PreviewItem, action: SamenessDecision) => {
+    setDraftSaved(false);
     setDecisions((prev) => ({ ...prev, [decisionKey(item)]: action }));
+  };
 
   // WHO MAY STILL APPLY AN ANSWER. A workspace or session change ends every read
   // of every list; a refusal ends only the reads of the list that was refused, so
@@ -420,6 +475,7 @@ export function AhspImportPage() {
     setSettled(false);
     setPreviewDetailOpen(false);
     setJourneyStep('idle');
+    setPreviewIntakeJobId(null);
     // A new file's items are new decisions — drop any prior ones so a stale decision
     // can never ride a different document to commit.
     setDecisions({});
@@ -562,6 +618,12 @@ export function AhspImportPage() {
     forgetQuestions();
     // Nor does a preview or commit begun there write anything here.
     forgetDocument();
+    setFile(null);
+    setDraftSaved(false);
+    setDraftReceipt(null);
+    setSavedImportsOpen(false);
+    setSelectedSavedImport(null);
+    setLearningOpen(false);
     void loadObservations('INITIAL');
     void loadQuestions('INITIAL');
     void loadImportJobs('INITIAL');
@@ -582,6 +644,8 @@ export function AhspImportPage() {
     setDecisions({});
     setSettled(false);
     setPreviewDetailOpen(false);
+    setDraftSaved(false);
+    setDraftReceipt(null);
     setAssistedClassification(emptyAssistedContext());
     setJourneyStep('idle');
     try {
@@ -615,6 +679,93 @@ export function AhspImportPage() {
         documentLock.current = null;
         setImportAction(null);
       }
+    }
+  };
+
+  /**
+   * Reuse the EXISTING server-side intake journal. This is NOT /document/commit:
+   * source bytes and immutable knowledge are kept, but no canonical AHSP is created.
+   * Human duplicate decisions are still commit-time choices, and must not be
+   * represented as having been saved in this draft.
+   */
+  const saveAsDraft = async (leaveAfterSave = false) => {
+    if (!canManage || !file || draftBusy || documentLock.current !== null) return;
+    const ticket = reads.captureDocument();
+    documentLock.current = ticket;
+    setDraftBusy(true);
+    setDraftReceipt(null);
+    try {
+      let jobId = previewIntakeJobId;
+      if (!jobId) {
+        const form = new FormData();
+        form.append('file', file);
+        const intake = await apiFetch('/ahsp/document/intake', { method: 'POST', body: form });
+        if (!intake.ok) throw new Error('Draft belum tersimpan. Catatan dokumen ditolak oleh server.');
+        const saved = await intake.json().catch(() => null);
+        if (typeof saved?.importJobId !== 'string' || !saved.importJobId) {
+          throw new Error('Draft belum terverifikasi: server tidak mengembalikan identitas jurnal.');
+        }
+        jobId = saved.importJobId;
+        if (reads.mayApplyDocument(ticket)) setPreviewIntakeJobId(jobId);
+      }
+      if (!jobId) throw new Error('Identitas draft tidak ditemukan. Dokumen belum terverifikasi.');
+
+      const hasAssisted =
+        assistedClassification.jenisPengadaanRootId !== null ||
+        assistedClassification.paths.length > 0 ||
+        (assistedClassification.pendingPaths?.length ?? 0) > 0 ||
+        Boolean(assistedClassification.dasarAcuan?.trim()) ||
+        Boolean(assistedClassification.penerbit?.trim());
+      if (hasAssisted) {
+        const context = await apiFetch(
+          '/ahsp/document/jobs/' + encodeURIComponent(jobId) + '/assisted-classification',
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(assistedClassification),
+          },
+        );
+        if (!context.ok) {
+          throw new Error('Berkas telah dicatat, tetapi klasifikasi draft belum tersimpan. Perbaiki dan coba lagi sebelum keluar.');
+        }
+      }
+      // A read of this job's guarded context also proves the journal exists in
+      // this workspace (404 otherwise). Do not claim a successful save on POST alone.
+      const check = await apiFetch(
+        '/ahsp/document/jobs/' + encodeURIComponent(jobId) + '/assisted-classification',
+      );
+      if (!check.ok) {
+        throw new Error('Server menerima draft, tetapi pemeriksaan ulang belum berhasil. Jangan keluar dahulu.');
+      }
+      if (hasAssisted) {
+        const verified = (await check.json().catch(() => null)) as AssistedClassificationContext | null;
+        if (!verified || stableJson(savedDraftFacts(verified)) !== stableJson(savedDraftFacts(assistedClassification))) {
+          throw new Error('Klasifikasi draft belum terbukti tersimpan. Periksa ulang sebelum keluar.');
+        }
+      }
+      if (reads.mayApplyDocument(ticket)) {
+        setDraftSaved(true);
+        setDraftReceipt(
+          'Draft dokumen berhasil disimpan di jurnal SIMPROK. Belum menjadi AHSP siap digunakan.' +
+          (Object.keys(decisions).length > 0
+            ? ' Pilihan kesamaan sementara belum ikut tersimpan; tinjau kembali saat melanjutkan.'
+            : ''),
+        );
+        await loadImportJobs('REFRESH');
+        // The modal's Save choice exits ONLY after durable read-back, and only
+        // when no unsaved duplicate decisions would be lost along the way.
+        if (leaveAfterSave && Object.keys(decisions).length === 0 &&
+            Object.keys(jobDecisions).length === 0 && navigationBlocker.state === 'blocked') {
+          navigationBlocker.proceed();
+        }
+      }
+    } catch (error) {
+      if (reads.mayApplyDocument(ticket)) {
+        setDraftReceipt(error instanceof Error ? error.message : 'Draft belum dapat disimpan.');
+      }
+    } finally {
+      if (documentLock.current === ticket) documentLock.current = null;
+      setDraftBusy(false);
     }
   };
 
@@ -976,6 +1127,9 @@ export function AhspImportPage() {
    */
   const recheckImport = async (job: ImportJobView, at: number) => {
     if (!canManage || jobLock.current !== null || importPhase === 'UNAUTHORIZED') return;
+    // The historical 'Periksa ulang' calls /continue, which CAN materialize AHSP.
+    // A journal-only draft must never become canonical by an ambiguous click.
+    if (!window.confirm('Periksa ulang akan mencoba MENYIMPAN AHSP yang sudah memenuhi syarat. Pekerjaan yang belum siap tetap menunggu. Lanjutkan?')) return;
     const ticket = reads.captureAction('imports');
     jobLock.current = ticket;
     setJobBusy(job.key);
@@ -986,6 +1140,10 @@ export function AhspImportPage() {
       const action = jobDecisions[jobDecisionKey(job, item)];
       return item.decisionFor && action ? [{ ...item.decisionFor, action }] : [];
     });
+    // The selected OLD job already has its own persisted classification context.
+    // Passing the current upload's form here could overwrite that saved truth.
+    // Null instructs continueImportJob to read the job's canonical stored context.
+    const assistedClassification = null;
     try {
       let outcome: ActionOutcome;
       try {
@@ -1484,7 +1642,25 @@ export function AhspImportPage() {
     ) : null;
 
   const waitingImports = describeWaitingImports(importJobs, { canCurate });
-  const jobEntries = placeOutcomes(waitingImports, (job) => job.key, jobOutcomes);
+  const hasEarlierWorkOrUnreadHistory =
+    waitingImports.length > 0 ||
+    importHasMore ||
+    importPhase === 'FAILED' ||
+    importPhase === 'STALE';
+  const openSavedImport = (importJobId: string) => {
+    if (hasUnsavedUpload || hasUnsavedPreviewChoices || hasUnsavedSavedJobChoices) return;
+    setSavedImportsOpen(true);
+    setSelectedSavedImport(importJobId);
+    setLearningOpen(false);
+    const scope: ObservationScope = { kind: 'importJobId', importJobId };
+    setObservationScope(scope);
+    void loadObservations('REFRESH', scope);
+  };
+  const jobEntries = placeOutcomes(waitingImports, (job) => job.key, jobOutcomes).filter(
+    (entry) => entry.kind === 'ITEM'
+      ? entry.item.key === selectedSavedImport
+      : entry.outcome.key === selectedSavedImport,
+  );
   const dismissJob = (key: string) => setJobOutcomes((prev) => prev.filter((outcome) => outcome.key !== key));
 
   // These handlers are invoked ONLY by the user's buttons, never by renderUnitWorkspace.
@@ -1683,7 +1859,7 @@ export function AhspImportPage() {
     <>
       <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-2)' }}>Import yang masih dilengkapi</h2>
       <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>
-        Semua pekerjaan di bawah ini sudah diterima SIMPROK. Bila yang ditunggu sudah tersedia — misalnya satuan yang kini dikenali — satu pemeriksaan ulang memeriksa seluruh dokumen, tanpa mengunggah ulang berkasnya.
+        Ini adalah riwayat dokumen yang telah dicatat oleh SIMPROK, bukan berkas yang baru saja Anda pilih. Pencatatan dokumen, penyimpanan AHSP, dan kesiapan AHSP adalah status berbeda. Pilih satu pekerjaan untuk memeriksanya tanpa mengunggah ulang.
       </p>
     </>
   );
@@ -1745,12 +1921,22 @@ export function AhspImportPage() {
             type="file"
             accept=".xlsx"
             aria-label="Berkas AHSP resmi"
+            disabled={draftBusy || importing}
             className="ahsp-import-upload__native"
             onChange={(event) => {
-              // Another document: nothing understood, saved or decided for the one before is
-              // about this one, and a request still waiting for it never writes here.
+              // A new file must not silently erase an unfinished preview and choices.
+              if (preview && (hasUnsavedUpload || hasUnsavedPreviewChoices)) {
+                setImportError('Dokumen lama masih mempunyai perubahan sementara. Simpan sebagai draft atau keluar tanpa menyimpan sebelum mengganti berkas.');
+                if (fileInputRef.current) fileInputRef.current.value = '';
+                return;
+              }
               reads.changeDocument();
               setFile(event.target.files?.[0] ?? null);
+              setDraftSaved(false);
+              setDraftReceipt(null);
+              setSavedImportsOpen(false);
+              setSelectedSavedImport(null);
+              setLearningOpen(false);
               forgetDocument();
             }}
           />
@@ -1782,10 +1968,52 @@ export function AhspImportPage() {
             </div>
           )}
           <div className="ahsp-action-row ahsp-action-row--stack" style={{ marginTop: 'var(--space-3)' }}>
-            <button type="button" className="ahsp-action ahsp-action--primary" disabled={!file || importing} aria-busy={importAction === 'PREVIEW' || undefined} onClick={() => void previewDocument()}>
+            <button type="button" className="ahsp-action ahsp-action--primary" disabled={!file || importing || draftBusy} aria-busy={importAction === 'PREVIEW' || undefined} onClick={() => void previewDocument()}>
               {importAction === 'PREVIEW' ? 'Membaca…' : 'Pahami dokumen'}
             </button>
+            {file && !settled ? (
+              <button
+                type="button"
+                className="ahsp-action ahsp-action--outline"
+                disabled={draftBusy || importing || draftSaved}
+                aria-busy={draftBusy || undefined}
+                onClick={() => void saveAsDraft()}
+              >
+                {draftBusy ? 'Menyimpan draft…' : draftSaved ? 'Draft tersimpan' : 'Simpan sebagai draft'}
+              </button>
+            ) : null}
+            {file && !settled ? (
+              <button
+                type="button"
+                className="ahsp-action ahsp-action--quiet"
+                disabled={draftBusy || importing}
+                onClick={() => {
+                  // Cancel only the current local selection. A saved intake journal
+                  // or existing canonical AHSP is never deleted by this action.
+                  if (preview && !window.confirm('Batalkan pekerjaan pada berkas ini? Perubahan sementara yang belum tersimpan akan hilang. Catatan yang sudah tersimpan di SIMPROK tetap ada.')) return;
+                  reads.changeDocument();
+                  forgetDocument();
+                  setFile(null);
+                  setDraftSaved(false);
+                  setDraftReceipt(null);
+                  if (fileInputRef.current) fileInputRef.current.value = '';
+                }}
+              >
+                {draftSaved ? 'Tutup dokumen ini (draft tetap tersimpan)' : 'Batalkan import baru'}
+              </button>
+            ) : null}
           </div>
+          {file && !settled ? (
+            <p className="ahsp-line ahsp-line--abu">
+              Draft menyimpan berkas sumber dan jurnal pembacaan ke SIMPROK, tanpa menjadikannya AHSP siap digunakan.
+              Pilihan kesamaan yang belum dikomit perlu diperiksa kembali saat melanjutkan.
+            </p>
+          ) : null}
+          {draftReceipt ? (
+            <p role="status" className="ahsp-line" style={{ color: draftSaved ? '#24513A' : RED }}>
+              {draftReceipt}
+            </p>
+          ) : null}
           {preview && !settled ? (
             <ol
               aria-label="Langkah import AHSP"
@@ -1833,7 +2061,10 @@ export function AhspImportPage() {
                 enabled={canManage && !settled}
                 prefillDasarAcuan={preview.document?.regulationReference?.raw ?? null}
                 value={assistedClassification}
-                onChange={setAssistedClassification}
+                onChange={(next) => {
+                  setDraftSaved(false);
+                  setAssistedClassification(next);
+                }}
               />
               {intake ? null : (
                 <section className="ahsp-ringkasan" aria-label="Ringkasan hasil analisis">
@@ -2175,51 +2406,110 @@ export function AhspImportPage() {
         </section>
       ) : null}
 
-      {/* Earlier imports still holding work — large card only when there is content
-          or a failed/stale read. Empty READY becomes a compact disclosure. */}
-      {canManage &&
-      (waitingImports.length > 0 ||
-        jobOutcomes.length > 0 ||
-        importHasMore ||
-        importPhase === 'FAILED' ||
-        importPhase === 'STALE') ? (
-        <section aria-label="Import yang masih dilengkapi" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
-          {importJobIntro}
-          <ReadNotice
-            phase={importPhase}
-            onRetry={() => void loadImportJobs(importJobs.length === 0 ? 'INITIAL' : 'REFRESH')}
-            label="Muat ulang daftar import"
-          />
-          {importJobList}
-          {importMayLoadOlder ? (
-            <div className="ahsp-action-row" style={{ marginTop: 'var(--space-2)' }}>
-              <button
-                type="button"
-                className="ahsp-action ahsp-action--quiet ahsp-action--compact"
-                disabled={olderImports === 'LOADING'}
-                aria-busy={olderImports === 'LOADING' || undefined}
-                onClick={() => void loadOlderImports()}
-              >
-                {olderImports === 'LOADING' ? 'Memuat…' : 'Tampilkan import lebih lama'}
-              </button>
-            </div>
+      {/* Earlier imports are visible as a CHOICE, never opened as the new upload. */}
+      {canManage ? (
+        <section aria-label="Pekerjaan import sebelumnya" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
+          <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-2)' }}>
+            Pekerjaan import sebelumnya
+          </h2>
+          <p className="ahsp-line" style={{ color: MUTED }}>
+            Dokumen lama tidak dipilih otomatis. SIMPROK menyimpan catatan import, tetapi
+            dokumen yang dicatat belum tentu menjadi AHSP siap digunakan.
+          </p>
+          {hasEarlierWorkOrUnreadHistory ? (
+            <p className="ahsp-line ahsp-line--abu">Riwayat atau pekerjaan yang masih membutuhkan pemeriksaan tersedia di bawah, setelah Anda membukanya.</p>
           ) : null}
-          {olderImports === 'FAILED' ? (
-            <p role="status" className="ahsp-line ahsp-line--abu">
-              Import yang lebih lama belum berhasil dimuat. Tidak ada yang hilang — coba tekan lagi.
+          <button
+            type="button"
+            className="ahsp-action ahsp-action--outline"
+            aria-expanded={savedImportsOpen}
+            aria-controls="ahsp-saved-imports"
+            disabled={hasUnsavedUpload || hasUnsavedPreviewChoices || hasUnsavedSavedJobChoices}
+            onClick={() => {
+              setSavedImportsOpen((value) => !value);
+              setSelectedSavedImport(null);
+              setLearningOpen(false);
+              setObservationScope(null);
+            }}
+          >
+            {savedImportsOpen ? 'Tutup pekerjaan sebelumnya' : 'Lihat pekerjaan tersimpan'}
+            {importPhase === 'READY' ? ` (${waitingImports.length}${importHasMore ? '+' : ''})` : ''}
+          </button>
+          {hasUnsavedUpload ? (
+            <p className="ahsp-line ahsp-line--abu">
+              Selesaikan, simpan sebagai draft, atau tinggalkan pekerjaan baru sebelum membuka pekerjaan lama.
             </p>
           ) : null}
+          {savedImportsOpen ? (
+            <div id="ahsp-saved-imports" style={{ marginTop: 'var(--space-3)' }}>
+              {importJobIntro}
+              <ReadNotice
+                phase={importPhase}
+                onRetry={() => void loadImportJobs(importJobs.length === 0 ? 'INITIAL' : 'REFRESH')}
+                label="Muat ulang daftar import"
+              />
+              {importPhase === 'READY' && waitingImports.length === 0 ? (
+                <p role="status" className="ahsp-pending-empty">Tidak ada import yang menunggu dilengkapi.</p>
+              ) : null}
+              <ul className="ahsp-curation-list" aria-label="Daftar pekerjaan tersimpan">
+                {waitingImports.map((job) => (
+                  <li key={job.key} style={{ padding: 'var(--space-2)', borderBottom: HAIRLINE }}>
+                    <strong style={{ display: 'block', color: NAVY }}>{job.title}</strong>
+                    <span className="ahsp-line" style={{ color: MUTED }}>{job.summaryLine}</span>
+                    <button
+                      type="button"
+                      className="ahsp-action ahsp-action--outline ahsp-action--compact"
+                      aria-pressed={selectedSavedImport === job.key}
+                      onClick={() => openSavedImport(job.key)}
+                    >
+                      {selectedSavedImport === job.key ? 'Sedang ditinjau' : 'Lanjutkan pemeriksaan'}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              {selectedSavedImport ? (
+                <div style={{ marginTop: 'var(--space-3)' }}>
+                  <h3 className="ahsp-section-title">Rincian pekerjaan terpilih</h3>
+                  {importJobList}
+                </div>
+              ) : null}
+              {importMayLoadOlder ? (
+                <div className="ahsp-action-row" style={{ marginTop: 'var(--space-2)' }}>
+                  <button
+                    type="button"
+                    className="ahsp-action ahsp-action--quiet ahsp-action--compact"
+                    disabled={olderImports === 'LOADING'}
+                    aria-busy={olderImports === 'LOADING' || undefined}
+                    onClick={() => void loadOlderImports()}
+                  >
+                    {olderImports === 'LOADING' ? 'Memuat…' : 'Tampilkan import lebih lama'}
+                  </button>
+                </div>
+              ) : null}
+              {olderImports === 'FAILED' ? (
+                <p role="status" className="ahsp-line ahsp-line--abu">
+                  Import lebih lama belum dapat dibaca. Catatan tidak dihapus. Coba muat lagi.
+                </p>
+              ) : null}
+              {canSeeQuestions ? (
+                <button
+                  type="button"
+                  className="ahsp-action ahsp-action--quiet ahsp-action--compact"
+                  aria-expanded={learningOpen}
+                  onClick={() => setLearningOpen((value) => !value)}
+                >
+                  {learningOpen ? 'Tutup pembelajaran bersama' : 'Tinjau pembelajaran bersama (semua dokumen)'}
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </section>
-      ) : canManage && importPhase === 'READY' && waitingImports.length === 0 ? (
-        <p className="ahsp-pending-empty" role="status">
-          Tidak ada import yang menunggu dilengkapi.
-        </p>
       ) : null}
 
       {/* Curation queue — the shared observed-resource lifecycle. Shown when there
           is work, when the last decisions still have something to say, or when the
           queue could not be read at all: an unread queue is never an empty one. */}
-      {canCurate &&
+      {canCurate && (savedImportsOpen && selectedSavedImport !== null || settled && observationScope !== null) &&
       (observations.length > 0 ||
         curationOutcomes.length > 0 ||
         observationScope !== null ||
@@ -2267,7 +2557,7 @@ export function AhspImportPage() {
       {/* IQL-01 — governed exact-question learning: offered by one person, approved
           by another. ONE section, whether it holds questions or not: a list that
           could not be read says so even while its last answer is still readable. */}
-      {canSeeQuestions &&
+      {canSeeQuestions && learningOpen &&
       (shownQuestions.length > 0 ||
         questionOutcomes.length > 0 ||
         questionsPhase === 'FAILED' ||
@@ -2281,6 +2571,83 @@ export function AhspImportPage() {
           />
           {questionList}
         </section>
+      ) : null}
+
+      {/* Three choices only for an unfinished NEW upload, never for a saved
+          historical job. React Router blocks internal navigation and back/forward;
+          native tab closing uses the browser's own beforeunload confirmation. */}
+      {navigationBlocker.state === 'blocked' ? (
+        <div
+          style={{
+            position: 'fixed', inset: 0, zIndex: 1200,
+            background: 'rgba(22, 41, 75, 0.55)',
+            display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 'var(--space-4)',
+          }}
+        >
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="ahsp-leave-title"
+            aria-describedby="ahsp-leave-description"
+            style={{ ...CARD, maxWidth: '36rem', width: '100%', boxShadow: '0 18px 48px rgba(0,0,0,.22)' }}
+          >
+            <h2 id="ahsp-leave-title" className="ahsp-section-title">Pekerjaan AHSP belum selesai</h2>
+            <p id="ahsp-leave-description" className="ahsp-line">
+              {hasUnsavedUpload ? (
+                <>Berkas <strong>{file?.name}</strong> masih mempunyai perubahan sementara.</>
+              ) : hasUnsavedPreviewChoices ? (
+                <>Dokumen <strong>{file?.name}</strong> sudah dicatat, tetapi pilihan kesamaannya masih belum tersimpan.</>
+              ) : (
+                <>Pilihan kesamaan pada pekerjaan AHSP tersimpan masih belum disimpan.</>
+              )}
+              {' '}SIMPROK tidak akan diam-diam menerima AHSP atau menghapus catatan yang sudah tersimpan.
+            </p>
+            <p className="ahsp-line ahsp-line--abu">
+              {hasUnsavedUpload || hasUnsavedPreviewChoices
+                ? 'Simpan sebagai draft merekam dokumen dan konteks klasifikasi di server. Pilihan kesamaan sementara yang belum dikomit tidak ikut tersimpan dan harus diputuskan lagi saat melanjutkan.'
+                : 'Pilihan kesamaan pada pekerjaan lama belum memiliki penyimpanan draft tersendiri. Tetap di halaman untuk menyelesaikannya melalui Periksa ulang yang meminta konfirmasi, atau tinggalkan hanya pilihan sementaranya.'}
+              {' '}Tinggalkan tanpa menyimpan tidak menghapus dokumen maupun AHSP yang sudah tercatat.
+            </p>
+            {previewIntakeJobId ? (
+              <p className="ahsp-line ahsp-line--abu">
+                Keputusan satuan sebelumnya sudah dicatat dalam jurnal SIMPROK. Keluar tanpa menyimpan tidak menghapus catatan tersebut.
+              </p>
+            ) : null}
+            {draftReceipt ? (
+              <p role="status" className="ahsp-line" style={{ color: draftSaved ? '#24513A' : RED }}>
+                {draftReceipt}
+              </p>
+            ) : null}
+            <div className="ahsp-action-row ahsp-action-row--stack">
+              <button
+                type="button"
+                className="ahsp-action ahsp-action--outline"
+                autoFocus
+                disabled={draftBusy}
+                onClick={() => navigationBlocker.reset()}
+              >
+                Tetap di halaman
+              </button>
+              <button
+                type="button"
+                className="ahsp-action ahsp-action--primary"
+                disabled={!file || draftBusy || importing || draftSaved}
+                aria-busy={draftBusy || undefined}
+                onClick={() => void saveAsDraft(true)}
+              >
+                {draftBusy ? 'Menyimpan draft…' : draftSaved ? 'Draft tersimpan' : 'Simpan sebagai draft'}
+              </button>
+              <button
+                type="button"
+                className="ahsp-action ahsp-action--quiet"
+                disabled={draftBusy || importing}
+                onClick={() => navigationBlocker.proceed()}
+              >
+                {draftSaved && !hasUnsavedPreviewChoices && !hasUnsavedSavedJobChoices ? 'Keluar (draft sudah tersimpan)' : 'Tinggalkan tanpa menyimpan'}
+              </button>
+            </div>
+          </section>
+        </div>
       ) : null}
 
       {/* Manual AHSP create is NOT on Import — see AhspRoomPage "Buat AHSP Manual". */}
