@@ -8,7 +8,8 @@ test('import door does not open old server jobs as a newly selected file', () =>
   assert.match(page, /const \[savedImportsOpen, setSavedImportsOpen\] = useState\(false\)/);
   assert.match(page, /const \[selectedSavedImport, setSelectedSavedImport\] = useState<string \| null>\(null\)/);
   assert.match(page, /placeOutcomes\(waitingImports/);
-  assert.match(page, /entry\.item\.key === selectedSavedImport/);
+  assert.match(page, /const effectiveSavedImportId = isReviewPage \? reviewJobId : selectedSavedImport/);
+assert.match(page, /entry\.item\.key === effectiveSavedImportId/);
   assert.match(page, /Pekerjaan import sebelumnya/);
   assert.match(page, /'Lihat pekerjaan tersimpan'/);
   assert.match(page, /onClick=\{\(\) => openSavedImport\(job\.key\)\}/);
