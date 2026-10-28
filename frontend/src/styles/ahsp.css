@@ -251,6 +251,41 @@
   transform: translateY(0);
 }
 
+/* A bounded local confirmation: clear consequences, no browser OK/Cancel. */
+.ahsp-draft-delete-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 1250;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: rgb(22 41 75 / 55%);
+}
+
+.ahsp-draft-delete-dialog {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 30rem;
+  max-height: calc(100vh - 2rem);
+  overflow-y: auto;
+  padding: var(--space-5);
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 14px;
+  background: var(--simprok-white);
+  color: var(--simprok-authority-navy-800);
+  box-shadow: 0 18px 48px rgb(15 38 65 / 22%);
+}
+
+.ahsp-draft-delete-dialog > .ahsp-line {
+  overflow-wrap: anywhere;
+}
+
+.ahsp-draft-delete-actions {
+  justify-content: flex-end;
+  margin-top: var(--space-4);
+}
+
 /* Import history: distinguish separate saved journals without filling the screen. */
 .ahsp-import-history__heading {
   display: flex;

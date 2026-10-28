@@ -378,6 +378,7 @@ export function AhspImportPage() {
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftReceipt, setDraftReceipt] = useState<string | null>(null);
   const [draftDeleteReceipt, setDraftDeleteReceipt] = useState<string | null>(null);
+  const [draftDeleteTarget, setDraftDeleteTarget] = useState<ImportJobView | null>(null);
   const [draftSaved, setDraftSaved] = useState(false);
   const hasUnsavedUpload = file !== null && !settled && !draftSaved;
   // The intake journal persists source bytes/classification, NOT duplicate choices.
@@ -1189,13 +1190,11 @@ export function AhspImportPage() {
    * preserves every completed AHSP/resource; only the unfinished journal data
    * may be removed. No optimistic disappearance before server confirmation. */
   const deleteUnfinishedDraft = async (job: ImportJobView) => {
-    if (!canManage || jobLock.current !== null || job.waitingItems.length === 0) return;
+    if (!canManage || jobLock.current !== null || hasUnsavedWork || job.waitingItems.length === 0) return;
+    // The user already confirmed the exact journal and count in SIMPROK's
+    // own alertdialog. No deletion is attempted from opening that dialog.
+    setDraftDeleteTarget(null);
     const count = job.waitingItems.length;
-    if (!window.confirm(
-      'Hapus ' + count + ' pekerjaan draft dari "' + job.title + '"? ' +
-      'Keputusan dan resource sementara dari pekerjaan tersebut akan dibuang. ' +
-      'AHSP dan resource yang sudah tersimpan tidak akan dihapus. Lanjutkan?',
-    )) return;
     const ticket = reads.captureAction('imports');
     jobLock.current = ticket;
     setJobBusy(job.key);
@@ -2534,7 +2533,9 @@ export function AhspImportPage() {
                           className="ahsp-action ahsp-action--danger ahsp-action--compact"
                           disabled={jobBusy !== null || hasUnsavedWork}
                           aria-label={'Hapus sisa draft dari ' + job.title + (job.recordedAtLine ? ', ' + job.recordedAtLine : '')}
-                          onClick={() => void deleteUnfinishedDraft(job)}
+                          onClick={() => {
+                            if (canManage && !hasUnsavedWork && jobBusy === null) setDraftDeleteTarget(job);
+                          }}
                         >
                           {jobBusy === job.key ? 'Memproses…' : 'Hapus draft'}
                         </button>
@@ -2647,6 +2648,72 @@ export function AhspImportPage() {
           />
           {questionList}
         </section>
+      ) : null}
+
+      {/* Draft deletion is confirmed in SIMPROK, not by browser OK/Cancel.
+          Opening this dialog does not perform any write. */}
+      {draftDeleteTarget ? (
+        <div className="ahsp-draft-delete-backdrop">
+          <section
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="ahsp-draft-delete-title"
+            aria-describedby="ahsp-draft-delete-description"
+            className="ahsp-draft-delete-dialog"
+            onKeyDown={(event) => {
+              if (event.key === 'Escape' && jobBusy === null) {
+                event.preventDefault();
+                setDraftDeleteTarget(null);
+              }
+              if (event.key === 'Tab') {
+                const choices = Array.from(
+                  event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'),
+                );
+                const first = choices[0];
+                const last = choices[choices.length - 1];
+                if (!first || !last) return;
+                if (event.shiftKey && document.activeElement === first) {
+                  event.preventDefault();
+                  last.focus();
+                } else if (!event.shiftKey && document.activeElement === last) {
+                  event.preventDefault();
+                  first.focus();
+                }
+              }
+            }}
+          >
+            <h2 id="ahsp-draft-delete-title" className="ahsp-section-title">Hapus pekerjaan draft?</h2>
+            <p id="ahsp-draft-delete-description" className="ahsp-line">
+              <strong>{draftDeleteTarget.title}</strong>
+              {draftDeleteTarget.recordedAtLine ? ' · ' + draftDeleteTarget.recordedAtLine : ''}
+            </p>
+            <p className="ahsp-line">
+              {draftDeleteTarget.waitingItems.length} pekerjaan belum selesai beserta keputusan dan resource
+              sementaranya akan dihapus.
+            </p>
+            <p className="ahsp-line ahsp-line--abu">
+              AHSP dan resource yang sudah tersimpan tetap aman.
+            </p>
+            <div className="ahsp-action-row ahsp-draft-delete-actions">
+              <button
+                type="button"
+                className="ahsp-action ahsp-action--outline"
+                autoFocus
+                onClick={() => setDraftDeleteTarget(null)}
+              >
+                Batal
+              </button>
+              <button
+                type="button"
+                className="ahsp-action ahsp-action--danger"
+                disabled={!canManage || jobBusy !== null || hasUnsavedWork}
+                onClick={() => void deleteUnfinishedDraft(draftDeleteTarget)}
+              >
+                Hapus {draftDeleteTarget.waitingItems.length} draft
+              </button>
+            </div>
+          </section>
+        </div>
       ) : null}
 
       {/* Three choices only for an unfinished NEW upload, never for a saved

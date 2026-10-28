@@ -60,7 +60,13 @@ test('unsaved local decisions are disclosed and draft deletion is separate from 
   assert.match(page, /Pilihan kesamaan sementara yang belum dikomit tidak ikut tersimpan/);
   assert.match(page, /tanpa menjadikannya AHSP siap digunakan/);
   assert.match(page, /apiFetch\('\/ahsp\/document\/jobs\/' \+ job\.key \+ '\/draft', \{\s*method: 'DELETE'/);
-  assert.match(page, /AHSP dan resource yang sudah tersimpan tidak akan dihapus/);
+  const deletionLogic = page.slice(page.indexOf('const deleteUnfinishedDraft = async'), page.indexOf('const shownQuestions ='));
+  assert.doesNotMatch(deletionLogic, /window\.confirm/);
+  assert.match(deletionLogic, /setDraftDeleteTarget\(null\)/);
+  assert.match(page, /setDraftDeleteTarget\(job\)/);
+  assert.match(page, /role="alertdialog"[\s\S]*?id="ahsp-draft-delete-title"/);
+  assert.match(page, /Batal[\s\S]*?Hapus \{draftDeleteTarget\.waitingItems\.length\} draft/);
+  assert.match(page, /AHSP dan resource yang sudah tersimpan tetap aman/);
   assert.match(page, /job\.waitingItems\.length > 0/);
   assert.match(page, /className="ahsp-action ahsp-action--danger ahsp-action--compact"[\s\S]*?Hapus draft/);
   assert.match(page, /Periksa & simpan yang siap/);
