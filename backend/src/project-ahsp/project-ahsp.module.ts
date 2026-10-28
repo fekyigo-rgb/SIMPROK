@@ -10,10 +10,12 @@ import { ResourceIdentityResolutionService } from '../resource-catalog/resource-
 import { AhspResourceResolutionOrchestrator } from './ahsp-resource-resolution.orchestrator';
 import { GhxResourceIdentityDecisionService } from './ghx-resource-identity-decision.service';
 import { GhxDecisionContextTokenService } from '../resource-catalog/ghx-decision-context-token.service';
+import { RabAutoReadinessService } from './rab-auto-readiness.service';
+import { RabAutoReadinessController } from './rab-auto-readiness.controller';
 
 @Module({
   imports: [PrismaModule, AuthModule, BasicPriceModule, UnitKernelModule],
-  controllers: [ProjectAhspController],
+  controllers: [ProjectAhspController, RabAutoReadinessController],
   providers: [
     ProjectAhspService,
     RabLifecyclePolicyService,
@@ -21,6 +23,7 @@ import { GhxDecisionContextTokenService } from '../resource-catalog/ghx-decision
     AhspResourceResolutionOrchestrator,
     GhxResourceIdentityDecisionService,
     GhxDecisionContextTokenService,
+    RabAutoReadinessService,
   ],
 })
 export class ProjectAhspModule {}
