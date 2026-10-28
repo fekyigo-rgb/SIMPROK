@@ -43,6 +43,7 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction', () => {
     $queryRaw: jest.Mock;
     basicPrice: {
       findFirst: jest.Mock;
+      findMany: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
       updateMany: jest.Mock;
@@ -55,6 +56,7 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction', () => {
       $queryRaw: jest.fn().mockResolvedValue([{ id: PREDECESSOR.id }]),
       basicPrice: {
         findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn().mockResolvedValue({
           id: 'bp-aug',
           value: new Prisma.Decimal('65000.00'),
@@ -149,13 +151,13 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction', () => {
   });
 
   it('PRICE-IDEMP-01 — duplicate new observation returns the existing row', async () => {
-    tx.basicPrice.findFirst
-      .mockResolvedValueOnce(PREDECESSOR)
-      .mockResolvedValueOnce({
-        id: 'bp-aug',
-        value: '65000.00',
-        kdnPercent: '72.50',
-      });
+    tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR);
+    tx.basicPrice.findMany.mockResolvedValueOnce([{
+      id: 'bp-aug',
+      value: '65000.00',
+      kdnPercent: '72.50',
+      provenanceCorrections: [{ after: { sourceIdentityName: null } }],
+    }]);
     const result = await observePrice();
     expect(result).toEqual({
       basicPriceId: 'bp-aug',
@@ -179,18 +181,24 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction', () => {
       sourceIdentityName: 'Toko Berbeda',
       sourceOrigin: 'SUPPLIER',
     });
-    const where = tx.basicPrice.findFirst.mock.calls[1][0].where as {
-      sourceType: string;
-      sourceOrigin: string;
-      provenanceCorrections: { some: { AND: unknown[] } };
+    const lookup = tx.basicPrice.findMany.mock.calls[0][0] as {
+      where: {
+        sourceType: string;
+        sourceOrigin: string;
+        provenanceCorrections: { some: { AND: unknown[] } };
+      };
+      select: { provenanceCorrections: { where: unknown; select: { after: boolean } } };
     };
-    expect(where.sourceType).toBe('MARKET_SURVEY');
-    expect(where.sourceOrigin).toBe('SUPPLIER');
-    expect(where.provenanceCorrections.some.AND).toEqual(expect.arrayContaining([
+    expect(lookup.where.sourceType).toBe('MARKET_SURVEY');
+    expect(lookup.where.sourceOrigin).toBe('SUPPLIER');
+    expect(lookup.where.provenanceCorrections.some.AND).toEqual(expect.arrayContaining([
       { before: { path: ['observedAfterBasicPriceId'], equals: PREDECESSOR.id } },
       { after: { path: ['sameSourceIdentity'], equals: false } },
-      { after: { path: ['sourceIdentityName'], equals: 'Toko Berbeda' } },
     ]));
+    expect(lookup.where.provenanceCorrections.some.AND).not.toContainEqual({
+      after: { path: ['sourceIdentityName'], equals: 'Toko Berbeda' },
+    });
+    expect(lookup.select.provenanceCorrections.select.after).toBe(true);
   });
 
   it('BP-C2 P2002 — aborted PostgreSQL transaction is never queried again', async () => {
@@ -204,7 +212,8 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction', () => {
     await expect(observePrice()).rejects.toMatchObject({
       message: 'NEW_OBSERVATION_CONFLICT',
     });
-    expect(tx.basicPrice.findFirst).toHaveBeenCalledTimes(2);
+    expect(tx.basicPrice.findFirst).toHaveBeenCalledTimes(1);
+    expect(tx.basicPrice.findMany).toHaveBeenCalledTimes(1);
   });
 
   it('BP-C2 MIGRATION — removes only false money-only uniqueness, retains indexed lookup', () => {

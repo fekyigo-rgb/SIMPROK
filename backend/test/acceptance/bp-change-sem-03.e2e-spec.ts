@@ -450,6 +450,46 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction (e2e)', () => {
           .expect(201)
       ).body,
     );
+
+    // The same real observation, even with Unicode/case/spacing variants,
+    // must return one canonical id. A genuinely different shop may quote
+    // the same money on the same date without being falsely joined.
+    const retry = asMutationBody((
+      await request(http())
+        .post(`/basic-price-imports/prices/${predecessorId}/observations`)
+        .set(hdr())
+        .send({
+          expectedValue: predecessor.value.toFixed(2),
+          proposedValue: '107000.00',
+          effectiveDate: '2026-08-28',
+          reason: 'retry sumber yang sama',
+          sameSource: false,
+          sourceIdentityName: '  ＴＯＫＯ　ＢＡＲＵ   ＡＭＢＯＮ ',
+          sourceOrigin: 'STORE',
+        })
+        .expect(201)
+    ).body);
+    expect(retry.basicPriceId).toBe(observed.basicPriceId);
+    expect(retry.unchanged).toBe(true);
+
+    const anotherShop = asMutationBody((
+      await request(http())
+        .post(`/basic-price-imports/prices/${predecessorId}/observations`)
+        .set(hdr())
+        .send({
+          expectedValue: predecessor.value.toFixed(2),
+          proposedValue: '107000.00',
+          effectiveDate: '2026-08-28',
+          reason: 'harga dari toko lain yang sah',
+          sameSource: false,
+          sourceIdentityName: 'Toko Lain Ambon',
+          sourceOrigin: 'STORE',
+        })
+        .expect(201)
+    ).body);
+    expect(anotherShop.basicPriceId).not.toBe(observed.basicPriceId);
+    expect(anotherShop.unchanged).toBe(false);
+
     const stillOld = await prisma.basicPrice.findUniqueOrThrow({
       where: { id: predecessorId },
     });

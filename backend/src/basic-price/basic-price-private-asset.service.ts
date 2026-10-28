@@ -18,6 +18,7 @@ import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
 import {
   deriveExplorerSourceName,
   normalizeSourceIdentityName,
+  sourceIdentityNameFromAudit,
   sourceNameFromBatch,
   mapPrivateBasicPriceItem,
   type PrivateBasicPriceItem,
@@ -2200,12 +2201,11 @@ export class BasicPricePrivateAssetService {
         { before: { path: ['observedAfterBasicPriceId'], equals: predecessor.id } },
         { after: { path: ['semantic'], equals: 'NEW_OBSERVATION' } },
         { after: { path: ['sameSourceIdentity'], equals: params.sameSourceIdentity } },
-        ...(params.sourceIdentityName === null ? [] : [
-          { after: { path: ['sourceIdentityName'], equals: params.sourceIdentityName } },
-        ]),
+        // Publisher spelling is compared below with the same canonical
+        // normalizer used at the input door, including historical audit rows.
       ],
     };
-    const existing = await tx.basicPrice.findFirst({
+    const candidates = await tx.basicPrice.findMany({
       where: {
         workspaceId: actor.workspaceId,
         assetScope: BasicPriceAssetScope.WORKSPACE_PRIVATE,
@@ -2221,8 +2221,25 @@ export class BasicPricePrivateAssetService {
         kdnPercent: kdnValue,
         provenanceCorrections: { some: sameBirthAudit },
       },
-      select: { id: true, value: true, kdnPercent: true },
+      select: {
+        id: true,
+        value: true,
+        kdnPercent: true,
+        provenanceCorrections: {
+          where: sameBirthAudit,
+          select: { after: true },
+        },
+      },
     });
+    const normalizedPublisher = normalizeSourceIdentityName(
+      params.sourceIdentityName,
+    );
+    const existing = candidates.find((candidate) =>
+      candidate.provenanceCorrections.some((audit) =>
+        normalizeSourceIdentityName(sourceIdentityNameFromAudit(audit.after)) ===
+        normalizedPublisher,
+      ),
+    );
     if (existing) {
       return {
         basicPriceId: existing.id,

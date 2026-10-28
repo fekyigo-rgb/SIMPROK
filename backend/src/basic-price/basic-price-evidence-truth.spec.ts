@@ -387,6 +387,7 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
       $queryRaw: jest.Mock;
       basicPrice: {
         findFirst: jest.Mock;
+        findMany: jest.Mock;
         create: jest.Mock;
         update: jest.Mock;
         updateMany: jest.Mock;
@@ -399,6 +400,7 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
         $queryRaw: jest.fn().mockResolvedValue([{ id: PREDECESSOR.id }]),
         basicPrice: {
           findFirst: jest.fn(),
+          findMany: jest.fn().mockResolvedValue([]),
           create: jest.fn().mockResolvedValue({
             id: 'bp-aug',
             value: new Prisma.Decimal('65000.00'),
@@ -536,6 +538,62 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
       expect(audit.after.sameSourceIdentity).toBe(false);
       expect(tx.basicPrice.update).not.toHaveBeenCalled();
       expect(tx.basicPrice.updateMany).not.toHaveBeenCalled();
+    });
+
+    it.each(['toko baru', '  TOKO   BARU  ', 'Ｔｏｋｏ　Ｂａｒｕ'])(
+      'PRICE-IDEMP-02 — normalized publisher retry %s reuses its canonical observation',
+      async (retryPublisher) => {
+        tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR);
+        tx.basicPrice.findMany.mockResolvedValueOnce([{
+          id: 'existing-toko-baru',
+          value: new Prisma.Decimal('65000.00'),
+          kdnPercent: new Prisma.Decimal('72.50'),
+          provenanceCorrections: [{
+            after: { semantic: 'NEW_OBSERVATION', sourceIdentityName: 'Toko Baru' },
+          }],
+        }]);
+        const result = await service.observePrivatePrice({
+          basicPriceId: PREDECESSOR.id,
+          actor: ACTOR,
+          expectedValue: '62500.00',
+          proposedValue: '65000.00',
+          effectiveDate: '2026-08-28',
+          reason: 'retry dari sumber berbeda yang sama',
+          sameSource: false,
+          sourceIdentityName: retryPublisher,
+          sourceOrigin: 'STORE',
+        });
+        expect(result).toMatchObject({
+          basicPriceId: 'existing-toko-baru',
+          unchanged: true,
+        });
+        expect(tx.basicPrice.create).not.toHaveBeenCalled();
+        expect(tx.basicPriceProvenanceCorrection.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it('PRICE-IDEMP-02 — distinct publishers with equal price and date remain distinct', async () => {
+      tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR);
+      tx.basicPrice.findMany.mockResolvedValueOnce([{
+        id: 'other-publisher',
+        value: new Prisma.Decimal('65000.00'),
+        kdnPercent: new Prisma.Decimal('72.50'),
+        provenanceCorrections: [{
+          after: { semantic: 'NEW_OBSERVATION', sourceIdentityName: 'Toko Lain' },
+        }],
+      }]);
+      await service.observePrivatePrice({
+        basicPriceId: PREDECESSOR.id,
+        actor: ACTOR,
+        expectedValue: '62500.00',
+        proposedValue: '65000.00',
+        effectiveDate: '2026-08-28',
+        reason: 'penawaran lain yang sah',
+        sameSource: false,
+        sourceIdentityName: 'Toko Baru',
+        sourceOrigin: 'STORE',
+      });
+      expect(tx.basicPrice.create).toHaveBeenCalledTimes(1);
     });
 
     it('PRICE-EVID-02 — different source without a name fails closed', async () => {
