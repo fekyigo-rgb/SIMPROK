@@ -62,7 +62,7 @@ test('periksa di katalog uses canonical search control without selecting or pers
   assert.match(page, /visibleGuidedCandidates\.map\(renderGuidedCandidate\)/u);
   assert.match(page, /hiddenGuidedOther\.map\(renderGuidedCandidate\)/u);
   assert.match(page, /setCandidateSearchSeeds/u);
-  assert.match(page, /initialQuery=\{\(candidateSearchSeeds\[row.id\]\?\.name/u);
+  assert.match(page, /initialQuery=\{candidateSearchSeeds\[row\.id\]\?\.name \?\? equipmentCatalogSearchSeed/u);
   assert.match(page, /Pilih hasil yang benar dan periksa satuan/u);
   const buttonBody = page.slice(page.indexOf('const renderGuidedCandidate'), page.indexOf('const resourceProven ='));
   assert.doesNotMatch(buttonBody, /resolveBasicPriceImportRow|onSelect\(|setDrafts\(.*resourceCatalogId/u);
