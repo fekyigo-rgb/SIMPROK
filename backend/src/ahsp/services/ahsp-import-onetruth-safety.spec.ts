@@ -1,6 +1,23 @@
 import { ImportStatus } from '@prisma/client';
 import { AhspDocumentCanonicalizationService } from './ahsp-document-canonicalization.service';
 
+type SafetyVerificationSubject = {
+  writeItem: jest.Mock;
+  recordUseExisting: jest.Mock;
+  settleHeldItem: (
+    item: unknown,
+    knowledge: unknown,
+    context: unknown,
+    tx: unknown,
+  ) => Promise<{
+    kind: string;
+    ahspId?: string;
+    versionId?: string;
+    reusedParent?: boolean;
+    assignmentAppliedInTransaction?: boolean;
+  }>;
+};
+
 describe('AHSP one-truth Import reconciliation — protection of canonical parent and journal', () => {
   const workspaceId = '11111111-1111-4111-8111-111111111111';
   const ahspId = '22222222-2222-4222-8222-222222222222';
@@ -27,50 +44,112 @@ describe('AHSP one-truth Import reconciliation — protection of canonical paren
   };
   function harness(
     match: Record<string, unknown>,
-    overrides?: { parent?: { id: string } | null; version?: { id: string } | null },
+    overrides?: {
+      parent?: { id: string } | null;
+      version?: { id: string } | null;
+    },
   ) {
-    const service = Object.create(AhspDocumentCanonicalizationService.prototype) as any;
+    const service = Object.create(
+      AhspDocumentCanonicalizationService.prototype,
+    ) as unknown as SafetyVerificationSubject;
     const journal = { settleOrThrow: jest.fn().mockResolvedValue(undefined) };
     const audit = { logAction: jest.fn().mockResolvedValue(undefined) };
     const assignments = {
       applyToAhsp: jest.fn().mockResolvedValue({ applied: 1 }),
     };
     const writer = jest.fn().mockResolvedValue({
-      ahspId, versionId: 'version-2', admission: 'PROVEN',
-      identityPendingResources: 0, linkedResources: [],
+      ahspId,
+      versionId: 'version-2',
+      admission: 'PROVEN',
+      identityPendingResources: 0,
+      linkedResources: [],
     });
     const adopted = jest.fn().mockResolvedValue(ahspId);
     const tx = {
-      aHSP: { findFirst: jest.fn().mockResolvedValue(overrides?.parent === undefined ? { id: ahspId } : overrides.parent) },
-      aHSPVersion: { findFirst: jest.fn().mockResolvedValue(overrides?.version === undefined ? { id: 'version-1' } : overrides.version) },
+      aHSP: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue(
+            overrides?.parent === undefined ? { id: ahspId } : overrides.parent,
+          ),
+      },
+      aHSPVersion: {
+        findFirst: jest
+          .fn()
+          .mockResolvedValue(
+            overrides?.version === undefined
+              ? { id: 'version-1' }
+              : overrides.version,
+          ),
+      },
     };
-    Object.assign(service, { journal, audit, assistedClassification: assignments });
+    Object.assign(service, {
+      journal,
+      audit,
+      assistedClassification: assignments,
+    });
     service.writeItem = writer;
     service.recordUseExisting = adopted;
     const item = {
       ...base,
-      identityMatches: [{ ahspId, deleted: false, signal: 'EXACT_PARENT',
-        formulaSame: false, classificationCovered: true, currentVersionId: 'version-1', ...match }],
+      identityMatches: [
+        {
+          ahspId,
+          deleted: false,
+          signal: 'EXACT_PARENT',
+          formulaSame: false,
+          classificationCovered: true,
+          currentVersionId: 'version-1',
+          ...match,
+        },
+      ],
     };
     const run = (decision?: string) =>
-      service.settleHeldItem(item, { source: { contentDigestSha256: 'abc' } },
-        { ...context, decision }, tx as any);
-    return { run, tx, service, item, writer, adopted, assignments, journal, audit };
+      service.settleHeldItem(
+        item,
+        { source: { contentDigestSha256: 'abc' } },
+        { ...context, decision },
+        tx,
+      );
+    return {
+      run,
+      tx,
+      service,
+      item,
+      writer,
+      adopted,
+      assignments,
+      journal,
+      audit,
+    };
   }
 
   it('different proven formula: explicit adoption appends version, never creates parent, maintains the base', async () => {
     const x = harness({});
     const answer = await x.run('USE_EXISTING');
-    expect(answer).toMatchObject({ kind: 'WRITTEN', ahspId, versionId: 'version-2', reusedParent: true });
+    expect(answer).toMatchObject({
+      kind: 'WRITTEN',
+      ahspId,
+      versionId: 'version-2',
+      reusedParent: true,
+    });
     expect(x.writer).toHaveBeenCalledTimes(1);
-    expect(x.writer.mock.calls[0][2]).toMatchObject({
-      existingParentId: ahspId, basedOnVersionId: 'version-1', workspaceId,
+    const writeCall = x.writer.mock.calls[0] as unknown as readonly unknown[];
+    expect(writeCall[2]).toMatchObject({
+      existingParentId: ahspId,
+      basedOnVersionId: 'version-1',
+      workspaceId,
     });
     expect(x.assignments.applyToAhsp).toHaveBeenCalledWith(
-      expect.objectContaining({ ahspId, actingWorkspaceId: workspaceId, client: x.tx }),
+      expect.objectContaining({
+        ahspId,
+        actingWorkspaceId: workspaceId,
+        client: x.tx,
+      }),
     );
     expect(x.tx.aHSP.findFirst).toHaveBeenCalledWith({
-      where: { id: ahspId, workspaceId, deletedAt: null }, select: { id: true },
+      where: { id: ahspId, workspaceId, deletedAt: null },
+      select: { id: true },
     });
   });
 
@@ -78,14 +157,19 @@ describe('AHSP one-truth Import reconciliation — protection of canonical paren
     const x = harness({ formulaSame: true, classificationCovered: false });
     const answer = await x.run('USE_EXISTING');
     expect(answer).toMatchObject({
-      kind: 'ALREADY_PRESENT', ahspId, assignmentAppliedInTransaction: true,
+      kind: 'ALREADY_PRESENT',
+      ahspId,
+      assignmentAppliedInTransaction: true,
     });
     expect(x.writer).not.toHaveBeenCalled();
     expect(x.assignments.applyToAhsp).toHaveBeenCalledTimes(1);
     expect(x.journal.settleOrThrow).toHaveBeenCalledWith(x.tx, {
-      workspaceId, lineId: 'line-1', status: ImportStatus.COMPLETED,
+      workspaceId,
+      lineId: 'line-1',
+      status: ImportStatus.COMPLETED,
       reasonCodes: ['IDENTITY_POSSIBLE_MATCH'],
-      ahspId, ahspVersionId: 'version-1',
+      ahspId,
+      ahspVersionId: 'version-1',
     });
   });
 
@@ -111,7 +195,8 @@ describe('AHSP one-truth Import reconciliation — protection of canonical paren
     const answer = await x.run('USE_EXISTING');
     expect(answer.kind).toBe('HELD');
     expect(x.tx.aHSP.findFirst).toHaveBeenCalledWith({
-      where: { id: ahspId, workspaceId, deletedAt: null }, select: { id: true },
+      where: { id: ahspId, workspaceId, deletedAt: null },
+      select: { id: true },
     });
     expect(x.adopted).not.toHaveBeenCalled();
     expect(x.writer).not.toHaveBeenCalled();
@@ -128,7 +213,10 @@ describe('AHSP one-truth Import reconciliation — protection of canonical paren
 
   it('ambiguous candidate set cannot pick whichever parent sorted first', async () => {
     const x = harness({});
-    x.item.identityMatches.push({ ...x.item.identityMatches[0], ahspId: 'another-parent' });
+    x.item.identityMatches.push({
+      ...x.item.identityMatches[0],
+      ahspId: 'another-parent',
+    });
     // The existing audit writer records a refused adoption and returns null.
     // It must never pick the first candidate in the ambiguity.
     x.adopted.mockResolvedValue(null);

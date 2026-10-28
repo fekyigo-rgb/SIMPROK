@@ -1,4 +1,9 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { ImportStatus, LocationType, MethodType, Prisma } from '@prisma/client';
 import { IntakeError } from '../../universal-intake/intake-errors';
 import { ReaderRegistry } from '../../universal-intake/readers/reader-registry';
@@ -68,15 +73,15 @@ import {
   type AhspIdentityContextFact,
 } from '../document/ahsp-identity-classifier';
 import { AhspImportAssistedClassificationService } from './ahsp-import-assisted-classification.service';
-import {
-  type AssistedClassificationContext,
-  parseAssistedClassificationContext,
-} from '../document/ahsp-assisted-classification';
+import { type AssistedClassificationContext } from '../document/ahsp-assisted-classification';
 
 export const AHSP_DOCUMENT_MAX_BYTES = MAX_ENVELOPE_BYTES;
 
 /** A human's decision on an AHSP the identity classifier flagged. Travels from Import Review to commit. */
-export type AhspImportDecisionAction = 'USE_EXISTING' | 'KEEP_SEPARATE' | 'SKIP';
+export type AhspImportDecisionAction =
+  | 'USE_EXISTING'
+  | 'KEEP_SEPARATE'
+  | 'SKIP';
 export interface AhspImportDecision {
   readonly workType: string;
   readonly methodName: string;
@@ -117,9 +122,7 @@ interface StoredUnitDecision {
  * and never rewritten, so each output statement and each named component is a
  * stable slot: `output`, `output-statement:N`, or `resource:N`.
  */
-function unitOccurrenceSlots(
-  knowledge: AhspWorkItemKnowledge,
-): Array<{
+function unitOccurrenceSlots(knowledge: AhspWorkItemKnowledge): Array<{
   occurrenceKey: string;
   raw: string;
   group: AhspResourceGroup | null;
@@ -147,7 +150,8 @@ function unitOccurrenceSlots(
     });
   }
   knowledge.resources.forEach((resource, index) => {
-    if (!resource.rawName || !resource.group || resource.rawUnit === null) return;
+    if (!resource.rawName || !resource.group || resource.rawUnit === null)
+      return;
     slots.push({
       occurrenceKey: `resource:${index}`,
       raw: resource.rawUnit,
@@ -316,7 +320,9 @@ export class AhspDocumentCanonicalizationService {
   }
 
   async previewUpload(params: {
-    file: { buffer?: Buffer; originalname?: string; mimetype?: string } | undefined;
+    file:
+      | { buffer?: Buffer; originalname?: string; mimetype?: string }
+      | undefined;
     workspaceId: string;
     actorAccountId: string;
   }): Promise<AhspDocumentKnowledge> {
@@ -324,7 +330,9 @@ export class AhspDocumentCanonicalizationService {
   }
 
   async commitUpload(params: {
-    file: { buffer?: Buffer; originalname?: string; mimetype?: string } | undefined;
+    file:
+      | { buffer?: Buffer; originalname?: string; mimetype?: string }
+      | undefined;
     workspaceId: string;
     actorAccountId: string;
     userId: string;
@@ -346,7 +354,9 @@ export class AhspDocumentCanonicalizationService {
    * the existing journal. No AHSP and no version are written here.
    */
   async openImportReviewUpload(params: {
-    file: { buffer?: Buffer; originalname?: string; mimetype?: string } | undefined;
+    file:
+      | { buffer?: Buffer; originalname?: string; mimetype?: string }
+      | undefined;
     workspaceId: string;
     actorAccountId: string;
     userId: string;
@@ -383,15 +393,24 @@ export class AhspDocumentCanonicalizationService {
 
   async preview(envelope: SourceEnvelope): Promise<AhspDocumentKnowledge> {
     const read = await this.readers.read(envelope);
-    return this.resolveKnowledge(understandAhspDocument(read, envelope), envelope.workspaceId);
+    return this.resolveKnowledge(
+      understandAhspDocument(read, envelope),
+      envelope.workspaceId,
+    );
   }
 
   private async envelopeFromUpload(params: {
-    file: { buffer?: Buffer; originalname?: string; mimetype?: string } | undefined;
+    file:
+      | { buffer?: Buffer; originalname?: string; mimetype?: string }
+      | undefined;
     workspaceId: string;
     actorAccountId: string;
   }): Promise<SourceEnvelope> {
-    if (!params.file?.buffer || !Buffer.isBuffer(params.file.buffer) || params.file.buffer.length === 0) {
+    if (
+      !params.file?.buffer ||
+      !Buffer.isBuffer(params.file.buffer) ||
+      params.file.buffer.length === 0
+    ) {
       throw new BadRequestException('SOURCE_BYTES_REQUIRED');
     }
     const workspace = await this.prisma.workspace.findUnique({
@@ -433,7 +452,12 @@ export class AhspDocumentCanonicalizationService {
     workspaceId: string;
     importJobId: string;
   }): Promise<
-    | { status: 'FOUND'; bytes: Buffer; sourceFileName: string | null; contentDigestSha256: string }
+    | {
+        status: 'FOUND';
+        bytes: Buffer;
+        sourceFileName: string | null;
+        contentDigestSha256: string;
+      }
     | { status: 'JOB_NOT_FOUND' }
     | { status: 'DOCUMENT_NOT_NAMED' }
     | { status: 'NOT_RETAINED' }
@@ -539,7 +563,9 @@ export class AhspDocumentCanonicalizationService {
       },
     );
     const knowledge = await this.refineKnowledgeIdentityForCommit(
-      resolved, envelope.workspaceId, assisted,
+      resolved,
+      envelope.workspaceId,
+      assisted,
     );
     return this.commitKnowledge(knowledge, {
       workspaceId: envelope.workspaceId,
@@ -609,7 +635,9 @@ export class AhspDocumentCanonicalizationService {
       },
     );
     const knowledge = await this.refineKnowledgeIdentityForCommit(
-      resolved, params.workspaceId, assisted,
+      resolved,
+      params.workspaceId,
+      assisted,
     );
     return this.commitKnowledge(knowledge, {
       workspaceId: params.workspaceId,
@@ -637,72 +665,95 @@ export class AhspDocumentCanonicalizationService {
   async deleteUnfinishedImportDraft(params: {
     workspaceId: string;
     importJobId: string;
-  }): Promise<{ deletedDraftItems: number; preservedCompletedItems: number; journalRemoved: boolean }> {
-    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(params.importJobId)) {
+  }): Promise<{
+    deletedDraftItems: number;
+    preservedCompletedItems: number;
+    journalRemoved: boolean;
+  }> {
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        params.importJobId,
+      )
+    ) {
       throw new NotFoundException('AHSP_IMPORT_JOB_NOT_FOUND');
     }
     for (let attempt = 0; attempt < 3; attempt += 1) {
       try {
-        return await this.prisma.$transaction(async (client) => {
-          const job = await client.aHSPImportJob.findFirst({
-            where: { id: params.importJobId, workspaceId: params.workspaceId },
-            select: { id: true },
-          });
-          if (!job) throw new NotFoundException('AHSP_IMPORT_JOB_NOT_FOUND');
-
-          const draftCount = await client.aHSPImportLine.count({
-            where: {
-              workspaceId: params.workspaceId,
-              importJobId: job.id,
-              status: { in: [ImportStatus.PENDING, ImportStatus.FAILED] },
-            },
-          });
-          if (draftCount === 0) throw new ConflictException('AHSP_IMPORT_NO_DRAFT_TO_DELETE');
-
-          // Cascade removes only per-line draft unit decisions; no canonical
-          // AHSP, resource catalog, or independently stored observation is touched.
-          const deleted = await client.aHSPImportLine.deleteMany({
-            where: {
-              workspaceId: params.workspaceId,
-              importJobId: job.id,
-              status: { in: [ImportStatus.PENDING, ImportStatus.FAILED] },
-            },
-          });
-          if (deleted.count !== draftCount) {
-            throw new ConflictException('AHSP_IMPORT_DRAFT_CHANGED_RETRY');
-          }
-          const preservedCompletedItems = await client.aHSPImportLine.count({
-            where: {
-              workspaceId: params.workspaceId,
-              importJobId: job.id,
-              status: ImportStatus.COMPLETED,
-            },
-          });
-          const remainingLines = await client.aHSPImportLine.count({
-            where: { workspaceId: params.workspaceId, importJobId: job.id },
-          });
-          if (remainingLines !== preservedCompletedItems) {
-            // Unknown status or a concurrent write: fail closed, rollback all.
-            throw new ConflictException('AHSP_IMPORT_DRAFT_CHANGED_RETRY');
-          }
-          const journalRemoved = preservedCompletedItems === 0;
-          if (journalRemoved) {
-            // No represented line remains: delete only this empty journal and
-            // its own evidence/context. The foreign key points FROM job TO AHSP.
-            await client.aHSPImportJob.deleteMany({
-              where: { id: job.id, workspaceId: params.workspaceId },
+        return await this.prisma.$transaction(
+          async (client) => {
+            const job = await client.aHSPImportJob.findFirst({
+              where: {
+                id: params.importJobId,
+                workspaceId: params.workspaceId,
+              },
+              select: { id: true },
             });
-          } else {
-            await client.aHSPImportJob.updateMany({
-              where: { id: job.id, workspaceId: params.workspaceId },
-              data: { status: ImportStatus.COMPLETED },
+            if (!job) throw new NotFoundException('AHSP_IMPORT_JOB_NOT_FOUND');
+
+            const draftCount = await client.aHSPImportLine.count({
+              where: {
+                workspaceId: params.workspaceId,
+                importJobId: job.id,
+                status: { in: [ImportStatus.PENDING, ImportStatus.FAILED] },
+              },
             });
-          }
-          return { deletedDraftItems: deleted.count, preservedCompletedItems, journalRemoved };
-        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+            if (draftCount === 0)
+              throw new ConflictException('AHSP_IMPORT_NO_DRAFT_TO_DELETE');
+
+            // Cascade removes only per-line draft unit decisions; no canonical
+            // AHSP, resource catalog, or independently stored observation is touched.
+            const deleted = await client.aHSPImportLine.deleteMany({
+              where: {
+                workspaceId: params.workspaceId,
+                importJobId: job.id,
+                status: { in: [ImportStatus.PENDING, ImportStatus.FAILED] },
+              },
+            });
+            if (deleted.count !== draftCount) {
+              throw new ConflictException('AHSP_IMPORT_DRAFT_CHANGED_RETRY');
+            }
+            const preservedCompletedItems = await client.aHSPImportLine.count({
+              where: {
+                workspaceId: params.workspaceId,
+                importJobId: job.id,
+                status: ImportStatus.COMPLETED,
+              },
+            });
+            const remainingLines = await client.aHSPImportLine.count({
+              where: { workspaceId: params.workspaceId, importJobId: job.id },
+            });
+            if (remainingLines !== preservedCompletedItems) {
+              // Unknown status or a concurrent write: fail closed, rollback all.
+              throw new ConflictException('AHSP_IMPORT_DRAFT_CHANGED_RETRY');
+            }
+            const journalRemoved = preservedCompletedItems === 0;
+            if (journalRemoved) {
+              // No represented line remains: delete only this empty journal and
+              // its own evidence/context. The foreign key points FROM job TO AHSP.
+              await client.aHSPImportJob.deleteMany({
+                where: { id: job.id, workspaceId: params.workspaceId },
+              });
+            } else {
+              await client.aHSPImportJob.updateMany({
+                where: { id: job.id, workspaceId: params.workspaceId },
+                data: { status: ImportStatus.COMPLETED },
+              });
+            }
+            return {
+              deletedDraftItems: deleted.count,
+              preservedCompletedItems,
+              journalRemoved,
+            };
+          },
+          { isolationLevel: Prisma.TransactionIsolationLevel.Serializable },
+        );
       } catch (error) {
-        if (attempt < 2 && error instanceof Prisma.PrismaClientKnownRequestError &&
-            error.code === 'P2034') continue;
+        if (
+          attempt < 2 &&
+          error instanceof Prisma.PrismaClientKnownRequestError &&
+          error.code === 'P2034'
+        )
+          continue;
         throw error;
       }
     }
@@ -860,19 +911,22 @@ export class AhspDocumentCanonicalizationService {
     // A completed *journal* is not proof that the canonical AHSP is still
     // active. Consult its existing soft-delete marker without restoring it.
     // This is one read for the page, not one query per import line.
-    const completedParents = [...new Set(
-      completed.flatMap((line) => line.ahspId ? [line.ahspId] : []),
-    )];
-    const removedParents = completedParents.length > 0
-      ? await this.prisma.aHSP.findMany({
-          where: {
-            workspaceId,
-            id: { in: completedParents },
-            deletedAt: { not: null },
-          },
-          select: { id: true },
-        })
-      : [];
+    const completedParents = [
+      ...new Set(
+        completed.flatMap((line) => (line.ahspId ? [line.ahspId] : [])),
+      ),
+    ];
+    const removedParents =
+      completedParents.length > 0
+        ? await this.prisma.aHSP.findMany({
+            where: {
+              workspaceId,
+              id: { in: completedParents },
+              deletedAt: { not: null },
+            },
+            select: { id: true },
+          })
+        : [];
     const removedParentIds = new Set(removedParents.map((row) => row.id));
     const recipes = await this.recipeStates(
       workspaceId,
@@ -1250,7 +1304,11 @@ export class AhspDocumentCanonicalizationService {
     occurrenceKey: string;
     unitDefinitionId: string;
     userId: string;
-  }): Promise<{ occurrenceKey: string; unitDefinitionId: string; rawUnit: string }> {
+  }): Promise<{
+    occurrenceKey: string;
+    unitDefinitionId: string;
+    rawUnit: string;
+  }> {
     const slot = await this.unitSlotOf(params);
     const judged = await this.judgeUnit(params.unitDefinitionId, slot.group);
     if (!judged.ok) {
@@ -1337,7 +1395,9 @@ export class AhspDocumentCanonicalizationService {
     group: AhspResourceGroup | null;
   }> {
     if (!UNIT_OCCURRENCE_KEY.test(params.occurrenceKey)) {
-      throw new BadRequestException('AHSP_IMPORT_UNIT_DECISION_OCCURRENCE_UNKNOWN');
+      throw new BadRequestException(
+        'AHSP_IMPORT_UNIT_DECISION_OCCURRENCE_UNKNOWN',
+      );
     }
     const line = await this.prisma.aHSPImportLine.findFirst({
       where: {
@@ -1349,7 +1409,9 @@ export class AhspDocumentCanonicalizationService {
       select: { id: true, status: true, rawData: true },
     });
     if (!line) {
-      throw new NotFoundException('AHSP_IMPORT_UNIT_DECISION_OCCURRENCE_UNKNOWN');
+      throw new NotFoundException(
+        'AHSP_IMPORT_UNIT_DECISION_OCCURRENCE_UNKNOWN',
+      );
     }
     if (line.status === ImportStatus.COMPLETED) {
       throw new ConflictException('AHSP_IMPORT_LINE_ALREADY_SETTLED');
@@ -1358,7 +1420,9 @@ export class AhspDocumentCanonicalizationService {
       line.rawData as unknown as AhspWorkItemKnowledge,
     ).find((candidate) => candidate.occurrenceKey === params.occurrenceKey);
     if (!slot) {
-      throw new BadRequestException('AHSP_IMPORT_UNIT_DECISION_OCCURRENCE_UNKNOWN');
+      throw new BadRequestException(
+        'AHSP_IMPORT_UNIT_DECISION_OCCURRENCE_UNKNOWN',
+      );
     }
     return { importLineId: line.id, raw: slot.raw, group: slot.group };
   }
@@ -1396,9 +1460,16 @@ export class AhspDocumentCanonicalizationService {
     ];
     let sawIncompatible = false;
     for (const probe of probes) {
-      const verdict = await this.units.resolve(probe, probe, undefined, context);
+      const verdict = await this.units.resolve(
+        probe,
+        probe,
+        undefined,
+        context,
+      );
       if (
-        verdict.reasonCodes?.includes(UNIT_REASON.RESOURCE_TYPE_UNIT_INCOMPATIBLE)
+        verdict.reasonCodes?.includes(
+          UNIT_REASON.RESOURCE_TYPE_UNIT_INCOMPATIBLE,
+        )
       ) {
         sawIncompatible = true;
         continue;
@@ -1410,7 +1481,10 @@ export class AhspDocumentCanonicalizationService {
         return { ok: true, spelling: probe };
       }
     }
-    return { ok: false, reason: sawIncompatible ? 'INCOMPATIBLE' : 'UNKNOWN_UNIT' };
+    return {
+      ok: false,
+      reason: sawIncompatible ? 'INCOMPATIBLE' : 'UNKNOWN_UNIT',
+    };
   }
 
   private adjudicatedSpelling(
@@ -1633,13 +1707,17 @@ export class AhspDocumentCanonicalizationService {
               linked.resolvedResourceCatalogId &&
               current.resolvedResourceCatalogId === null
             ) {
-              (current as { resolvedResourceCatalogId: string | null }).resolvedResourceCatalogId =
-                linked.resolvedResourceCatalogId;
+              (
+                current as { resolvedResourceCatalogId: string | null }
+              ).resolvedResourceCatalogId = linked.resolvedResourceCatalogId;
             }
           });
           if (outcome.admission === 'PROVEN') counts.ready += 1;
           else counts.identityPending += 1;
-          if (verdict === 'POSSIBLY_IDENTICAL' && decision === 'KEEP_SEPARATE') {
+          if (
+            verdict === 'POSSIBLY_IDENTICAL' &&
+            decision === 'KEEP_SEPARATE'
+          ) {
             // Record only an actual human decision to keep the AHSP separate.
             // Best-effort and OUTSIDE the item's transaction: the row already carries
             // a durable AHSPCreated entry, so losing this note corrupts nothing and
@@ -1817,7 +1895,8 @@ export class AhspDocumentCanonicalizationService {
         typeof reusableParent.formulaSame !== 'boolean' ||
         typeof reusableParent.classificationCovered !== 'boolean' ||
         !reusableParent.currentVersionId
-      ) return hold(reasonCodes);
+      )
+        return hold(reasonCodes);
       // This check and all writes are on the same locked journal transaction.
       // A stale read or cross-workspace parent is not an authorization.
       const parent = await tx.aHSP.findFirst({
@@ -1830,9 +1909,13 @@ export class AhspDocumentCanonicalizationService {
         orderBy: { versionNumber: 'desc' },
         select: { id: true },
       });
-      if (current?.id !== reusableParent.currentVersionId) return hold(reasonCodes);
+      if (current?.id !== reusableParent.currentVersionId)
+        return hold(reasonCodes);
       const adoptedAhspId = await this.recordUseExisting(
-        item, knowledge, userId, tx,
+        item,
+        knowledge,
+        userId,
+        tx,
       );
       if (adoptedAhspId !== parent.id) return hold(reasonCodes);
 
@@ -1854,7 +1937,9 @@ export class AhspDocumentCanonicalizationService {
           ahspVersionId: current.id,
         });
         return {
-          kind: 'ALREADY_PRESENT', reasonCodes, ahspId: parent.id,
+          kind: 'ALREADY_PRESENT',
+          reasonCodes,
+          ahspId: parent.id,
           assignmentAppliedInTransaction: true,
         };
       }
@@ -2071,30 +2156,31 @@ export class AhspDocumentCanonicalizationService {
       // AhspService.create returns an untyped row; only the new parent's id is read.
       const parent = context.existingParentId
         ? { id: context.existingParentId }
-        : (await this.ahspService.create(
-        {
-          workspaceId,
-          workType: item.workType!.raw,
-          methodName: item.methodName!.raw,
-          methodType: AHSP_PARENT_IDENTITY_FILLER.methodType,
-          locationType: AHSP_PARENT_IDENTITY_FILLER.locationType,
-          // ACG-01 CLOSURE 2 — the source's own item code, recorded as the code
-          // it is. It already travels in `workType` because that is the column
-          // AHSP identity is keyed on, but a reader asking "what is this item's
-          // code?" had no column to read and no way to tell a code from a work
-          // type. Additive and evidential: identity is untouched, and nothing
-          // downstream treats this as a canonical key.
-          //
-          // Bidang / Divisi / Jenis Pekerjaan stay NULL here on purpose. The
-          // parser contract carries no such fact, so supplying one would mean
-          // inferring it from a document heading — context invented rather than
-          // read. Classification paths are persisted via AssignmentService.
-          code: item.workType!.raw,
-          userId,
-        },
-        tx,
-      )) as { id: string };
-      const dasarFromAssisted = context.assistedClassification?.dasarAcuan?.trim();
+        : ((await this.ahspService.create(
+            {
+              workspaceId,
+              workType: item.workType!.raw,
+              methodName: item.methodName!.raw,
+              methodType: AHSP_PARENT_IDENTITY_FILLER.methodType,
+              locationType: AHSP_PARENT_IDENTITY_FILLER.locationType,
+              // ACG-01 CLOSURE 2 — the source's own item code, recorded as the code
+              // it is. It already travels in `workType` because that is the column
+              // AHSP identity is keyed on, but a reader asking "what is this item's
+              // code?" had no column to read and no way to tell a code from a work
+              // type. Additive and evidential: identity is untouched, and nothing
+              // downstream treats this as a canonical key.
+              //
+              // Bidang / Divisi / Jenis Pekerjaan stay NULL here on purpose. The
+              // parser contract carries no such fact, so supplying one would mean
+              // inferring it from a document heading — context invented rather than
+              // read. Classification paths are persisted via AssignmentService.
+              code: item.workType!.raw,
+              userId,
+            },
+            tx,
+          )) as { id: string });
+      const dasarFromAssisted =
+        context.assistedClassification?.dasarAcuan?.trim();
       const penerbitFromAssisted =
         context.assistedClassification?.penerbit?.trim();
       const version = await this.versionService.createVersion(
@@ -2103,7 +2189,9 @@ export class AhspDocumentCanonicalizationService {
           workspaceId,
           userId,
           outputUnit: item.resolvedOutputUnit ?? item.outputUnitRaw!.raw,
-          ...(context.basedOnVersionId ? { basedOnVersionId: context.basedOnVersionId } : {}),
+          ...(context.basedOnVersionId
+            ? { basedOnVersionId: context.basedOnVersionId }
+            : {}),
           regulationReference:
             item.regulationReference?.raw ||
             dasarFromAssisted ||
@@ -2253,16 +2341,13 @@ export class AhspDocumentCanonicalizationService {
       }
       // A throw here is a technical failure of this item's transaction. It
       // must roll the item back. It must not be stored as an open identity.
-      const answer = await this.observations.acceptHumanDeclaredResourceIn(
-        tx,
-        {
-          workspaceId,
-          rawName: resource.rawName as string,
-          rawCode: resource.rawCode,
-          resourceType: resource.group as AhspResourceGroup,
-          unitDefinitionId,
-        },
-      );
+      const answer = await this.observations.acceptHumanDeclaredResourceIn(tx, {
+        workspaceId,
+        rawName: resource.rawName as string,
+        rawCode: resource.rawCode,
+        resourceType: resource.group as AhspResourceGroup,
+        unitDefinitionId,
+      });
       if (answer.outcome === 'REVIEW_REQUIRED') {
         linked.push(resource);
         continue;
@@ -2296,8 +2381,9 @@ export class AhspDocumentCanonicalizationService {
   ): AssistedClassificationContext | null {
     const dasarFromSource =
       knowledge.document.regulationReference?.raw?.trim() ||
-      knowledge.workItems.find((w) => w.regulationReference?.raw)?.regulationReference
-        ?.raw?.trim() ||
+      knowledge.workItems
+        .find((w) => w.regulationReference?.raw)
+        ?.regulationReference?.raw?.trim() ||
       null;
     if (!assisted && !dasarFromSource) return null;
     const base = assisted ?? {
@@ -2326,7 +2412,10 @@ export class AhspDocumentCanonicalizationService {
           decision.action === 'KEEP_SEPARATE' ||
           decision.action === 'SKIP')
       ) {
-        map.set(decision.workType + '\u0000' + decision.methodName, decision.action);
+        map.set(
+          decision.workType + '\u0000' + decision.methodName,
+          decision.action,
+        );
       }
     }
     return map;
@@ -2641,7 +2730,8 @@ export class AhspDocumentCanonicalizationService {
     // The AHSP-whole identity surface, loaded ONCE per document (mirroring the
     // resource-identity load-once step above), never per work item — the
     // workspace's AHSPs plus the Official Repository, indexed for the classifier.
-    const identitySurface = await this.ahspService.loadIdentitySurface(workspaceId);
+    const identitySurface =
+      await this.ahspService.loadIdentitySurface(workspaceId);
     /**
      * F1 — THE DECISIONS A PERSON ALREADY MADE ABOUT THIS DOCUMENT'S ROWS.
      *
@@ -2690,7 +2780,9 @@ export class AhspDocumentCanonicalizationService {
         unitContext?.decisions,
         adjudication,
       );
-      workItems.push(this.classifyItemIdentity(resolved, identitySurface, workspaceId));
+      workItems.push(
+        this.classifyItemIdentity(resolved, identitySurface, workspaceId),
+      );
     }
     const anyReady = workItems.some((item) => item.status === 'READY');
     return {
@@ -2746,7 +2838,9 @@ export class AhspDocumentCanonicalizationService {
     if (paths.length === 0 || (assisted?.pendingPaths?.length ?? 0) > 0) {
       return knowledge;
     }
-    const classificationLeafNodeIds = [...new Set(paths.map((path) => path.leafNodeId))];
+    const classificationLeafNodeIds = [
+      ...new Set(paths.map((path) => path.leafNodeId)),
+    ];
     const surface = await this.ahspService.loadIdentitySurface(workspaceId);
     const workItems: AhspWorkItemKnowledge[] = [];
 
@@ -2957,8 +3051,9 @@ export class AhspDocumentCanonicalizationService {
       resolvedOutputUnit !== null &&
       resources.length > 0 &&
       resources.every((resource) => resource.status === 'READY') &&
-      unique.filter((code) => code !== AHSP_DOCUMENT_REASON.CURRENTNESS_UNPROVEN)
-        .length === 0;
+      unique.filter(
+        (code) => code !== AHSP_DOCUMENT_REASON.CURRENTNESS_UNPROVEN,
+      ).length === 0;
     return {
       ...item,
       outputUnitRaw,
@@ -3061,7 +3156,8 @@ export class AhspDocumentCanonicalizationService {
     if (resource.rawUnit !== null && !unitResolved) {
       reasonCodes.push(AHSP_DOCUMENT_REASON.UNIT_UNRESOLVED);
     }
-    const resolvedUnitSpelling = adjudicated ?? (unitResolved ? resource.rawUnit : null);
+    const resolvedUnitSpelling =
+      adjudicated ?? (unitResolved ? resource.rawUnit : null);
 
     // WHY THE SEARCH CONTINUES PAST AN UNKNOWN UNIT.
     //
