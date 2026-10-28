@@ -125,34 +125,53 @@ export const confirmImportFigures = (
     admission?: string | null;
     identityVerdict?: string | null;
   }>,
-): ConfirmImportFigures => {
-  let already = 0;
-  let willSave = 0;
-  let needsReview = 0;
-  let cannotSave = 0;
-  for (const item of items) {
+): ConfirmImportFigures => ({
+  understood: items.length,
+  already: confirmImportDoorRows(items, 'existing').length,
+  willSave: confirmImportDoorRows(items, 'willSave').length,
+  needsReview: confirmImportDoorRows(items, 'review').length,
+  cannotSave: items.filter((item) => admissionOf(item) === 'HELD').length,
+});
+
+/** One canonical disposition is used by counters and by their detail doors. */
+export type ConfirmImportDoor = 'understood' | 'existing' | 'willSave' | 'review';
+
+export function confirmImportDoorRows<T extends {
+  admission?: string | null;
+  identityVerdict?: string | null;
+}>(items: ReadonlyArray<T>, door: ConfirmImportDoor): Array<{ item: T; index: number }> {
+  return items.flatMap((item, index) => {
     const admission = admissionOf(item);
-    if (item.identityVerdict === 'IDENTICAL' && admission !== 'HELD') {
-      already += 1;
-      continue;
+    const existing = item.identityVerdict === 'IDENTICAL' && admission !== 'HELD';
+    const held = admission === 'HELD';
+    const accepted = !existing && !held;
+    const matches = door === 'understood' ||
+      (door === 'existing' && existing) ||
+      (door === 'willSave' && accepted) ||
+      (door === 'review' && (held || (accepted && admission === 'IDENTITY_PENDING')));
+    return matches ? [{ item, index }] : [];
+  });
+}
+
+/** Read-only identical questions, from the source and existing kernel evidence. */
+export function previewIdentityQuestions(
+  workItems: ReadonlyArray<PreviewAttentionItemWire | null> | null | undefined,
+): Array<{ group: string; name: string; code: string | null; unit: string | null; uses: number }> {
+  const groups = new Map<string, { group: string; name: string; code: string | null; unit: string | null; uses: number }>();
+  for (const item of workItems ?? []) {
+    for (const resource of item?.resources ?? []) {
+      if (!resource?.rawName || !resource.group || resource.resolvedResourceCatalogId) continue;
+      if (!(resource.reasonCodes ?? []).some((reason) => reason === 'RESOURCE_UNRESOLVED' || reason === 'RESOURCE_CANDIDATES_FOUND')) continue;
+      const code = resource.rawCode ?? null;
+      const unit = resource.rawUnit ?? null;
+      const key = JSON.stringify([resource.group, resource.rawName, code, unit]);
+      const previous = groups.get(key);
+      if (previous) previous.uses++;
+      else groups.set(key, { group: resource.group, name: resource.rawName, code, unit, uses: 1 });
     }
-    if (admission === 'HELD') {
-      cannotSave += 1;
-      needsReview += 1;
-      continue;
-    }
-    // PROVEN and IDENTITY_PENDING are both accepted for store on Save.
-    willSave += 1;
-    if (admission === 'IDENTITY_PENDING') needsReview += 1;
   }
-  return {
-    understood: items.length,
-    already,
-    willSave,
-    needsReview,
-    cannotSave,
-  };
-};
+  return [...groups.values()];
+}
 
 const whole = (value: number | null | undefined): number =>
   typeof value === 'number' && Number.isFinite(value) && value > 0 ? Math.floor(value) : 0;
