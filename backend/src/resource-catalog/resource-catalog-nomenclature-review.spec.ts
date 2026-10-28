@@ -107,6 +107,8 @@ describe('BP-C3 canonical nomenclature review, not auto-equivalence', () => {
     ['Excavator 10 HP', 'Excavator 10 kW'],
     ['CRANE ON TRUCK 10-15 Ton', 'CRANE ON TRUCK 10-15 TC'],
     ['Semen Portlan', 'Baja Portland'],
+    ['CRANE ON TRUCK 10-15 TON', 'CRANE ON TRACK 10-15 TON'],
+    ['CRANE ON TRACK 10-15 TON', 'CRANE ON TRUCK 10-15 TON'],
   ])('blocks technical changes regardless of claimed evidence (%s -> %s)', (a, b) => {
     expect(classifyCatalogNameChange(a, b)).toBe('TECHNICAL_CHANGE_BLOCKED');
   });

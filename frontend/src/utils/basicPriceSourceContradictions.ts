@@ -135,3 +135,33 @@ export function supplierSourceClarification(
     'menetapkan identitas berdasarkan dugaan.',
   ].join('\n');
 }
+
+/**
+ * Search vocabulary, not identity normalization. In a supplier price sheet
+ * "Sewa" describes how a price is quoted, not the equipment's canonical name.
+ * Remove only this known price context when searching an EQUIPMENT catalog.
+ * Source raw text, source code, specifications and canonical ID remain intact.
+ */
+export function equipmentCatalogSearchSeed(
+  sourceName: string,
+  type: string | null | undefined,
+): string {
+  const name = sourceName.trim();
+  if (type !== 'EQUIPMENT') return name;
+  return name.replace(/^sewa\s+/iu, '').trim();
+}
+
+/**
+ * Only suggest a BROADER discovery query, never a confirmed catalog match.
+ * Explicit dimensions/size still belong to the imported item's identity.
+ * The reviewer must select and verify the candidate against source evidence.
+ */
+export function equipmentCatalogBroaderSearchSeed(
+  sourceName: string,
+  type: string | null | undefined,
+): string | null {
+  if (type !== 'EQUIPMENT') return null;
+  const precise = equipmentCatalogSearchSeed(sourceName, type);
+  const broad = precise.replace(/\s+Kap(?:asitas)?\.?\s*\d+(?:[.,]\d+)?\s*(?:liter|litre)\s*$/iu, '').trim();
+  return broad.length >= 3 && broad !== precise ? broad : null;
+}

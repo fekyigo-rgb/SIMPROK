@@ -116,6 +116,9 @@ export function classifyCatalogNameChange(oldName: string, newName: string): Cat
     'mm', 'cm', 'm', 'meter', 'km', 'kg', 'gram', 'liter', 'litre',
     'mpa', 'psi', 'bar', 'hp', 'kw', 'kva', 'k', 'fc',
     'hari', 'jam', 'ton', 'tc',
+    // Track-mounted and truck-mounted cranes are different technical types,
+    // not a one-letter nomenclature typo; preserve the existing identities.
+    'track', 'truck',
   ]);
   for (let i = 0; i < a.length; i++) {
     if (a[i] === b[i]) continue;

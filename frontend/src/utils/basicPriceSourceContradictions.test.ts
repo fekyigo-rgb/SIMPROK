@@ -118,3 +118,15 @@ test('source workbook matching rows and unrelated codes are not falsely flagged'
   assert.deepEqual(sourceCatalogContradictions(row, twins), []);
   assert.deepEqual(sourceCatalogContradictions(row, otherCode), []);
 });
+
+test('equipment catalog lookup removes rental price context but never capacity or type', async () => {
+  const { equipmentCatalogSearchSeed, equipmentCatalogBroaderSearchSeed } = await import('./basicPriceSourceContradictions.ts');
+  assert.equal(equipmentCatalogSearchSeed('Sewa Flatbed Truck 4 Ton', 'EQUIPMENT'), 'Flatbed Truck 4 Ton');
+  assert.equal(equipmentCatalogSearchSeed('Sewa Crane On Track 10-15 Ton', 'EQUIPMENT'), 'Crane On Track 10-15 Ton');
+  assert.equal(equipmentCatalogSearchSeed('Sewa Concrete Mixer Kap. 350 Liter', 'EQUIPMENT'), 'Concrete Mixer Kap. 350 Liter');
+  assert.equal(equipmentCatalogBroaderSearchSeed('Sewa Concrete Mixer Kap. 350 Liter', 'EQUIPMENT'), 'Concrete Mixer');
+  assert.equal(equipmentCatalogBroaderSearchSeed('Sewa Crane On Track 10-15 Ton', 'EQUIPMENT'), null);
+  assert.equal(equipmentCatalogSearchSeed('Sewa Crane On Track 10-15 Ton', 'MATERIAL'), 'Sewa Crane On Track 10-15 Ton');
+  assert.equal(equipmentCatalogSearchSeed('Sewa Crane On Track 10-15 Ton', 'LABOR'), 'Sewa Crane On Track 10-15 Ton');
+  assert.equal(equipmentCatalogSearchSeed('Crane On Truck 10-15 TC', 'EQUIPMENT'), 'Crane On Truck 10-15 TC');
+});

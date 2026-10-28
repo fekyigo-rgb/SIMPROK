@@ -84,7 +84,7 @@ import {
   type GuidedIdentityCandidate,
 } from '../utils/basicPriceImportDisplay';
 import { importRequestMessage } from '../utils/basicPriceIntakeErrors';
-import { sourceCatalogContradictions, supplierSourceClarification } from '../utils/basicPriceSourceContradictions';
+import { equipmentCatalogBroaderSearchSeed, equipmentCatalogSearchSeed, sourceCatalogContradictions, supplierSourceClarification } from '../utils/basicPriceSourceContradictions';
 import '../styles/basicPrice.css';
 
 type BatchReadback = (value: BasicPriceImportBatchSummary) => void;
@@ -2020,13 +2020,34 @@ export function BasicPriceReviewPage() {
                               <CatalogSearchSelect
                                 mode="resource"
                                 key={[row.id, candidateSearchSeeds[row.id]?.id ?? draft.correctedCanonicalName ?? row.name].join(':')}
-                                initialQuery={(candidateSearchSeeds[row.id]?.name ?? draft.correctedCanonicalName ?? row.name).trim().replace(/^-\s+/, '')}
+                                initialQuery={candidateSearchSeeds[row.id]?.name ?? equipmentCatalogSearchSeed(draft.correctedCanonicalName ?? row.name, row.section)}
                                 initialResourceType={reviewResourceSearchFamily(row)}
                                 selected={draft.resource}
                                 disabled={isBusy}
                                 onSelect={(item) => updateDraft(row.id, { resource: item as ResourceLookupItem | null })}
                                 onPendingChange={(resourcePending) => updateDraft(row.id, { resourcePending })}
                               />
+                            ) : null}
+                            {!resourceProven && equipmentCatalogBroaderSearchSeed(draft.correctedCanonicalName ?? row.name, row.section) ? (
+                              <button
+                                type="button"
+                                className="bp-btn bp-btn--link bp-btn--sm"
+                                disabled={isBusy}
+                                onClick={() => {
+                                  const term = equipmentCatalogBroaderSearchSeed(draft.correctedCanonicalName ?? row.name, row.section);
+                                  if (!term) return;
+                                  setCandidateSearchSeeds((current) => ({ ...current, [row.id]: { id: 'broader:' + term, name: term } }));
+                                  updateDraft(row.id, { resource: null, resourcePending: false });
+                                  setRowNotice({ rowId: row.id, text: 'Pencarian diperluas hanya untuk menemukan calon alat. Kapasitas pada dokumen belum terbukti sama dengan katalog; jangan simpan pilihan tanpa bukti spesifikasi.' });
+                                }}
+                              >Cari nama jenis alat saja (kapasitas wajib diverifikasi)</button>
+                            ) : null}
+                            {!resourceProven && row.section === 'EQUIPMENT' &&
+                              equipmentCatalogSearchSeed(draft.correctedCanonicalName ?? row.name, row.section) !== (draft.correctedCanonicalName ?? row.name).trim() ? (
+                              <p className="bp-field__help" role="status">
+                                Kata “Sewa” dihilangkan hanya dari <strong>kata pencarian katalog</strong>, bukan dari Excel atau identitas alat.
+                                Periksa jenis, kapasitas, dan spesifikasi sebelum memilih. Hasil yang mirip belum tentu sama.
+                              </p>
                             ) : null}
                             {!resourceProven && !draft.resource ? (
                               <p className="bp-field__help">

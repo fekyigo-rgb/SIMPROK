@@ -540,7 +540,8 @@ test("BP-EDIT-SNAPSHOT-01. one corrected row name drives BOTH decision doors", (
   assert.match(page, /const changeWorkingName = \(row: BasicPriceImportRowSummary, value: string\)/u);
   assert.match(page, /correctedCanonicalName: value, resource: null, resourcePending: false/u);
   assert.match(renderable, /onChange=\{\(event\) => changeWorkingName\(row, event\.target\.value\)\}/u);
-  assert.match(renderable, /initialQuery=\{\(candidateSearchSeeds\[row\.id\]\?\.name \?\? draft\.correctedCanonicalName \?\? row\.name\)/u);
+  assert.match(renderable, /initialQuery=\{candidateSearchSeeds\[row\.id\]\?\.name \?\? equipmentCatalogSearchSeed\(draft\.correctedCanonicalName \?\? row\.name, row\.section\)\}/u);
+  assert.match(renderable, /equipmentCatalogBroaderSearchSeed\(draft\.correctedCanonicalName \?\? row\.name, row\.section\)/u);
   assert.match(renderable, /key=\{\[row\.id, candidateSearchSeeds\[row\.id\]\?\.id \?\? draft\.correctedCanonicalName \?\? row\.name\]\.join\(':'\)\}/u);
   const search = readFileSync('src/components/basic-price/CatalogSearchSelect.tsx', 'utf8');
   assert.match(search, /const \[query, setQuery\] = useState\(initialQuery\)/u);
