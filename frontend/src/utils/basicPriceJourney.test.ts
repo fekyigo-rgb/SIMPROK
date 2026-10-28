@@ -249,6 +249,36 @@ const notRoutedBatch = () =>
     },
   }) as BasicPriceImportBatchSummary;
 
+test('BP-IMPORT-TRUTH — before source context is complete, curation is undetermined, never declared impossible', () => {
+  const unknownSource = batchOf({
+    effectiveDate: null,
+    regionId: null,
+    sourceType: null,
+    sourceOrigin: null,
+    actions: {
+      ...batchOf().actions,
+      reviewGate: gate({
+        metadataComplete: false,
+        reviewAllowed: false,
+        missingRequiredFacts: ['EFFECTIVE_DATE', 'REGION', 'SOURCE_ORIGIN', 'SOURCE_TYPE'],
+      }),
+      simprokProposal: {
+        offered: false,
+        reasonCode: 'BATCH_NOT_READY_FOR_REVIEW',
+        sourceFamily: null,
+      },
+    },
+  });
+  const view = journeyView(unknownSource);
+  for (const key of ['PROPOSE', 'VERIFY', 'PUBLISH'] as const) {
+    assert.equal(stageBy(unknownSource, key).state, 'UPCOMING');
+    assert.equal(journeyStageHref(stageBy(unknownSource, key), unknownSource), null);
+    assert.doesNotMatch(stageBy(unknownSource, key).hint, /tidak dirutekan|tidak berlaku/iu);
+  }
+  assert.match(view.note ?? '', /ditentukan setelah konteks sumber dilengkapi/iu);
+  assert.doesNotMatch(view.note ?? '', /tidak berlaku/iu);
+});
+
 test('F2. when curation cannot apply, PROPOSE, VERIFY and PUBLISH all say NOT_OFFERED', () => {
   // "This happens later" and "this path does not apply" are DIFFERENT truths.
   // Leaving VERIFY and PUBLISH as UPCOMING told a person to wait for two doors
