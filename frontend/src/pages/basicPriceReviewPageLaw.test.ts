@@ -785,3 +785,9 @@ test("BP-C3 selective save has a distinct fail-closed route; never send selectio
   assert.match(legacy, /\/keep-private/);
   assert.doesNotMatch(legacy, /onlyRowId|expectedRowVersion/);
 });
+
+test('M265: confirmed category separates cross-family discovery hints from candidate refusal duties', () => {
+  assert.match(renderable, /row\.reasonCodes\.includes\('ROW_CATEGORY_CONFIRMED_BY_REVIEWER'\)/u);
+  assert.match(renderable, /candidate\.type !== row\.section/u);
+  assert.match(renderable, /Ini hanya petunjuk terkait, bukan kandidat yang harus ditolak/u);
+});

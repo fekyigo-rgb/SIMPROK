@@ -1485,6 +1485,13 @@ export function BasicPriceReviewPage() {
                   {candidateResourceTypeLabel(candidate.type)} Â· satuan katalog: {candidate.baseUnit}
                   {candidate.code ? ' Â· kode: ' + candidate.code : ''}
                 </span>
+                {row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') &&
+                  row.section !== null && candidate.type !== row.section ? (
+                  <span className="bp-field__help">
+                    Jenis katalog berbeda dari jenis baris yang sudah Anda konfirmasi.
+                    Ini hanya petunjuk terkait, bukan kandidat yang harus ditolak untuk penetapan item baru.
+                  </span>
+                ) : null}
                 {candidate.hasPriorHumanDecision ? (
                   <span className="bp-field__help">Pernah dipilih manusia; belum membuktikan kesamaan item pada impor ini.</span>
                 ) : null}
