@@ -65,6 +65,7 @@ import { RealityNormalizationEngine } from './reality-normalization.engine';
 import {
   classifyAhspIdentity,
   type AhspIdentityRow,
+  type AhspIdentityContextFact,
 } from '../document/ahsp-identity-classifier';
 import { AhspImportAssistedClassificationService } from './ahsp-import-assisted-classification.service';
 import {
@@ -214,11 +215,15 @@ type AhspImportItemOutcome =
       readonly identityPendingResources: number;
       /** Catalogue ids this save actually linked. Applied to the item only after commit. */
       readonly linkedResources: readonly AhspResourceKnowledge[];
+      /** Existing parent reused and classification already applied in this transaction. */
+      readonly reusedParent?: boolean;
     }
   | {
       readonly kind: 'ALREADY_PRESENT';
       readonly reasonCodes: readonly AhspDocumentReasonCode[];
       readonly ahspId?: string;
+      /** Assignments were applied inside the same locked journal transaction. */
+      readonly assignmentAppliedInTransaction?: boolean;
     }
   | {
       readonly kind: 'ALREADY_PROCESSED';
@@ -522,7 +527,7 @@ export class AhspDocumentCanonicalizationService {
         });
       }
     }
-    const knowledge = await this.resolveKnowledge(
+    const resolved = await this.resolveKnowledge(
       understood,
       envelope.workspaceId,
       {
@@ -532,6 +537,9 @@ export class AhspDocumentCanonicalizationService {
           journal.importJobId,
         ),
       },
+    );
+    const knowledge = await this.refineKnowledgeIdentityForCommit(
+      resolved, envelope.workspaceId, assisted,
     );
     return this.commitKnowledge(knowledge, {
       workspaceId: envelope.workspaceId,
@@ -589,7 +597,7 @@ export class AhspDocumentCanonicalizationService {
         importJobId: params.importJobId,
       });
     }
-    const knowledge = await this.resolveKnowledge(
+    const resolved = await this.resolveKnowledge(
       understood,
       params.workspaceId,
       {
@@ -599,6 +607,9 @@ export class AhspDocumentCanonicalizationService {
           params.importJobId,
         ),
       },
+    );
+    const knowledge = await this.refineKnowledgeIdentityForCommit(
+      resolved, params.workspaceId, assisted,
     );
     return this.commitKnowledge(knowledge, {
       workspaceId: params.workspaceId,
@@ -1628,8 +1639,8 @@ export class AhspDocumentCanonicalizationService {
           });
           if (outcome.admission === 'PROVEN') counts.ready += 1;
           else counts.identityPending += 1;
-          if (verdict === 'POSSIBLY_IDENTICAL') {
-            // Record that a possible twin was SHOWN and deliberately kept separate.
+          if (verdict === 'POSSIBLY_IDENTICAL' && decision === 'KEEP_SEPARATE') {
+            // Record only an actual human decision to keep the AHSP separate.
             // Best-effort and OUTSIDE the item's transaction: the row already carries
             // a durable AHSPCreated entry, so losing this note corrupts nothing and
             // must never fail — or roll back — an otherwise-good write.
@@ -1643,14 +1654,16 @@ export class AhspDocumentCanonicalizationService {
               .catch(() => undefined);
           }
           sightings.push(...this.sightingsFor(item, knowledge, workspaceId));
-          await this.assistedClassification
-            .applyToAhsp({
-              ahspId: outcome.ahspId,
-              actingWorkspaceId: workspaceId,
-              actorAccountId: userId,
-              context: context.assistedClassification,
-            })
-            .catch(() => undefined);
+          if (!outcome.reusedParent) {
+            await this.assistedClassification
+              .applyToAhsp({
+                ahspId: outcome.ahspId,
+                actingWorkspaceId: workspaceId,
+                actorAccountId: userId,
+                context: context.assistedClassification,
+              })
+              .catch(() => undefined);
+          }
           break;
         case 'ALREADY_PRESENT':
           skipped.push({
@@ -1659,7 +1672,7 @@ export class AhspDocumentCanonicalizationService {
             reasonCodes: outcome.reasonCodes,
           });
           counts.alreadyPresent += 1;
-          if (outcome.ahspId) {
+          if (outcome.ahspId && !outcome.assignmentAppliedInTransaction) {
             await this.assistedClassification
               .applyToAhsp({
                 ahspId: outcome.ahspId,
@@ -1785,6 +1798,97 @@ export class AhspDocumentCanonicalizationService {
       return representedBy
         ? { kind: 'ALREADY_PRESENT', reasonCodes, ahspId: representedBy }
         : { kind: 'HELD', reasonCodes };
+    }
+
+    // The EXISTING classifier has proved an exact/contextual parent, but
+    // neither a new recipe version nor a new classification path is automatic.
+    // Reuse occurs only under the human's explicit USE_EXISTING decision.
+    const reusableParent =
+      verdict === 'POSSIBLY_IDENTICAL' &&
+      item.identityMatches?.length === 1 &&
+      (item.identityMatches[0]?.signal === 'EXACT_PARENT' ||
+        item.identityMatches[0]?.signal === 'CONTEXT_MATCH')
+        ? item.identityMatches[0]
+        : null;
+    if (reusableParent) {
+      const reasonCodes = [AHSP_DOCUMENT_REASON.IDENTITY_POSSIBLE_MATCH];
+      if (
+        decision !== 'USE_EXISTING' ||
+        typeof reusableParent.formulaSame !== 'boolean' ||
+        typeof reusableParent.classificationCovered !== 'boolean' ||
+        !reusableParent.currentVersionId
+      ) return hold(reasonCodes);
+      // This check and all writes are on the same locked journal transaction.
+      // A stale read or cross-workspace parent is not an authorization.
+      const parent = await tx.aHSP.findFirst({
+        where: { id: reusableParent.ahspId, workspaceId, deletedAt: null },
+        select: { id: true },
+      });
+      if (!parent) return hold(reasonCodes);
+      const current = await tx.aHSPVersion.findFirst({
+        where: { ahspId: parent.id },
+        orderBy: { versionNumber: 'desc' },
+        select: { id: true },
+      });
+      if (current?.id !== reusableParent.currentVersionId) return hold(reasonCodes);
+      const adoptedAhspId = await this.recordUseExisting(
+        item, knowledge, userId, tx,
+      );
+      if (adoptedAhspId !== parent.id) return hold(reasonCodes);
+
+      if (reusableParent.formulaSame === true) {
+        // Same proven recipe, new path: only the current assignment writer.
+        await this.assistedClassification.applyToAhsp({
+          ahspId: parent.id,
+          actingWorkspaceId: workspaceId,
+          actorAccountId: userId,
+          context: context.assistedClassification,
+          client: tx,
+        });
+        await this.journal.settleOrThrow(tx, {
+          workspaceId,
+          lineId,
+          status: ImportStatus.COMPLETED,
+          reasonCodes,
+          ahspId: parent.id,
+          ahspVersionId: current.id,
+        });
+        return {
+          kind: 'ALREADY_PRESENT', reasonCodes, ahspId: parent.id,
+          assignmentAppliedInTransaction: true,
+        };
+      }
+
+      // Changed proven recipe: append a version, never create another parent.
+      const revised = await this.writeItem(
+        item,
+        knowledge,
+        {
+          workspaceId,
+          userId,
+          lineId,
+          assistedClassification: context.assistedClassification ?? null,
+          existingParentId: parent.id,
+          basedOnVersionId: current.id,
+        },
+        tx,
+      );
+      await this.assistedClassification.applyToAhsp({
+        ahspId: parent.id,
+        actingWorkspaceId: workspaceId,
+        actorAccountId: userId,
+        context: context.assistedClassification,
+        client: tx,
+      });
+      return {
+        kind: 'WRITTEN',
+        ahspId: revised.ahspId,
+        versionId: revised.versionId,
+        admission: revised.admission,
+        identityPendingResources: revised.identityPendingResources,
+        linkedResources: revised.linkedResources,
+        reusedParent: true,
+      };
     }
 
     // POSSIBLY_IDENTICAL — a look-alike exists but identity is NOT proven. It
@@ -1936,6 +2040,8 @@ export class AhspDocumentCanonicalizationService {
       userId: string;
       lineId: string;
       assistedClassification?: AssistedClassificationContext | null;
+      existingParentId?: string;
+      basedOnVersionId?: string;
     },
     tx: Prisma.TransactionClient,
   ): Promise<{
@@ -1963,7 +2069,9 @@ export class AhspDocumentCanonicalizationService {
       identityPendingResources === 0 ? 'PROVEN' : 'IDENTITY_PENDING';
     {
       // AhspService.create returns an untyped row; only the new parent's id is read.
-      const parent = (await this.ahspService.create(
+      const parent = context.existingParentId
+        ? { id: context.existingParentId }
+        : (await this.ahspService.create(
         {
           workspaceId,
           workType: item.workType!.raw,
@@ -1995,6 +2103,7 @@ export class AhspDocumentCanonicalizationService {
           workspaceId,
           userId,
           outputUnit: item.resolvedOutputUnit ?? item.outputUnitRaw!.raw,
+          ...(context.basedOnVersionId ? { basedOnVersionId: context.basedOnVersionId } : {}),
           regulationReference:
             item.regulationReference?.raw ||
             dasarFromAssisted ||
@@ -2621,15 +2730,112 @@ export class AhspDocumentCanonicalizationService {
     };
   }
 
+  /**
+   * Import-only read projection of existing One-Truth facts.
+   * Never materialize a pending classification path as an identity side effect:
+   * until that path exists and is validated, this must not authorize a mutation.
+   * Confirm's explicit leaf paths are checked by saveJobContext and read back
+   * only from the current workspace's persisted import journal.
+   */
+  private async refineKnowledgeIdentityForCommit(
+    knowledge: AhspDocumentKnowledge,
+    workspaceId: string,
+    assisted: AssistedClassificationContext | null | undefined,
+  ): Promise<AhspDocumentKnowledge> {
+    const paths = assisted?.paths ?? [];
+    if (paths.length === 0 || (assisted?.pendingPaths?.length ?? 0) > 0) {
+      return knowledge;
+    }
+    const classificationLeafNodeIds = [...new Set(paths.map((path) => path.leafNodeId))];
+    const surface = await this.ahspService.loadIdentitySurface(workspaceId);
+    const workItems: AhspWorkItemKnowledge[] = [];
+
+    for (const item of knowledge.workItems) {
+      if (!item.workType || !item.methodName) {
+        workItems.push(item);
+        continue;
+      }
+      let formulaComplete =
+        Boolean(item.resolvedOutputUnit) && item.resources.length > 0;
+      let outputUnitCode = '';
+      if (item.resolvedOutputUnit) {
+        const output = await this.units.resolve(
+          item.resolvedOutputUnit,
+          item.resolvedOutputUnit,
+        );
+        if (
+          output.status === UNIT_RESOLUTION_STATUS.RESOLVED &&
+          output.sourceUnitDefinition?.code
+        ) {
+          outputUnitCode = output.sourceUnitDefinition.code;
+        } else {
+          formulaComplete = false;
+        }
+      }
+
+      const resources: AhspIdentityContextFact['resources'][number][] = [];
+      for (const resource of item.resources) {
+        if (
+          !resource.resolvedResourceCatalogId ||
+          !resource.group ||
+          !resource.resolvedBaseUnit ||
+          resource.coefficient === null
+        ) {
+          formulaComplete = false;
+          continue;
+        }
+        const unit = await this.units.resolve(
+          resource.resolvedBaseUnit,
+          resource.resolvedBaseUnit,
+          undefined,
+          GROUP_TO_CONTEXT[resource.group],
+        );
+        if (
+          unit.status !== UNIT_RESOLUTION_STATUS.RESOLVED ||
+          !unit.sourceUnitDefinition?.code
+        ) {
+          formulaComplete = false;
+          continue;
+        }
+        resources.push({
+          resourceId: resource.resolvedResourceCatalogId,
+          resourceType: resource.group,
+          baseUnit: unit.sourceUnitDefinition.code,
+          coefficient: resource.coefficient,
+        });
+      }
+      if (resources.length !== item.resources.length) formulaComplete = false;
+      const canonical: AhspIdentityContextFact = {
+        classificationLeafNodeIds,
+        classificationComplete: true,
+        outputUnitCode,
+        formulaComplete,
+        resources,
+      };
+      workItems.push({
+        ...item,
+        ...this.identityOf(
+          item.workType.raw,
+          item.methodName.raw,
+          surface,
+          workspaceId,
+          canonical,
+        ),
+      });
+    }
+    return { ...knowledge, workItems };
+  }
+
   /** The one classifier call, for a document being read and a stored line alike. */
   private identityOf(
     workType: string,
     methodName: string,
     surface: readonly AhspIdentityRow[],
     workspaceId: string,
+    context?: AhspIdentityContextFact,
   ): Pick<AhspWorkItemKnowledge, 'identityVerdict' | 'identityMatches'> {
     const classification = classifyAhspIdentity(
-      { workspaceId, workType, methodName },
+      { workspaceId, workType, methodName, ...(context ? { context } : {}) },
       surface,
       {
         name: (raw) => this.norm.normalizeName(raw),
