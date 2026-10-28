@@ -153,7 +153,7 @@ test("the preview distinguishes recognised, storeable now, held, review, and rea
   ]);
   assert.equal(
     line,
-    "4 pekerjaan dikenali. 3 dapat disimpan sekarang. 1 ditahan (belum dapat disimpan). 3 masih perlu ditinjau. 1 siap digunakan setelah disimpan (lengkap dan terbukti).",
+    "4 pekerjaan dikenali. 3 calon AHSP baru dapat disimpan sekarang. 1 ditahan (belum dapat disimpan). 3 masih perlu ditinjau. 1 siap digunakan setelah disimpan (lengkap dan terbukti).",
   );
   assert.doesNotMatch(line, /semua pekerjaan yang dikenali diterima/u);
   assert.doesNotMatch(line, /sudah diterima/u);

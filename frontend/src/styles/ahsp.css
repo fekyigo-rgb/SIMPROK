@@ -2155,3 +2155,20 @@ button.ahsp-confirm-summary__card[aria-expanded="true"] {
 .ahsp-preview-identity li span { color: var(--simprok-engineering-blue-500); }
 .ahsp-preview-identity__next { margin-top: 12px; padding: 10px 12px; border-left: 3px solid #1da1f2; background: var(--simprok-surface-light); }
 @media (max-width: 640px) { .ahsp-confirm-focus { padding: 12px; } }
+
+/* Deleted AHSPs remain visible as unresolved history, not reusable live recipes. */
+.ahsp-deleted-review-notice {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+  padding: 12px;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 10px;
+  background: var(--simprok-surface-light);
+}
+.ahsp-deleted-review-notice p {
+  flex: 1 1 280px;
+  margin: 0;
+}
