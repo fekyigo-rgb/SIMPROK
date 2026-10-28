@@ -142,7 +142,7 @@ test("B5: an earlier import is checked again ONCE per document from what SIMPROK
   assert.ok(!recheck.includes("body.append('file'"));
   // One button per import, not one per AHSP; a second press is refused while one runs.
   assert.ok(importPage.includes("jobLock.current"));
-  assert.ok(importPage.includes("'Periksa ulang'"));
+  assert.ok(importPage.includes("'Periksa & simpan yang siap'"));
   assert.ok(importPage.includes("describeWaitingImports(importJobs, { canCurate })"));
   // The same outcome contract as every other action on this door.
   assert.ok(importPage.includes("placeOutcomes(waitingImports"));
@@ -322,7 +322,8 @@ test("R1 mutation epoch: every list action takes its ticket first and writes not
   const handlers = [
     { name: "curateGroup", list: "observations", from: "const curateGroup = async", to: "const wireById", lock: "curationLock", writes: ["setCurationOutcomes"] },
     { name: "governQuestion", list: "questions", from: "const governQuestion = async", to: "const recheckImport = async", lock: "questionLock", writes: ["setQuestionOutcomes", "setQuestionReasons"] },
-    { name: "recheckImport", list: "imports", from: "const recheckImport = async", to: "const shownQuestions", lock: "jobLock", writes: ["setJobDecisions", "setJobOutcomes"] },
+    { name: "recheckImport", list: "imports", from: "const recheckImport = async", to: "const deleteUnfinishedDraft = async", lock: "jobLock", writes: ["setJobDecisions", "setJobOutcomes"] },
+    { name: "deleteUnfinishedDraft", list: "imports", from: "const deleteUnfinishedDraft = async", to: "const shownQuestions", lock: "jobLock", writes: ["setJobDecisions", "setSelectedSavedImport", "setDraftDeleteReceipt"] },
   ];
   for (const handler of handlers) {
     const source = importPage.slice(importPage.indexOf(handler.from), importPage.indexOf(handler.to));
@@ -340,7 +341,8 @@ test("R1 mutation epoch: every list action takes its ticket first and writes not
     // Only the action that still holds the controls lets them go.
     assert.ok(source.includes(`if (${handler.lock}.current === ticket) {`), handler.name + " releases only its own hold");
   }
-  assert.equal(importPage.split("readAgainFor(reads, ticket, ").length - 1, 8);
+  // A ninth guarded readback belongs to the new, workspace-scoped draft-delete action.
+  assert.equal(importPage.split("readAgainFor(reads, ticket, ").length - 1, 9);
   // A refusal of a list frees that list's controls.
   for (const [forget, lock, busy] of [
     ["forgetCuration", "curationLock", "setCurationBusy"],
