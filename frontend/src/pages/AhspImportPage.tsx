@@ -2427,7 +2427,7 @@ export function AhspImportPage() {
                   <p className="ahsp-confirm-info-strip" role="note">
                     <Info size={16} aria-hidden />
                     <span>
-                      {confirmFigures?.deleted > 0 && confirmFigures.willSave === 0
+                      {(confirmFigures?.deleted ?? 0) > 0 && (confirmFigures?.willSave ?? 0) === 0
                         ? 'Dokumen dapat disimpan sebagai catatan impor, tetapi AHSP yang sudah dihapus tidak otomatis dipulihkan atau siap digunakan. Pertanyaan identitas tetap perlu diselesaikan.'
                         : 'Dokumen dapat disimpan tanpa menduplikasi induk AHSP. Peninjauan dapat dilanjutkan setelah penyimpanan tanpa mengunggah ulang berkas.'}
                     </span>
