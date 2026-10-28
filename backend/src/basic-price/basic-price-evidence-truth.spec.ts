@@ -520,11 +520,12 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
         reason: 'toko lain',
         sameSource: false,
         sourceIdentityName: 'Toko Baru',
+        sourceOrigin: 'STORE',
       });
       const data = firstCallArg<{ data: Record<string, unknown> }>(
         tx.basicPrice.create,
       ).data;
-      expect(data.sourceOrigin).toBe('FIELD_REPORT');
+      expect(data.sourceOrigin).toBe('STORE');
       expect(data.sourceType).toBe('MARKET_SURVEY');
       const audit = firstCallArg<{
         data: {
@@ -550,6 +551,47 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
           sameSource: false,
         }),
       ).rejects.toMatchObject({ message: 'SOURCE_IDENTITY_REQUIRED' });
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    });
+
+    it.each(['toko abc', '  TOKO   ABC  ', 'Ｔｏｋｏ　ＡＢＣ'])(
+      'refuses false different-source identity %s after safe normalization',
+      async (falseClaim) => {
+        tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR);
+        await expect(
+          service.observePrivatePrice({
+            basicPriceId: PREDECESSOR.id,
+            actor: ACTOR,
+            expectedValue: '62500.00',
+            proposedValue: '65000.00',
+            effectiveDate: '2026-08-28',
+            reason: 'claim says different but names the proven publisher',
+            sameSource: false,
+            sourceIdentityName: falseClaim,
+            sourceOrigin: 'SUPPLIER',
+          }),
+        ).rejects.toMatchObject({
+          message: 'SOURCE_IDENTITY_FALSE_DIFFERENT_CLAIM',
+        });
+        expect(tx.basicPrice.create).not.toHaveBeenCalled();
+        expect(tx.basicPriceProvenanceCorrection.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it('requires an explicit origin for a genuinely different source', async () => {
+      tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR);
+      await expect(
+        service.observePrivatePrice({
+          basicPriceId: PREDECESSOR.id,
+          actor: ACTOR,
+          expectedValue: '62500.00',
+          proposedValue: '65000.00',
+          effectiveDate: '2026-08-28',
+          reason: 'toko lain',
+          sameSource: false,
+          sourceIdentityName: 'Toko Baru',
+        }),
+      ).rejects.toMatchObject({ message: 'SOURCE_ORIGIN_REQUIRED' });
       expect(tx.basicPrice.create).not.toHaveBeenCalled();
     });
 

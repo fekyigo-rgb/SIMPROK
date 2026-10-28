@@ -71,6 +71,35 @@ describe('BP-C3 existing ResourceCatalog name correction — impact gate', () =>
     expect(result.conflictingSameTypeNames).toBe(1);
     expect(result.writable).toBe(false);
   });
+  it('includes active global catalogs in the collision preview', async () => {
+    const {service,prisma}=make();
+    prisma.resourceCatalog.findMany.mockResolvedValue([
+      {id:'global',name:'Sewa Asphalt Finisher Kap. 10 Ton',baseUnit:'EQUIPMENT_HOUR',specifications:null}
+    ]);
+    const result=await service.previewCatalogNameCorrection(
+      'workspace-A','catalog-1','Sewa Asphalt Finisher Kap. 10 Ton',
+    );
+    expect(result.verdict).toBe('IDENTITY_CONFLICT_REVIEW_REQUIRED');
+    expect(prisma.resourceCatalog.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        OR: [{ workspaceId: 'workspace-A' }, { workspaceId: null }],
+      }),
+    }));
+  });
+  it('does not treat a same-name catalog with conflicting confirmed specifications as a collision', async () => {
+    const {service,prisma}=make();
+    prisma.resourceCatalog.findFirst.mockResolvedValue({
+      ...record, specifications: { mutu: 'K-250' },
+    });
+    prisma.resourceCatalog.findMany.mockResolvedValue([
+      {id:'global',name:'Sewa Asphalt Finisher Kap. 10 Ton',baseUnit:'EQUIPMENT_HOUR',specifications:{mutu:'K-300'}}
+    ]);
+    const result=await service.previewCatalogNameCorrection(
+      'workspace-A','catalog-1','Sewa Asphalt Finisher Kap. 10 Ton',
+    );
+    expect(result.conflictingSameTypeNames).toBe(0);
+    expect(result.verdict).toBe('SPELLING_ONLY_PREVIEW');
+  });
   it('will never call a semantic name change a simple spelling fix', async () => {
     const {service}=make();
     const result=await service.previewCatalogNameCorrection(

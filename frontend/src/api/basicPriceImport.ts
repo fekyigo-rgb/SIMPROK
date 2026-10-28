@@ -650,7 +650,11 @@ export async function observePrivateBasicPrice(
   proposedValue: string,
   effectiveDate: string,
   reason: string,
-  evidence?: { sameSource?: boolean; sourceIdentityName?: string },
+  evidence?: {
+    sameSource?: boolean;
+    sourceIdentityName?: string;
+    sourceOrigin?: PriceSourceOrigin;
+  },
 ): Promise<CorrectPrivateBasicPriceResult> {
   const response = await apiFetch(
     `/basic-price-imports/prices/${priceId}/observations`,
@@ -667,6 +671,9 @@ export async function observePrivateBasicPrice(
           : { sameSource: evidence.sameSource }),
         ...(evidence?.sourceIdentityName
           ? { sourceIdentityName: evidence.sourceIdentityName }
+          : {}),
+        ...(evidence?.sourceOrigin
+          ? { sourceOrigin: evidence.sourceOrigin }
           : {}),
       }),
     },

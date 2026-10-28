@@ -63,9 +63,16 @@ describe('BasicPricePrivateAssetService', () => {
   let prisma: any;
   let service: BasicPricePrivateAssetService;
 
-  const makeTx = (overrides: { batch?: any; rows?: Array<{ id: string }> } = {}) => {
+  const makeTx = (overrides: {
+    batch?: any;
+    rows?: Array<{ id: string; resourceCatalogId?: string | null }>;
+  } = {}) => {
     const batch = overrides.batch === undefined ? baseBatch() : overrides.batch;
-    const rows = (overrides.rows ?? [{ id: rowId }]).map((row) => ({ ...row, version: 2 }));
+    const rows = (overrides.rows ?? [{ id: rowId }]).map((row) => ({
+      resourceCatalogId,
+      ...row,
+      version: 2,
+    }));
     let queryCall = 0;
     tx = {
       $queryRaw: jest.fn().mockImplementation(() => {
@@ -283,7 +290,10 @@ describe('BasicPricePrivateAssetService', () => {
       const healthyResourceId = '80000000-0000-4000-8000-000000000002';
       makeTx({
         batch: { ...baseBatch(), sourceOrganizationName: 'Tim Simprok', sourceVendorName: null },
-        rows: [{ id: rowId }, { id: healthyRowId }],
+        rows: [
+          { id: rowId, resourceCatalogId },
+          { id: healthyRowId, resourceCatalogId: healthyResourceId },
+        ],
       });
       tx.basicPriceImportRow.findUniqueOrThrow.mockImplementation(async ({ where }: any) => ({
         ...baseRow(),
@@ -302,6 +312,68 @@ describe('BasicPricePrivateAssetService', () => {
       expect(tx.basicPrice.create).toHaveBeenCalledTimes(1);
       expect(tx.basicPrice.create.mock.calls[0][0].data.resourceId)
         .toBe(healthyResourceId);
+    });
+
+    it('acquires unique multirow resource-context locks in one deterministic order', async () => {
+      const rowA = rowId;
+      const rowB = '70000000-0000-4000-8000-000000000002';
+      const resourceA = '80000000-0000-4000-8000-00000000000a';
+      const resourceB = '80000000-0000-4000-8000-00000000000b';
+      const runWithOrder = async (
+        rows: Array<{ id: string; resourceCatalogId: string }>,
+      ) => {
+        makeTx({ rows });
+        tx.basicPriceImportRow.findUniqueOrThrow.mockImplementation(
+          async ({ where }: any) => ({
+            ...baseRow(),
+            id: where.id,
+            resourceCatalogId: where.id === rowA ? resourceA : resourceB,
+          }),
+        );
+        const result = await service.keepBatchPrivate({ batchId, actor });
+        expect(result.createdCount).toBe(2);
+        return tx.$queryRaw.mock.calls
+          .filter(([query]: any[]) =>
+            query.strings?.join('').includes('pg_advisory_xact_lock'),
+          )
+          .map(([query]: any[]) => query.values[0]);
+      };
+
+      const forwardKeys = await runWithOrder([
+        { id: rowA, resourceCatalogId: resourceA },
+        { id: rowB, resourceCatalogId: resourceB },
+      ]);
+      const inverseKeys = await runWithOrder([
+        { id: rowB, resourceCatalogId: resourceB },
+        { id: rowA, resourceCatalogId: resourceA },
+      ]);
+
+      expect(inverseKeys).toEqual(forwardKeys);
+      expect(forwardKeys).toEqual([...forwardKeys].sort());
+      expect(new Set(forwardKeys)).toEqual(
+        new Set([
+          [workspaceId, resourceA, regionId, null].join('|'),
+          [workspaceId, resourceB, regionId, null].join('|'),
+        ]),
+      );
+    });
+
+    it('deduplicates equal multirow context locks without skipping either row', async () => {
+      const otherRow = '70000000-0000-4000-8000-000000000002';
+      makeTx({ rows: [{ id: rowId }, { id: otherRow }] });
+      tx.basicPriceImportRow.findUniqueOrThrow.mockImplementation(
+        async ({ where }: any) => ({ ...baseRow(), id: where.id }),
+      );
+
+      const result = await service.keepBatchPrivate({ batchId, actor });
+
+      const advisoryCalls = tx.$queryRaw.mock.calls.filter(
+        ([query]: any[]) =>
+          query.strings?.join('').includes('pg_advisory_xact_lock'),
+      );
+      expect(advisoryCalls).toHaveLength(1);
+      expect(result.createdCount).toBe(2);
+      expect(tx.basicPrice.create).toHaveBeenCalledTimes(2);
     });
 
     it('scopes cross-batch guard to resource, workspace and locality, never to exact day', async () => {

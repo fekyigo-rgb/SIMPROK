@@ -519,6 +519,23 @@ export function sourceNameFromBatch(
 }
 
 /**
+ * Exact source-identity comparison spelling. This deliberately performs no
+ * synonym or fuzzy expansion: it only removes Unicode/case/whitespace spelling
+ * differences that cannot prove two publishers are different.
+ */
+export function normalizeSourceIdentityName(
+  value: string | null | undefined,
+): string {
+  return (
+    value
+      ?.normalize('NFKC')
+      .replace(/\s+/gu, ' ')
+      .trim()
+      .toLocaleLowerCase('id-ID') ?? ''
+  );
+}
+
+/**
  * Human-readable source identity stored on an observation/correction audit.
  * Never an import-row id, never a storage path. Null when absent or blank.
  */

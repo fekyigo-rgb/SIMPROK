@@ -19,7 +19,8 @@ const request = (overrides: Record<string, unknown> = {}) => ({
 const setup = () => {
   const resource = {
     id: 'resource-A', workspaceId: 'ws-A', status: 'ACTIVE', name: original,
-    type: 'EQUIPMENT', baseUnit: 'EQUIPMENT_HOUR', updatedAt: before,
+    type: 'EQUIPMENT', baseUnit: 'EQUIPMENT_HOUR', specifications: null,
+    updatedAt: before,
   };
   const tx = {
     resourceCatalog: {
@@ -122,6 +123,36 @@ describe('BP-C3 governed ACTIVE ResourceCatalog typography correction', () => {
     await expect(service.correct(request()))
       .rejects.toThrow('CATALOG_CORRECTION_IDENTITY_CONFLICT');
     expect(tx.resourceCatalog.updateMany).not.toHaveBeenCalled();
+  });
+  it('rejects a collision with an active global catalog while keeping the target local', async () => {
+    const { service, tx } = setup();
+    tx.resourceCatalog.findMany.mockResolvedValue([
+      { id: 'global-catalog', name: normalized, specifications: null },
+    ]);
+    await expect(service.correct(request()))
+      .rejects.toThrow('CATALOG_CORRECTION_IDENTITY_CONFLICT');
+    expect(tx.resourceCatalog.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        OR: [{ workspaceId: 'ws-A' }, { workspaceId: null }],
+      }),
+    }));
+    expect(tx.resourceCatalog.updateMany).not.toHaveBeenCalled();
+  });
+  it('does not report a same-name row with conflicting confirmed technical facts as a collision', async () => {
+    const { service, tx } = setup();
+    const local = {
+      id: 'resource-A', workspaceId: 'ws-A', status: 'ACTIVE', name: original,
+      type: 'EQUIPMENT', baseUnit: 'EQUIPMENT_HOUR',
+      specifications: { mutu: 'K-250' }, updatedAt: before,
+    };
+    tx.resourceCatalog.findFirst.mockReset()
+      .mockResolvedValueOnce({ type: 'EQUIPMENT' })
+      .mockResolvedValueOnce(local);
+    tx.resourceCatalog.findMany.mockResolvedValue([
+      { id: 'global-catalog', name: normalized, specifications: { mutu: 'K-300' } },
+    ]);
+    await expect(service.correct(request())).resolves.toMatchObject({ corrected: true });
+    expect(tx.resourceCatalog.updateMany).toHaveBeenCalledTimes(1);
   });
   it('must never treat a retry as a second correction', async () => {
     const { service, tx } = setup();

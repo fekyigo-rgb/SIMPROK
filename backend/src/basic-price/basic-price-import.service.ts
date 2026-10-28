@@ -55,8 +55,20 @@ import {
   BasicPriceRegionCoverageError,
   canonicalBasicPriceRegionCoverage,
 } from './basic-price-region-coverage';
+import {
+  normalizeSourceIdentityName,
+  sourceNameFromBatch,
+} from '../common/basic-price-workflow.projection';
 
 export const MAX_UPLOAD_BYTES = MAX_ENVELOPE_BYTES;
+
+function sameNullableUtcDay(
+  left: Date | null | undefined,
+  right: Date | null | undefined,
+): boolean {
+  if (left == null || right == null) return left == null && right == null;
+  return isSameUtcDay(left, right);
+}
 
 /**
  * How many import rows are written per INSERT.
@@ -2082,6 +2094,7 @@ export class BasicPriceImportService {
             version: number;
             uploadedByAccountId: string;
             effectiveDate: Date | null;
+            reviewDate: Date | null;
             sourcePeriodLabel: string | null;
             sourcePeriodGranularity: string | null;
             effectiveDateProvenance: string | null;
@@ -2134,7 +2147,7 @@ export class BasicPriceImportService {
           }>
         >(
           Prisma.sql`SELECT "id", "workspaceId", "status", "version", "uploadedByAccountId",
-                          "effectiveDate", "sourcePeriodLabel", "sourcePeriodGranularity",
+                          "effectiveDate", "reviewDate", "sourcePeriodLabel", "sourcePeriodGranularity",
                           "effectiveDateProvenance", "effectiveDateDerivationRule",
                           "sourceType", "sourceOrigin",
                           "organizationId", "importFingerprint", "sourceSha256",
@@ -2301,6 +2314,17 @@ export class BasicPriceImportService {
           coverageFieldProvided,
         });
         const finalRegionId = resolvedCoverage.regionId;
+        const requestedReviewDate: Date | null | undefined =
+          dto.reviewDate === undefined
+            ? undefined
+            : dto.reviewDate === null
+              ? null
+              : new Date(dto.reviewDate);
+        const finalReviewDate = merged<Date>(
+          'reviewDate',
+          requestedReviewDate,
+          batch.reviewDate,
+        );
         const finalMetadata: FingerprintMetadata = {
           regionId: finalRegionId,
           effectiveDate: dto.effectiveDate
@@ -2365,6 +2389,50 @@ export class BasicPriceImportService {
           }),
           regionCoverageDigest: resolvedCoverage.regionCoverageDigest,
         });
+
+        const finalSourceNames = {
+          sourceOrganizationName:
+            dto.sourceOrganizationName ?? batch.sourceOrganizationName,
+          sourceVendorName: dto.sourceVendorName ?? batch.sourceVendorName,
+        };
+        const linkedContextWouldChange =
+          batch.regionId !== finalRegionId ||
+          batch.regionCoverageSetId !== resolvedCoverage.regionCoverageSetId ||
+          !sameNullableUtcDay(batch.effectiveDate, finalEffectiveDate) ||
+          !sameNullableUtcDay(batch.reviewDate, finalReviewDate) ||
+          batch.sourceType !== finalMetadata.sourceType ||
+          batch.sourceOrigin !== finalMetadata.sourceOrigin ||
+          normalizeSourceIdentityName(sourceNameFromBatch(batch)) !==
+            normalizeSourceIdentityName(sourceNameFromBatch(finalSourceNames)) ||
+          batch.sourcePeriodLabel !== finalMetadata.sourcePeriodLabel ||
+          batch.sourcePeriodGranularity !== finalMetadata.sourcePeriodGranularity ||
+          batch.effectiveDateProvenance !==
+            finalMetadata.effectiveDateProvenance ||
+          batch.effectiveDateDerivationRule !==
+            finalMetadata.effectiveDateDerivationRule;
+
+        if (linkedContextWouldChange) {
+          const linked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+            SELECT price."id"
+            FROM "basic_prices" price
+            JOIN "basic_price_import_rows" row
+              ON row."id" = price."sourceImportRowId"
+            WHERE row."batchId" = ${batchId}::uuid
+              AND price."workspaceId" = ${workspaceId}::uuid
+              AND price."assetScope" = 'WORKSPACE_PRIVATE'
+              AND (
+                price."supersedesBasicPriceId" IS NOT NULL
+                OR EXISTS (
+                  SELECT 1 FROM "basic_prices" successor
+                  WHERE successor."supersedesBasicPriceId" = price."id"
+                )
+              )
+            LIMIT 1
+          `);
+          if (linked.length > 0) {
+            throw new ConflictException('CORRECTION_LINK_CONTEXT_IMMUTABLE');
+          }
+        }
 
         /**
          * BP-REGION-TRUTH-07S §8 — THE CONFIRMATION, RECORDED AS THE REGION IT

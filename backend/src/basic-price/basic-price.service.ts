@@ -7,8 +7,10 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
-import { catalogLabelSignature, classifyCatalogNameChange } from '../resource-catalog/resource-catalog-name-correction.service';
-import { normalizeResourceName } from '../resource-catalog/resource-identity-resolution.kernel';
+import {
+  classifyCatalogNameChange,
+  isCatalogNameCollision,
+} from '../resource-catalog/resource-catalog-name-correction.service';
 import { confirmedSpecifications } from '../resource-catalog/resource-identity-specification.contract';
 import { trustedUnitContext } from '../unit-kernel/unit-kernel.contracts';
 import { GetBasicPricesDto } from './dto/get-basic-prices.dto';
@@ -287,8 +289,13 @@ export class BasicPriceService {
         this.prisma.resourceSourceIdentity.count({ where: { workspaceId, resourceCatalogId: resourceId } }),
         this.prisma.unitConversionRule.count({ where: { resourceCatalogId: resourceId } }),
         this.prisma.resourceCatalog.findMany({
-          where: { workspaceId, type: resource.type, status: 'ACTIVE', id: { not: resourceId } },
-          select: { id: true, name: true, baseUnit: true },
+          where: {
+            OR: [{ workspaceId }, { workspaceId: null }],
+            type: resource.type,
+            status: 'ACTIVE',
+            id: { not: resourceId },
+          },
+          select: { id: true, name: true, baseUnit: true, specifications: true },
           take: 5001,
         }),
       ]);
@@ -296,11 +303,8 @@ export class BasicPriceService {
     if (neighbors.length > 5000) {
       throw new ConflictException('CATALOG_NAME_PREVIEW_SCOPE_EXCEEDED');
     }
-    const folded = normalizeResourceName(proposal);
-    const signature = catalogLabelSignature(proposal);
     const collisions = neighbors.filter((other) =>
-      normalizeResourceName(other.name) === folded ||
-      catalogLabelSignature(other.name) === signature,
+      isCatalogNameCollision(proposal, resource.specifications, other),
     );
     const classification = classifyCatalogNameChange(resource.name, proposal);
     return {

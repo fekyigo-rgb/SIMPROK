@@ -12,6 +12,10 @@ import {
   resourceAdmissionLockKey,
 } from './resource-admission.service';
 import { normalizeResourceName } from './resource-identity-resolution.kernel';
+import {
+  compareConfirmedSpecifications,
+  confirmedSpecifications,
+} from './resource-identity-specification.contract';
 
 /**
  * BP-C3: ONE narrow correction writer for an EXISTING resource label.
@@ -27,6 +31,25 @@ import { normalizeResourceName } from './resource-identity-resolution.kernel';
 export function catalogLabelSignature(value: string): string {
   return value.normalize('NFKC').toLocaleLowerCase('id-ID')
     .replace(/[^\p{L}\p{N}]/gu, '');
+}
+
+/**
+ * A same-name row is an identity collision unless both rows carry confirmed
+ * technical facts that positively contradict one another. Missing or opaque
+ * specifications never prove two identities are different.
+ */
+export function isCatalogNameCollision(
+  proposedName: string,
+  targetSpecifications: unknown,
+  candidate: { name: string; specifications?: unknown },
+): boolean {
+  const sameName =
+    normalizeResourceName(candidate.name) === normalizeResourceName(proposedName) ||
+    catalogLabelSignature(candidate.name) === catalogLabelSignature(proposedName);
+  if (!sameName) return false;
+  const target = confirmedSpecifications(targetSpecifications);
+  return !target ||
+    compareConfirmedSpecifications(target, candidate.specifications) !== 'CONFLICT';
 }
 
 export type CatalogNameChangeClass =
@@ -204,7 +227,10 @@ export class ResourceCatalogNameCorrectionService {
 
       const resource = await tx.resourceCatalog.findFirst({
         where: { id: input.resourceCatalogId, workspaceId: input.workspaceId, status: 'ACTIVE' },
-        select: { id: true, name: true, code: true, type: true, baseUnit: true, updatedAt: true },
+        select: {
+          id: true, name: true, code: true, type: true, baseUnit: true,
+          specifications: true, updatedAt: true,
+        },
       });
       if (!resource) throw new NotFoundException('RESOURCE_CATALOG_NOT_FOUND');
       if (resource.name !== input.previousName ||
@@ -226,19 +252,18 @@ export class ResourceCatalogNameCorrectionService {
       // Reuse the canonical name normalization for other ACTIVE candidates.
       const others = await tx.resourceCatalog.findMany({
         where: {
-          workspaceId: input.workspaceId, type: resource.type,
+          OR: [{ workspaceId: input.workspaceId }, { workspaceId: null }],
+          type: resource.type,
           status: 'ACTIVE', id: { not: resource.id },
         },
-        select: { id: true, name: true },
+        select: { id: true, name: true, specifications: true },
         take: 5001, // explicit upper bound; a truncated collision search must fail closed
       });
       if (others.length > 5000) {
         throw new ConflictException('CATALOG_NAME_COLLISION_SCOPE_EXCEEDED');
       }
-      const foldedNew = normalizeResourceName(correctedName);
       if (others.some((other) =>
-        normalizeResourceName(other.name) === foldedNew ||
-        catalogLabelSignature(other.name) === catalogLabelSignature(correctedName))) {
+        isCatalogNameCollision(correctedName, resource.specifications, other))) {
         throw new ConflictException('CATALOG_CORRECTION_IDENTITY_CONFLICT');
       }
       const updated = await tx.resourceCatalog.updateMany({

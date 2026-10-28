@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { previewCatalogNameImpact, correctActiveResourceCatalogName, type CatalogNameImpact } from '../../api/basicPriceExplorer';
 import { X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { enrichBasicPriceKdn, enrichCatalogBasicPriceKdn, correctPrivateBasicPrice, observePrivateBasicPrice, observePrivateKdn, correctPrivateKdn, submitPrivateBasicPrice, ImportRequestError } from '../../api/basicPriceImport';
+import { enrichBasicPriceKdn, enrichCatalogBasicPriceKdn, correctPrivateBasicPrice, observePrivateBasicPrice, observePrivateKdn, correctPrivateKdn, submitPrivateBasicPrice, ImportRequestError, type PriceSourceOrigin } from '../../api/basicPriceImport';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   cakupanLabel,
@@ -29,6 +29,10 @@ import {
   EVIDENCE_BASIS_FIELD,
   EVIDENCE_BASIS_QUESTION,
   FIELD_REPORTED_SOURCE_NAME_LABEL,
+  FIELD_REPORTED_SOURCE_ORIGIN_LABEL,
+  DIFFERENT_SOURCE_IDENTITY_CONFLICT_NOTE,
+  DIFFERENT_SOURCE_ORIGIN_REQUIRED_NOTE,
+  OBSERVATION_SOURCE_ORIGIN_OPTIONS,
   KDN_CHANGE_HELP,
   KDN_CHANGE_QUESTION,
   KDN_CHOICE_CORRECTION,
@@ -54,6 +58,7 @@ import {
   PROPOSAL_FAMILY_NOT_ROUTED,
   priceCorrectionRefusalLabel,
   priceRouteLabel,
+  isGenuinelyDifferentSourceIdentity,
   type DetailChangeIntent,
   type DetailSubjectOffer,
 } from '../../utils/basicPriceDetailChange';
@@ -1008,6 +1013,7 @@ function PrivatePriceChangeForm({
     sourceName ? null : true,
   );
   const [sourceIdentityName, setSourceIdentityName] = useState('');
+  const [sourceOrigin, setSourceOrigin] = useState<PriceSourceOrigin | ''>('');
   const [proposedValue, setProposedValue] = useState('');
   const [effectiveDate, setEffectiveDate] = useState('');
   const [reason, setReason] = useState('');
@@ -1025,7 +1031,16 @@ function PrivatePriceChangeForm({
     if (busy || !intent) return;
     if (intent === 'NEW_OBSERVATION' && evidenceBasis !== 'FIELD') return;
     if (fieldPath && askSameSource && sameSource === null) return;
-    if (fieldPath && sameSource === false && !sourceIdentityName.trim()) return;
+    if (fieldPath && sameSource === false) {
+      if (!isGenuinelyDifferentSourceIdentity(sourceName, sourceIdentityName)) {
+        setRefusal(DIFFERENT_SOURCE_IDENTITY_CONFLICT_NOTE);
+        return;
+      }
+      if (!sourceOrigin) {
+        setRefusal(DIFFERENT_SOURCE_ORIGIN_REQUIRED_NOTE);
+        return;
+      }
+    }
     if (intent === 'CORRECTION' && !confirmCorrection) {
       setConfirmCorrection(true);
       return;
@@ -1045,6 +1060,10 @@ function PrivatePriceChangeForm({
                 sameSource: sameSource !== false,
                 sourceIdentityName:
                   sameSource === false ? sourceIdentityName.trim() : undefined,
+                sourceOrigin:
+                  sameSource === false && sourceOrigin
+                    ? sourceOrigin
+                    : undefined,
               },
             )
           : await correctPrivateBasicPrice(
@@ -1183,16 +1202,40 @@ function PrivatePriceChangeForm({
         </fieldset>
       ) : null}
       {fieldPath && sameSource === false ? (
-        <label className="bp-field" style={{ marginTop: '8px' }}>
-          <span className="bp-field__label">{FIELD_REPORTED_SOURCE_NAME_LABEL}</span>
-          <input
-            className="bp-input"
-            value={sourceIdentityName}
-            onChange={(event) => setSourceIdentityName(event.target.value)}
-            disabled={busy}
-            autoComplete="off"
-          />
-        </label>
+        <>
+          <label className="bp-field" style={{ marginTop: '8px' }}>
+            <span className="bp-field__label">{FIELD_REPORTED_SOURCE_NAME_LABEL}</span>
+            <input
+              className="bp-input"
+              value={sourceIdentityName}
+              onChange={(event) => setSourceIdentityName(event.target.value)}
+              disabled={busy}
+              autoComplete="off"
+            />
+          </label>
+          <label className="bp-field">
+            <span className="bp-field__label">{FIELD_REPORTED_SOURCE_ORIGIN_LABEL}</span>
+            <select
+              className="bp-input"
+              value={sourceOrigin}
+              onChange={(event) =>
+                setSourceOrigin(event.target.value as PriceSourceOrigin | '')
+              }
+              disabled={busy}
+            >
+              <option value="">Pilih asal sumber</option>
+              {OBSERVATION_SOURCE_ORIGIN_OPTIONS.map((origin) => (
+                <option key={origin} value={origin}>
+                  {sourceOriginLabel(origin)}
+                </option>
+              ))}
+            </select>
+          </label>
+          {sourceIdentityName.trim() &&
+          !isGenuinelyDifferentSourceIdentity(sourceName, sourceIdentityName) ? (
+            <p className="bp-field__error">{DIFFERENT_SOURCE_IDENTITY_CONFLICT_NOTE}</p>
+          ) : null}
+        </>
       ) : null}
       {showMoneyFields ? (
         <>

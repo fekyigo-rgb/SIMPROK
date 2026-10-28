@@ -1,10 +1,12 @@
 import {
   IsBoolean,
+  IsEnum,
   IsOptional,
   IsString,
   Matches,
   MinLength,
 } from 'class-validator';
+import { PriceSourceOrigin } from '@prisma/client';
 
 /**
  * BP-CHANGE-SEM-03 / BP-EVIDENCE-MIG-04 — later lawful private price observation.
@@ -32,4 +34,5 @@ export class ObservePrivateBasicPriceDto {
   @IsString() @MinLength(1) @Matches(NON_BLANK) reason!: string;
   @IsOptional() @IsBoolean() sameSource?: boolean;
   @IsOptional() @IsString() @Matches(NON_BLANK) sourceIdentityName?: string;
+  @IsOptional() @IsEnum(PriceSourceOrigin) sourceOrigin?: PriceSourceOrigin;
 }

@@ -17,6 +17,7 @@ import { toDecimalString2, toMoneyDecimal2 } from '../common/money';
 import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
 import {
   deriveExplorerSourceName,
+  normalizeSourceIdentityName,
   sourceNameFromBatch,
   mapPrivateBasicPriceItem,
   type PrivateBasicPriceItem,
@@ -298,8 +299,19 @@ export class BasicPricePrivateAssetService {
     if (previousPriceId === correctedPriceId) {
       throw new ConflictException('CORRECTION_SELF_REFERENCE');
     }
-    const previousValue = toMoneyDecimal2(params.expectedPreviousValue).toFixed(2);
-    const correctedValue = toMoneyDecimal2(params.expectedCorrectedValue).toFixed(2);
+    let previousValue: string;
+    let correctedValue: string;
+    try {
+      const previousDecimal = toMoneyDecimal2(params.expectedPreviousValue);
+      const correctedDecimal = toMoneyDecimal2(params.expectedCorrectedValue);
+      if (!previousDecimal.isFinite() || !correctedDecimal.isFinite()) {
+        throw new Error('non-finite money');
+      }
+      previousValue = previousDecimal.toFixed(2);
+      correctedValue = correctedDecimal.toFixed(2);
+    } catch {
+      throw new ConflictException('PRICE_NOT_CANONICAL');
+    }
     if (previousValue === correctedValue) {
       throw new ConflictException('CORRECTION_IDENTICAL_VALUE_NOT_ADJUDICATED');
     }
@@ -309,6 +321,20 @@ export class BasicPricePrivateAssetService {
     return this.prisma.$transaction(async (tx) => {
       // One deterministic ordering, even if two actors attempt opposite links.
       const ids = [previousPriceId, correctedPriceId].sort();
+      // Every writer that can mutate imported provenance locks the owning batch
+      // before its prices. Correction linkage follows the same order so a batch
+      // edit can neither slip between the equality check and the link nor form
+      // the inverse batch/price deadlock.
+      await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT batch."id"
+        FROM "basic_price_import_batches" batch
+        JOIN "basic_price_import_rows" row ON row."batchId" = batch."id"
+        JOIN "basic_prices" price ON price."sourceImportRowId" = row."id"
+        WHERE price."id" IN (${Prisma.join(ids.map(id => Prisma.sql`${id}::uuid`))})
+          AND price."workspaceId" = ${actor.workspaceId}::uuid
+          AND price."assetScope" = 'WORKSPACE_PRIVATE'
+        ORDER BY batch."id" FOR UPDATE OF batch
+      `);
       const locked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
         SELECT "id" FROM "basic_prices"
         WHERE "id" IN (${Prisma.join(ids.map(id => Prisma.sql`${id}::uuid`))})
@@ -326,12 +352,19 @@ export class BasicPricePrivateAssetService {
         },
         include: {
           sourceImportRow: {
-            select: { batch: {
-              select: {
-                sourceOrganizationName: true, sourceVendorName: true,
-                uploadedByAccountId: true,
+            select: {
+              // The canonical unit is an observation fact even though it lives
+              // on the import row rather than BasicPrice. The row id itself is
+              // deliberately not part of equality: two lawful batches must
+              // have two different source rows.
+              unitDefinitionId: true,
+              batch: {
+                select: {
+                  sourceOrganizationName: true, sourceVendorName: true,
+                  uploadedByAccountId: true,
+                },
               },
-            } },
+            },
           },
           supersededBy: { select: { id: true } },
         },
@@ -346,8 +379,18 @@ export class BasicPricePrivateAssetService {
         previous.regionId !== corrected.regionId ||
         previous.regionCoverageSetId !== corrected.regionCoverageSetId ||
         previous.effectiveDate.getTime() !== corrected.effectiveDate.getTime() ||
+        storedKdnOf(previous.kdnPercent) !== storedKdnOf(corrected.kdnPercent) ||
+        previous.kdnEstablishment !== corrected.kdnEstablishment ||
         previous.sourceType !== corrected.sourceType ||
         previous.sourceOrigin !== corrected.sourceOrigin ||
+        previous.sourcePeriodLabel !== corrected.sourcePeriodLabel ||
+        previous.sourcePeriodGranularity !== corrected.sourcePeriodGranularity ||
+        previous.effectiveDateProvenance !== corrected.effectiveDateProvenance ||
+        previous.effectiveDateDerivationRule !== corrected.effectiveDateDerivationRule ||
+        previous.freshnessStatus !== corrected.freshnessStatus ||
+        !sameOptionalDate(previous.reviewDate, corrected.reviewDate) ||
+        !sameOptionalDate(previous.validUntil, corrected.validUntil) ||
+        previous.recordsNewObservation !== corrected.recordsNewObservation ||
         previous.status !== 'UNPUBLISHED' ||
         corrected.status !== 'UNPUBLISHED' ||
         previous.verificationStatus !== 'UNVERIFIED' ||
@@ -357,16 +400,22 @@ export class BasicPricePrivateAssetService {
         !previous.sourceImportRowId || !corrected.sourceImportRowId ||
         !previous.sourceImportRow || !corrected.sourceImportRow
       ) throw new ConflictException('CORRECTION_REQUIRES_TWO_IMPORTED_PRICES');
+      if (
+        previous.sourceImportRow.unitDefinitionId !==
+        corrected.sourceImportRow.unitDefinitionId
+      ) throw new ConflictException('CORRECTION_CONTEXT_MISMATCH');
       const earlierSource = previous.sourceImportRow.batch;
       const correctedSource = corrected.sourceImportRow.batch;
       if (
         earlierSource.uploadedByAccountId !== actor.accountId ||
         correctedSource.uploadedByAccountId !== actor.accountId
       ) throw new NotFoundException('BasicPrice not found');
-      const normalize = (value: string | null) =>
-        value?.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLocaleLowerCase('id-ID') ?? '';
-      const oldPublisher = normalize(sourceNameFromBatch(earlierSource));
-      const newPublisher = normalize(sourceNameFromBatch(correctedSource));
+      const oldPublisher = normalizeSourceIdentityName(
+        sourceNameFromBatch(earlierSource),
+      );
+      const newPublisher = normalizeSourceIdentityName(
+        sourceNameFromBatch(correctedSource),
+      );
       if (!oldPublisher || oldPublisher !== newPublisher) {
         throw new ConflictException('CORRECTION_PUBLISHER_IDENTITY_UNPROVED');
       }
@@ -387,8 +436,25 @@ export class BasicPricePrivateAssetService {
           throw new ConflictException('CORRECTION_LINEAGE_NOT_SAFE');
         }
         const audit = await tx.basicPriceProvenanceCorrection.findFirst({
-          where: { basicPriceId: corrected.id, workspaceId: actor.workspaceId },
-          orderBy: { createdAt: 'desc' },
+          where: {
+            basicPriceId: corrected.id,
+            workspaceId: actor.workspaceId,
+            AND: [
+              {
+                after: {
+                  path: ['semantic'],
+                  equals: 'IMPORTED_PRICE_CORRECTION_LINK',
+                },
+              },
+              {
+                after: {
+                  path: ['previousBasicPriceId'],
+                  equals: previous.id,
+                },
+              },
+            ],
+          },
+          select: { after: true },
         });
         const after = audit?.after;
         if (
@@ -532,8 +598,12 @@ export class BasicPricePrivateAssetService {
             (!Number.isSafeInteger(expectedRowVersion) || (expectedRowVersion as number) < 0)) {
           throw new BadRequestException('EXPECTED_PRIVATE_ROW_VERSION_REQUIRED');
         }
-        const readyRows = await tx.$queryRaw<Array<{ id: string; version: number }>>(
-          Prisma.sql`SELECT "id", "version" FROM "basic_price_import_rows"
+        const readyRows = await tx.$queryRaw<Array<{
+          id: string;
+          version: number;
+          resourceCatalogId: string | null;
+        }>>(
+          Prisma.sql`SELECT "id", "version", "resourceCatalogId" FROM "basic_price_import_rows"
                     WHERE "batchId" = ${batchId}::uuid
                       AND "status" = 'READY_FOR_SUBMISSION'
                     ORDER BY "sourceRowNumber" ASC
@@ -584,6 +654,41 @@ export class BasicPricePrivateAssetService {
         // above already refused a null one, so the batch is passed as it is — the
         // old `as Date` narrowed nothing the type did not already allow.
         assertTemporalProvenanceCoherent(batch);
+
+        const lockResourceContext = (contextKey: string) =>
+          tx.$queryRaw<Array<{ ok: number }>>(Prisma.sql`
+            SELECT 1::int AS "ok" FROM (
+              SELECT pg_advisory_xact_lock(
+                hashtext(${contextKey}::text),
+                hashtext('BASIC_PRICE_SAME_RESOURCE_CONTEXT'::text)
+              )
+            ) AS "contextGuard"`);
+        const contextKeyFor = (catalogId: string) =>
+          [
+            batch.workspaceId,
+            catalogId,
+            batch.regionId,
+            batch.regionCoverageSetId,
+          ].join('|');
+
+        // A whole-batch save may touch several resource contexts. Every caller
+        // acquires the same unique key set in lexical order, regardless of the
+        // workbook's row order, so two inverse-order batches cannot wait on
+        // each other's first advisory lock. Single-row save retains its exact
+        // just-in-time acquisition below.
+        if (onlyRowId === undefined) {
+          const orderedContextKeys = Array.from(
+            new Set(
+              selectedReadyRows
+                .map((row) => row.resourceCatalogId)
+                .filter((id): id is string => Boolean(id))
+                .map(contextKeyFor),
+            ),
+          ).sort();
+          for (const contextKey of orderedContextKeys) {
+            await lockResourceContext(contextKey);
+          }
+        }
 
         const prices: PrivateBasicPriceItem[] = [];
         let createdCount = 0;
@@ -669,17 +774,9 @@ export class BasicPricePrivateAssetService {
           // Locking by publisher/day would let a concurrent unknown-source
           // import race a known publisher, or two versions race across dates.
           // Advisory locks expire with the same existing save transaction.
-          const contextKey = [
-            batch.workspaceId, row.resourceCatalogId, batch.regionId,
-            batch.regionCoverageSetId,
-          ].join('|');
-          await tx.$queryRaw<Array<{ ok: number }>>(Prisma.sql`
-            SELECT 1::int AS "ok" FROM (
-              SELECT pg_advisory_xact_lock(
-                hashtext(${contextKey}::text),
-                hashtext('BASIC_PRICE_SAME_RESOURCE_CONTEXT'::text)
-              )
-            ) AS "contextGuard"`);
+          if (onlyRowId !== undefined) {
+            await lockResourceContext(contextKeyFor(row.resourceCatalogId));
+          }
           const competing = await tx.basicPrice.findMany({
             where: {
               workspaceId: batch.workspaceId,
@@ -934,6 +1031,24 @@ export class BasicPricePrivateAssetService {
         effectiveDate: batch.effectiveDate as Date,
       });
 
+      // Batch first, then every affected private price in deterministic order.
+      // The correction-link writer uses the same order. Holding both locks until
+      // commit makes the linked-context guard below a transaction invariant,
+      // rather than a check another transaction can race past.
+      const lockedTargets = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        SELECT price."id"
+        FROM "basic_prices" price
+        JOIN "basic_price_import_rows" row
+          ON row."id" = price."sourceImportRowId"
+        WHERE row."batchId" = ${batchId}::uuid
+          AND price."workspaceId" = ${actor.workspaceId}::uuid
+          AND price."assetScope" = 'WORKSPACE_PRIVATE'
+        ORDER BY price."id" FOR UPDATE OF price
+      `);
+      if (lockedTargets.length === 0) {
+        throw new ConflictException('NO_PRIVATE_PRICE_TO_CORRECT');
+      }
+
       const targets = await tx.basicPrice.findMany({
         where: {
           // Strictly this workspace's OWN private prices, born from THIS batch.
@@ -944,6 +1059,7 @@ export class BasicPricePrivateAssetService {
           sourceImportRow: { batchId },
         },
         orderBy: { createdAt: 'asc' },
+        include: { supersededBy: { select: { id: true } } },
       });
       if (targets.length === 0) {
         throw new ConflictException('NO_PRIVATE_PRICE_TO_CORRECT');
@@ -1000,6 +1116,17 @@ export class BasicPricePrivateAssetService {
         // audit row behind, so the history stays a record of real changes only.
         if (JSON.stringify(before) === JSON.stringify(after)) {
           continue;
+        }
+
+        // Once a price participates in a correction chain, its source/period/
+        // date/type context is part of the adjudicated equality. Mutating that
+        // context afterwards would silently invalidate the link. History stays
+        // append-only: refuse instead of rewriting either side or its audit.
+        if (
+          price.supersedesBasicPriceId !== null ||
+          price.supersededBy !== null
+        ) {
+          throw new ConflictException('CORRECTION_LINK_CONTEXT_IMMUTABLE');
         }
 
         const updated = await tx.basicPrice.update({
@@ -1655,6 +1782,7 @@ export class BasicPricePrivateAssetService {
     reason: string;
     sameSource?: boolean;
     sourceIdentityName?: string;
+    sourceOrigin?: PriceSourceOrigin;
   }) {
     const { basicPriceId, actor, reason } = params;
     let expected: string;
@@ -1700,6 +1828,17 @@ export class BasicPricePrivateAssetService {
       if (!sameSource && !sourceIdentityName) {
         throw new ConflictException('SOURCE_IDENTITY_REQUIRED');
       }
+      if (
+        !sameSource &&
+        derivedName &&
+        normalizeSourceIdentityName(derivedName) ===
+          normalizeSourceIdentityName(sourceIdentityName)
+      ) {
+        throw new ConflictException('SOURCE_IDENTITY_FALSE_DIFFERENT_CLAIM');
+      }
+      if (!sameSource && !params.sourceOrigin) {
+        throw new ConflictException('SOURCE_ORIGIN_REQUIRED');
+      }
       return this.insertPrivateNewObservation(tx, {
         actor,
         predecessor,
@@ -1711,7 +1850,7 @@ export class BasicPricePrivateAssetService {
         sourceType: PriceSourceType.MARKET_SURVEY,
         sourceOrigin: sameSource
           ? predecessor.sourceOrigin
-          : PriceSourceOrigin.FIELD_REPORT,
+          : (params.sourceOrigin as PriceSourceOrigin),
         sourceIdentityName,
         sameSourceIdentity: sameSource,
         evidenceClass: 'FIELD_REPORTED',
@@ -2191,6 +2330,16 @@ function blankToNull(value: string | null | undefined): string | null {
   if (value === null || value === undefined) return null;
   const trimmed = value.trim();
   return trimmed.length > 0 ? trimmed : null;
+}
+
+function sameOptionalDate(
+  left: Date | null | undefined,
+  right: Date | null | undefined,
+): boolean {
+  if (left === null || left === undefined || right === null || right === undefined) {
+    return left === right;
+  }
+  return left.getTime() === right.getTime();
 }
 
 function storedKdnOf(

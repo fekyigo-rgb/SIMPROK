@@ -31,6 +31,8 @@ import {
   kdnCompletionDoor,
   kdnEnrichmentRefusalLabel,
   priceCorrectionRefusalLabel,
+  isGenuinelyDifferentSourceIdentity,
+  OBSERVATION_SOURCE_ORIGIN_OPTIONS,
 } from './basicPriceDetailChange.ts';
 
 const privateReady = {
@@ -369,4 +371,28 @@ test('DETAIL-PROPOSE-02 government private price stays honest, not a second engi
   if (offer?.kind === 'HONEST') {
     assert.equal(offer.action, 'FAMILY_NOT_ROUTED');
   }
+});
+
+test('different-source consent rejects the proven publisher across case, whitespace, and Unicode variants', () => {
+  assert.equal(isGenuinelyDifferentSourceIdentity('Toko ABC', 'toko abc'), false);
+  assert.equal(
+    isGenuinelyDifferentSourceIdentity('Toko ABC', '  TOKO   ABC  '),
+    false,
+  );
+  assert.equal(
+    isGenuinelyDifferentSourceIdentity('Toko ABC', 'Ｔｏｋｏ　ＡＢＣ'),
+    false,
+  );
+  assert.equal(
+    isGenuinelyDifferentSourceIdentity('Toko ABC', 'Supplier Baru'),
+    true,
+  );
+  assert.deepEqual(OBSERVATION_SOURCE_ORIGIN_OPTIONS, [
+    'GOVERNMENT',
+    'SUPPLIER',
+    'STORE',
+    'DISTRIBUTOR',
+    'FIELD_REPORT',
+    'COMMUNITY_REPORT',
+  ]);
 });

@@ -749,6 +749,7 @@ export class BasicPriceImportController {
       reason: dto.reason,
       sameSource: dto.sameSource,
       sourceIdentityName: dto.sourceIdentityName,
+      sourceOrigin: dto.sourceOrigin,
     });
   }
 

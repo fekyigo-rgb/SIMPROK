@@ -177,6 +177,7 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction', () => {
       reason: 'different publisher with coincidentally same money',
       sameSource: false,
       sourceIdentityName: 'Toko Berbeda',
+      sourceOrigin: 'SUPPLIER',
     });
     const where = tx.basicPrice.findFirst.mock.calls[1][0].where as {
       sourceType: string;
@@ -184,7 +185,7 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction', () => {
       provenanceCorrections: { some: { AND: unknown[] } };
     };
     expect(where.sourceType).toBe('MARKET_SURVEY');
-    expect(where.sourceOrigin).toBe('FIELD_REPORT');
+    expect(where.sourceOrigin).toBe('SUPPLIER');
     expect(where.provenanceCorrections.some.AND).toEqual(expect.arrayContaining([
       { before: { path: ['observedAfterBasicPriceId'], equals: PREDECESSOR.id } },
       { after: { path: ['sameSourceIdentity'], equals: false } },
@@ -267,6 +268,7 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction', () => {
       reason: 'a different supplier on the same day',
       sameSource: false,
       sourceIdentityName: 'Toko Berbeda',
+      sourceOrigin: 'SUPPLIER',
     });
     expect(result.unchanged).toBe(false);
     expect(tx.basicPriceProvenanceCorrection.findFirst).not.toHaveBeenCalled();

@@ -1,6 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { canLinkExistingImportedPricePair, type BasicPriceExplorerItem } from './basicPriceExplorerDisplay.ts';
+import {
+  basicPriceCorrectionPairKey,
+  canLinkExistingImportedPricePair,
+  correctionConsentMatchesPair,
+  type BasicPriceExplorerItem,
+} from './basicPriceExplorerDisplay.ts';
 const item = (change: Record<string, unknown> = {}): BasicPriceExplorerItem => ({
   basicPriceId: 'price-a',
   assetScope: 'WORKSPACE_PRIVATE',
@@ -29,4 +34,25 @@ test('BP-C2 UI does not invite false correction for another technical resource, 
     {assetScope:'SIMPROK_CATALOG'},
     {sourceName:null},
   ]) assert.equal(canLinkExistingImportedPricePair(item(),item({...correct,...distinct})),false);
+});
+test('BP-C2 consent for A/B cannot authorize A/C after deselect and reselect', () => {
+  const consentForAB = basicPriceCorrectionPairKey(['price-a', 'price-b']);
+  assert.equal(
+    correctionConsentMatchesPair(
+      consentForAB, ['price-b', 'price-a'], 'price-b', true,
+    ),
+    true,
+  );
+  assert.equal(
+    correctionConsentMatchesPair(
+      consentForAB, ['price-a', 'price-c'], 'price-a', true,
+    ),
+    false,
+  );
+  assert.equal(
+    correctionConsentMatchesPair(
+      consentForAB, ['price-a'], 'price-a', true,
+    ),
+    false,
+  );
 });

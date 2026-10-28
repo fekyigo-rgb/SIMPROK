@@ -22,10 +22,18 @@ describe('BP-C2 owner-corrected existing imported price linkage', () => {
     regionId: '80000000-0000-4000-8000-000000000001',
     regionCoverageSetId: null, sourceType: 'MARKET_SURVEY',
     sourceOrigin: 'FIELD_REPORT', effectiveDate: new Date('2026-10-01'),
+    sourcePeriodLabel: 'Oktober 2026', sourcePeriodGranularity: 'MONTH',
+    effectiveDateProvenance: 'SOURCE_STATED', effectiveDateDerivationRule: null,
+    kdnPercent: new Prisma.Decimal('42.50'), kdnEstablishment: 'SOURCE_STATED',
+    freshnessStatus: 'CURRENT', reviewDate: new Date('2027-01-01'),
+    validUntil: new Date('2027-10-01'), recordsNewObservation: false,
     createdAt: new Date('2026-10-22'), status: 'UNPUBLISHED',
     verificationStatus: 'UNVERIFIED', assetScope: 'WORKSPACE_PRIVATE',
     value: new Prisma.Decimal('12500000.00'), sourceImportRowId: '90000000-0000-4000-8000-000000000001',
-    sourceImportRow: { batch }, supersedesBasicPriceId: null, supersededBy: null,
+    sourceImportRow: {
+      unitDefinitionId: '91000000-0000-4000-8000-000000000001', batch,
+    },
+    supersedesBasicPriceId: null, supersededBy: null,
   });
   const newer = () => ({
     ...old(), id: correctedPriceId, value: new Prisma.Decimal('6500000.00'),
@@ -87,7 +95,10 @@ describe('BP-C2 owner-corrected existing imported price linkage', () => {
 
   it('refuses different publisher even when resource, date and region look identical', async () => {
     tx.basicPrice.findMany.mockResolvedValue([old(), {
-      ...newer(), sourceImportRow: { batch: { ...batch, sourceOrganizationName: 'Other publisher' } },
+      ...newer(), sourceImportRow: {
+        ...newer().sourceImportRow,
+        batch: { ...batch, sourceOrganizationName: 'Other publisher' },
+      },
     }]);
     await expect(service.reconcileImportedPrivateCorrection(args))
       .rejects.toThrow('CORRECTION_PUBLISHER_IDENTITY_UNPROVED');
@@ -112,11 +123,47 @@ describe('BP-C2 owner-corrected existing imported price linkage', () => {
     expect(tx.basicPrice.updateMany).not.toHaveBeenCalled();
   });
 
+  it.each([
+    ['KDN', { kdnPercent: new Prisma.Decimal('40.00') }],
+    ['KDN establishment', { kdnEstablishment: 'MANUAL_ENRICHMENT' }],
+    ['source period', { sourcePeriodLabel: 'November 2026' }],
+    ['source period granularity', { sourcePeriodGranularity: 'YEAR' }],
+    ['date provenance', { effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD' }],
+    ['date derivation rule', { effectiveDateDerivationRule: 'PERIOD_START' }],
+    ['source type', { sourceType: 'VENDOR_QUOTE' }],
+    ['source origin', { sourceOrigin: 'STORE' }],
+    ['freshness', { freshnessStatus: 'EXPIRING' }],
+    ['review date', { reviewDate: new Date('2027-02-01') }],
+    ['validity', { validUntil: new Date('2027-11-01') }],
+    ['new-observation flag', { recordsNewObservation: true }],
+  ])('refuses a mismatch in the non-money %s fact', async (_label, mismatch) => {
+    tx.basicPrice.findMany.mockResolvedValue([old(), { ...newer(), ...mismatch }]);
+    await expect(service.reconcileImportedPrivateCorrection(args))
+      .rejects.toThrow('CORRECTION_CONTEXT_MISMATCH');
+    expect(tx.basicPrice.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a different canonical source unit without comparing raw row ids', async () => {
+    tx.basicPrice.findMany.mockResolvedValue([old(), {
+      ...newer(),
+      sourceImportRow: {
+        ...newer().sourceImportRow,
+        unitDefinitionId: '91000000-0000-4000-8000-000000000002',
+      },
+    }]);
+    await expect(service.reconcileImportedPrivateCorrection(args))
+      .rejects.toThrow('CORRECTION_CONTEXT_MISMATCH');
+    expect(tx.basicPrice.updateMany).not.toHaveBeenCalled();
+  });
+
   it('never trusts a different importer in the same workspace', async () => {
     tx.basicPrice.findMany.mockResolvedValue([old(), {
-      ...newer(), sourceImportRow: { batch: {
-        ...batch, uploadedByAccountId: '40000000-0000-4000-8000-000000000002',
-      } },
+      ...newer(), sourceImportRow: {
+        ...newer().sourceImportRow,
+        batch: {
+          ...batch, uploadedByAccountId: '40000000-0000-4000-8000-000000000002',
+        },
+      },
     }]);
     await expect(service.reconcileImportedPrivateCorrection(args))
       .rejects.toThrow('BasicPrice not found');
@@ -136,17 +183,41 @@ describe('BP-C2 owner-corrected existing imported price linkage', () => {
     })).rejects.toThrow('CORRECTION_IDENTICAL_VALUE_NOT_ADJUDICATED');
   });
 
+  it.each(['not-a-price', 'NaN', 'Infinity']) (
+    'rejects noncanonical decimal %s before any database write',
+    async (invalid) => {
+      await expect(service.reconcileImportedPrivateCorrection({
+        ...args, expectedCorrectedValue: invalid,
+      })).rejects.toThrow('PRICE_NOT_CANONICAL');
+      expect(tx.$queryRaw).not.toHaveBeenCalled();
+      expect(tx.basicPrice.updateMany).not.toHaveBeenCalled();
+      expect(tx.basicPriceProvenanceCorrection.create).not.toHaveBeenCalled();
+    },
+  );
+
   it('idempotent on the exact audited link, not by a guessed latest timestamp', async () => {
     tx.basicPrice.findMany.mockResolvedValue([
       { ...old(), supersededBy: { id: correctedPriceId } },
       { ...newer(), supersedesBasicPriceId: previousPriceId },
     ]);
-    tx.basicPriceProvenanceCorrection.findFirst.mockResolvedValue({
-      after: {
-        semantic: 'IMPORTED_PRICE_CORRECTION_LINK',
-        previousBasicPriceId: previousPriceId,
+    // A later KDN enrichment audit is append-only and may be newer. The
+    // repository query must filter for the link audit rather than asking for
+    // the newest unrelated entry.
+    tx.basicPriceProvenanceCorrection.findFirst.mockImplementation(
+      async (query: any) => {
+        expect(query.orderBy).toBeUndefined();
+        expect(query.where.AND).toEqual([
+          { after: { path: ['semantic'], equals: 'IMPORTED_PRICE_CORRECTION_LINK' } },
+          { after: { path: ['previousBasicPriceId'], equals: previousPriceId } },
+        ]);
+        return {
+          after: {
+            semantic: 'IMPORTED_PRICE_CORRECTION_LINK',
+            previousBasicPriceId: previousPriceId,
+          },
+        };
       },
-    });
+    );
     await expect(service.reconcileImportedPrivateCorrection(args))
       .resolves.toMatchObject({ unchanged: true, basicPriceId: correctedPriceId });
     expect(tx.basicPrice.updateMany).not.toHaveBeenCalled();

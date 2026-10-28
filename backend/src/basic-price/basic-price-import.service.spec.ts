@@ -1156,6 +1156,18 @@ describe('BasicPriceImportService', () => {
       status: 'NEEDS_REVIEW',
       version: 0,
       uploadedByAccountId: ACCOUNT_ID,
+      regionId: null,
+      regionCoverageSetId: null,
+      effectiveDate: null,
+      reviewDate: null,
+      sourceType: null,
+      sourceOrigin: null,
+      sourceOrganizationName: null,
+      sourceVendorName: null,
+      sourcePeriodLabel: null,
+      sourcePeriodGranularity: null,
+      effectiveDateProvenance: null,
+      effectiveDateDerivationRule: null,
     };
 
     beforeEach(() => {
@@ -1178,6 +1190,48 @@ describe('BasicPriceImportService', () => {
       );
       expect(result.batchId).toBe('batch-01');
       expect(tx.basicPriceImportBatch.update).toHaveBeenCalled();
+    });
+
+    it('refuses publisher drift when any price from the batch is correction-linked', async () => {
+      tx.$queryRaw
+        .mockResolvedValueOnce([
+          { ...storedBatch, sourceVendorName: 'Supplier Lama' },
+        ])
+        .mockResolvedValueOnce([{ id: 'linked-price-01' }]);
+
+      await expect(
+        service.updateBatchMetadata(
+          WORKSPACE_ID,
+          'batch-01',
+          { version: 0, sourceVendorName: 'Supplier Baru' },
+          ACCOUNT_ID,
+          ['version', 'sourceVendorName'],
+        ),
+      ).rejects.toThrow('CORRECTION_LINK_CONTEXT_IMMUTABLE');
+      expect(tx.basicPriceImportBatch.update).not.toHaveBeenCalled();
+    });
+
+    it('preserves lawful publisher edits when the batch has no linked price', async () => {
+      tx.$queryRaw
+        .mockResolvedValueOnce([
+          { ...storedBatch, sourceVendorName: 'Supplier Lama' },
+        ])
+        .mockResolvedValueOnce([]);
+
+      await expect(
+        service.updateBatchMetadata(
+          WORKSPACE_ID,
+          'batch-01',
+          { version: 0, sourceVendorName: 'Supplier Baru' },
+          ACCOUNT_ID,
+          ['version', 'sourceVendorName'],
+        ),
+      ).resolves.toMatchObject({ batchId: 'batch-01' });
+      expect(tx.basicPriceImportBatch.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ sourceVendorName: 'Supplier Baru' }),
+        }),
+      );
     });
 
     it('USER-OWNED IMPORT BOUNDARY negative: a same-workspace account that did not upload this batch cannot update it (404), and no write occurs', async () => {
@@ -1231,7 +1285,8 @@ describe('BasicPriceImportService', () => {
       };
       tx.$queryRaw
         .mockResolvedValueOnce([completeBatch])
-        .mockResolvedValueOnce([{ id: 'coverage-set-01' }]);
+        .mockResolvedValueOnce([{ id: 'coverage-set-01' }])
+        .mockResolvedValueOnce([]);
       tx.region.findUnique.mockResolvedValue({
         id: 'district-01',
         code: '81.71.02',
@@ -1355,6 +1410,7 @@ describe('BasicPriceImportService', () => {
       };
       tx.$queryRaw
         .mockResolvedValueOnce([completeBatch])
+        .mockResolvedValueOnce([])
         .mockResolvedValueOnce([]);
       tx.region.findUnique.mockResolvedValue({
         id: 'district-01',
