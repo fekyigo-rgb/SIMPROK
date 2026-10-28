@@ -2454,7 +2454,14 @@ export function AhspImportPage() {
               <ul className="ahsp-curation-list" aria-label="Daftar pekerjaan tersimpan">
                 {waitingImports.map((job) => (
                   <li key={job.key} style={{ padding: 'var(--space-2)', borderBottom: HAIRLINE }}>
-                    <strong style={{ display: 'block', color: NAVY }}>{job.title}</strong>
+                    <div className="ahsp-import-history__heading">
+                      <strong style={{ color: NAVY }}>{job.title}</strong>
+                      {job.recordedAtLine ? (
+                        <span className="ahsp-import-history__recorded-at" title={`ID jurnal: ${job.key}`}>
+                          Dicatat {job.recordedAtLine}
+                        </span>
+                      ) : null}
+                    </div>
                     <span className="ahsp-line" style={{ color: MUTED }}>{job.summaryLine}</span>
                     <button
                       type="button"

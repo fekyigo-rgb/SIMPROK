@@ -30,6 +30,23 @@ const everyText = (lines: readonly string[]) => {
   for (const line of lines) assert.doesNotMatch(line, INTERNAL, line);
 };
 
+test("separate import journals with the same filename show different saved timestamps, never merge", () => {
+  const line = { lineNumber: 1, status: "PENDING", reasonCodes: ["SOURCE_INCOMPLETE"], workType: "Galian", methodName: "Uji" };
+  const jobs = [
+    { importJobId: "journal-first", sourceFileName: "same.xlsx", createdAt: "2026-10-28T01:41:03.027Z", counts: { received: 1, represented: 0, waiting: 1 }, waiting: [line] },
+    { importJobId: "journal-second", sourceFileName: "same.xlsx", createdAt: "2026-10-28T02:11:25.143Z", counts: { received: 1, represented: 0, waiting: 1 }, waiting: [line] },
+  ];
+  const rows = describeWaitingImports(jobs);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map((row) => row.key), ["journal-first", "journal-second"]);
+  assert.deepEqual(rows.map((row) => row.title), ["same.xlsx", "same.xlsx"]);
+  assert.ok(rows[0].recordedAtLine?.includes("2026"));
+  assert.ok(rows[1].recordedAtLine?.includes("2026"));
+  assert.notEqual(rows[0].recordedAtLine, rows[1].recordedAtLine);
+  const [invalid] = describeWaitingImports([{ ...jobs[0], createdAt: "not-a-date" }]);
+  assert.equal(invalid.recordedAtLine, null);
+});
+
 test("a successful mint keeps the pre-save reading and shows the written admission as current", () => {
   const historical = {
     admission: "IDENTITY_PENDING",

@@ -799,6 +799,8 @@ export interface ImportJobView {
   /** The import's own id — stable across a refresh, so an outcome stays where it happened. */
   readonly key: string;
   readonly title: string;
+  /** Local-time journal timestamp, shown to distinguish separate imports with the same filename. */
+  readonly recordedAtLine: string | null;
   readonly receivedLine: string;
   readonly waitingLine: string;
   /**
@@ -831,6 +833,15 @@ export interface ImportJobView {
 const WAITING_SHOWN = 5;
 
 export const IMPORT_DECISION_LINE = 'Keputusan yang Anda pilih dijalankan saat pemeriksaan ulang.';
+
+const importRecordedAt = (iso: string | null | undefined): string | null => {
+  if (!iso) return null;
+  const date = new Date(iso);
+  if (Number.isNaN(date.getTime())) return null;
+  return new Intl.DateTimeFormat('id-ID', {
+    day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit',
+  }).format(date);
+};
 
 const importDate = (iso: string | null | undefined): string | null => {
   if (!iso) return null;
@@ -975,6 +986,7 @@ export const describeWaitingImports = (
       {
         key,
         title: (job?.sourceFileName ?? '').trim() || 'Dokumen tanpa nama',
+        recordedAtLine: importRecordedAt(job?.createdAt),
         receivedLine:
           (date ? 'Diimpor ' + date + '. ' : '') +
           received + ' pekerjaan diterima; ' + represented + ' sudah menjadi AHSP di SIMPROK.',
