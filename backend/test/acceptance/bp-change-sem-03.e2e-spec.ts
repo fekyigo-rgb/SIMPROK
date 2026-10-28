@@ -410,7 +410,7 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction (e2e)', () => {
     expect(detailJson).not.toContain('basic-price-intake');
   });
 
-  it('PRICE-EVID-02 — different-source field observation keeps predecessor source and records a new identity', async () => {
+  it('PRICE-EVID-02 — a different-store field observation preserves the predecessor and records the stated source origin', async () => {
     const { predecessorId } = await importAndKeep({
       vendor: 'sem-03-diffsrc',
       includeKdnColumn: false,
@@ -420,6 +420,19 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction (e2e)', () => {
     });
     const predecessorType = predecessor.sourceType;
     const predecessorOrigin = predecessor.sourceOrigin;
+    // A different publisher without an explicitly stated origin must fail closed.
+    await request(http())
+      .post(`/basic-price-imports/prices/${predecessorId}/observations`)
+      .set(hdr())
+      .send({
+        expectedValue: predecessor.value.toFixed(2),
+        proposedValue: '107000.00',
+        effectiveDate: '2026-08-28',
+        reason: 'sumber berbeda',
+        sameSource: false,
+        sourceIdentityName: 'Toko Baru Ambon',
+      })
+      .expect(409);
     const observed = asMutationBody(
       (
         await request(http())
@@ -432,6 +445,7 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction (e2e)', () => {
             reason: 'sumber berbeda',
             sameSource: false,
             sourceIdentityName: 'Toko Baru Ambon',
+            sourceOrigin: 'STORE',
           })
           .expect(201)
       ).body,
@@ -445,7 +459,7 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction (e2e)', () => {
       where: { id: observed.basicPriceId },
       include: { provenanceCorrections: true },
     });
-    expect(observation.sourceOrigin).toBe('FIELD_REPORT');
+    expect(observation.sourceOrigin).toBe('STORE');
     expect(observation.sourceType).toBe('MARKET_SURVEY');
     expect(observation.sourceImportRowId).toBeNull();
     const after = observation.provenanceCorrections[0]?.after as {
@@ -461,7 +475,7 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction (e2e)', () => {
         .expect(200)
     ).body as { price: { sourceName: string | null; sourceOrigin: string } };
     expect(detail.price.sourceName).toBe('Toko Baru Ambon');
-    expect(detail.price.sourceOrigin).toBe('FIELD_REPORT');
+    expect(detail.price.sourceOrigin).toBe('STORE');
   });
 
   it('PRICE-SEM-02 / PRICE-IDEMP-02 — correction remains correction and is idempotent', async () => {
