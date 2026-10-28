@@ -282,6 +282,10 @@ function world() {
           ),
         ),
     },
+    aHSP: {
+      // No soft-deleted AHSP exists in this active-recipe fixture.
+      findMany: () => Promise.resolve([]),
+    },
     aHSPVersion: {
       // Every stored version is lawful here; the eligibility law is proven on the database (e2e).
       findMany: ({

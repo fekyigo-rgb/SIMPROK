@@ -70,9 +70,8 @@ describe('AHSP import history truth: saved-but-soft-deleted is not an unfinished
   it('preserves existing semantics for active unsaved and non-deleted completed rows', async () => {
     const { service, aHSP } = harness(0, 1, 0);
     const { items } = await service.listImportJobs(workspaceId);
-    expect(items[0].completion).toMatchObject({
-      deletedAhsp: 0, recipeNotUsable: 1,
-    });
+    expect(items[0].completion).toMatchObject({ recipeNotUsable: 1 });
+    expect(items[0].completion).not.toHaveProperty('deletedAhsp');
     expect(aHSP.findMany).toHaveBeenCalledTimes(1);
   });
 });

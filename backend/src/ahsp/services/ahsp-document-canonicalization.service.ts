@@ -1006,7 +1006,9 @@ export class AhspDocumentCanonicalizationService {
             complete,
             awaitingIdentity,
             recipeNotUsable,
-            deletedAhsp,
+            // Additive field only for an actual deletion: legacy responses and
+            // existing consumers are unchanged when no AHSP was deleted.
+            ...(deletedAhsp > 0 ? { deletedAhsp } : {}),
             writtenUnitQuestions,
             identityQuestions: { questions: open.keys.size, uses: open.uses },
           },
