@@ -30,6 +30,66 @@ const everyText = (lines: readonly string[]) => {
   for (const line of lines) assert.doesNotMatch(line, INTERNAL, line);
 };
 
+test("separate import journals with the same filename show different saved timestamps, never merge", () => {
+  const line = { lineNumber: 1, status: "PENDING", reasonCodes: ["SOURCE_INCOMPLETE"], workType: "Galian", methodName: "Uji" };
+  const jobs = [
+    { importJobId: "journal-first", sourceFileName: "same.xlsx", createdAt: "2026-10-28T01:41:03.027Z", counts: { received: 1, represented: 0, waiting: 1 }, waiting: [line] },
+    { importJobId: "journal-second", sourceFileName: "same.xlsx", createdAt: "2026-10-28T02:11:25.143Z", counts: { received: 1, represented: 0, waiting: 1 }, waiting: [line] },
+  ];
+  const rows = describeWaitingImports(jobs);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map((row) => row.key), ["journal-first", "journal-second"]);
+  assert.deepEqual(rows.map((row) => row.title), ["same.xlsx", "same.xlsx"]);
+  assert.ok(rows[0].recordedAtLine?.includes("2026"));
+  assert.ok(rows[1].recordedAtLine?.includes("2026"));
+  assert.notEqual(rows[0].recordedAtLine, rows[1].recordedAtLine);
+  const [invalid] = describeWaitingImports([{ ...jobs[0], createdAt: "not-a-date" }]);
+  assert.equal(invalid.recordedAtLine, null);
+});
+
+test("71 stored and later deleted AHSPs are shown as history, never as pending draft", () => {
+  const [entry] = describeWaitingImports([{
+    importJobId: "history-71", sourceFileName: "AHSP BINA MARGA.xlsx",
+    createdAt: "2026-10-12T14:22:37.000Z",
+    counts: { received: 71, represented: 71, waiting: 0 },
+    completion: { complete: 0, awaitingIdentity: 0, recipeNotUsable: 0, deletedAhsp: 71 },
+    waiting: [],
+  }]);
+  assert.ok(entry);
+  assert.equal(entry.historyOnlyDeleted, true);
+  assert.equal(entry.deletedAhsp, 71);
+  assert.equal(entry.waitingItems.length, 0);
+  assert.equal(entry.canRecheck, false);
+  assert.equal(entry.attention.length, 0);
+  assert.match(entry.summaryLine, /71 AHSP pernah disimpan, kemudian dihapus/);
+  assert.match(entry.summaryLine, /tidak ada draft yang menunggu penyelesaian/);
+  assert.doesNotMatch(entry.summaryLine, /belum dapat dipakai|Belum ada yang lengkap/);
+});
+
+test("a mixed import separates deleted AHSPs, active unfinished recipes and import drafts", () => {
+  const [entry] = describeWaitingImports([{
+    importJobId: "mixed-journal", sourceFileName: "campuran.xlsx",
+    counts: { received: 5, represented: 4, waiting: 1 },
+    completion: { complete: 1, awaitingIdentity: 1, recipeNotUsable: 1, deletedAhsp: 1 },
+    waiting: [{ lineNumber: 5, status: "PENDING", reasonCodes: ["SOURCE_INCOMPLETE"], workType: "B", methodName: "Belum lengkap" }],
+  }]);
+  assert.equal(entry.historyOnlyDeleted, false);
+  assert.equal(entry.deletedAhsp, 1);
+  assert.equal(entry.waitingItems.length, 1);
+  assert.equal(entry.canRecheck, true);
+  assert.match(entry.summaryLine, /1 AHSP telah dihapus/);
+  assert.match(entry.summaryLine, /1 terwakili AHSP yang belum dapat dipakai/);
+  assert.match(entry.summaryLine, /1 masih menunggu hal lain/);
+});
+
+test("draft-only and fully-ready imports preserve earlier continuation and hiding rules", () => {
+  const [draft] = describeWaitingImports([{ importJobId: "draft-only", counts: { received: 1, represented: 0, waiting: 1 }, waiting: [{ lineNumber: 1, status: "PENDING", reasonCodes: ["SOURCE_INCOMPLETE"], workType: "A", methodName: "A" }] }]);
+  assert.equal(draft.historyOnlyDeleted, false);
+  assert.equal(draft.waitingItems.length, 1);
+  const ready = describeWaitingImports([{ importJobId: "ready", counts: { received: 1, represented: 1, waiting: 0 }, completion: { complete: 1 }, waiting: [] }]);
+  assert.equal(ready.length, 0);
+});
+
 test("a successful mint keeps the pre-save reading and shows the written admission as current", () => {
   const historical = {
     admission: "IDENTITY_PENDING",

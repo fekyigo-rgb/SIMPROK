@@ -611,6 +611,94 @@ export class AhspDocumentCanonicalizationService {
   }
 
   /**
+   * Delete ONLY the unfinished lines and their journal-scoped unit decisions.
+   *
+   * An unfinished line contains draft resource readings in rawData; removing that
+   * line removes those draft readings. A COMPLETED line, its canonical AHSP,
+   * resource identities, and all shared catalog entries are never deleted.
+   * For partially-completed imports keep the job and its evidence for audit.
+   * For wholly unfinished imports remove the now-empty job and its dependent
+   * journal evidence, releasing its idempotency key for a fresh upload.
+   *
+   * All checks and writes are SERIALIZABLE to avoid a continuation racing this
+   * deletion and turning a previously-committed line into collateral damage.
+   */
+  async deleteUnfinishedImportDraft(params: {
+    workspaceId: string;
+    importJobId: string;
+  }): Promise<{ deletedDraftItems: number; preservedCompletedItems: number; journalRemoved: boolean }> {
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(params.importJobId)) {
+      throw new NotFoundException('AHSP_IMPORT_JOB_NOT_FOUND');
+    }
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        return await this.prisma.$transaction(async (client) => {
+          const job = await client.aHSPImportJob.findFirst({
+            where: { id: params.importJobId, workspaceId: params.workspaceId },
+            select: { id: true },
+          });
+          if (!job) throw new NotFoundException('AHSP_IMPORT_JOB_NOT_FOUND');
+
+          const draftCount = await client.aHSPImportLine.count({
+            where: {
+              workspaceId: params.workspaceId,
+              importJobId: job.id,
+              status: { in: [ImportStatus.PENDING, ImportStatus.FAILED] },
+            },
+          });
+          if (draftCount === 0) throw new ConflictException('AHSP_IMPORT_NO_DRAFT_TO_DELETE');
+
+          // Cascade removes only per-line draft unit decisions; no canonical
+          // AHSP, resource catalog, or independently stored observation is touched.
+          const deleted = await client.aHSPImportLine.deleteMany({
+            where: {
+              workspaceId: params.workspaceId,
+              importJobId: job.id,
+              status: { in: [ImportStatus.PENDING, ImportStatus.FAILED] },
+            },
+          });
+          if (deleted.count !== draftCount) {
+            throw new ConflictException('AHSP_IMPORT_DRAFT_CHANGED_RETRY');
+          }
+          const preservedCompletedItems = await client.aHSPImportLine.count({
+            where: {
+              workspaceId: params.workspaceId,
+              importJobId: job.id,
+              status: ImportStatus.COMPLETED,
+            },
+          });
+          const remainingLines = await client.aHSPImportLine.count({
+            where: { workspaceId: params.workspaceId, importJobId: job.id },
+          });
+          if (remainingLines !== preservedCompletedItems) {
+            // Unknown status or a concurrent write: fail closed, rollback all.
+            throw new ConflictException('AHSP_IMPORT_DRAFT_CHANGED_RETRY');
+          }
+          const journalRemoved = preservedCompletedItems === 0;
+          if (journalRemoved) {
+            // No represented line remains: delete only this empty journal and
+            // its own evidence/context. The foreign key points FROM job TO AHSP.
+            await client.aHSPImportJob.deleteMany({
+              where: { id: job.id, workspaceId: params.workspaceId },
+            });
+          } else {
+            await client.aHSPImportJob.updateMany({
+              where: { id: job.id, workspaceId: params.workspaceId },
+              data: { status: ImportStatus.COMPLETED },
+            });
+          }
+          return { deletedDraftItems: deleted.count, preservedCompletedItems, journalRemoved };
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      } catch (error) {
+        if (attempt < 2 && error instanceof Prisma.PrismaClientKnownRequestError &&
+            error.code === 'P2034') continue;
+        throw error;
+      }
+    }
+    throw new ConflictException('AHSP_IMPORT_DRAFT_CHANGED_RETRY');
+  }
+
+  /**
    * Recalculate one durable import and record that reading on the journal.
    *
    * Same resolveKnowledge the commit uses, including its Unit Kernel and the
@@ -758,6 +846,23 @@ export class AhspDocumentCanonicalizationService {
     const completed = stored.filter(
       (line) => line.status === ImportStatus.COMPLETED,
     );
+    // A completed *journal* is not proof that the canonical AHSP is still
+    // active. Consult its existing soft-delete marker without restoring it.
+    // This is one read for the page, not one query per import line.
+    const completedParents = [...new Set(
+      completed.flatMap((line) => line.ahspId ? [line.ahspId] : []),
+    )];
+    const removedParents = completedParents.length > 0
+      ? await this.prisma.aHSP.findMany({
+          where: {
+            workspaceId,
+            id: { in: completedParents },
+            deletedAt: { not: null },
+          },
+          select: { id: true },
+        })
+      : [];
+    const removedParentIds = new Set(removedParents.map((row) => row.id));
     const recipes = await this.recipeStates(
       workspaceId,
       completed,
@@ -799,6 +904,7 @@ export class AhspDocumentCanonicalizationService {
         let complete = 0;
         let awaitingIdentity = 0;
         let recipeNotUsable = 0;
+        let deletedAhsp = 0;
         const writtenUnitQuestions: Array<{
           lineNumber: number;
           workType: string | null;
@@ -808,6 +914,10 @@ export class AhspDocumentCanonicalizationService {
         }> = [];
         for (const line of lines) {
           if (line.status !== ImportStatus.COMPLETED) continue;
+          if (line.ahspId && removedParentIds.has(line.ahspId)) {
+            deletedAhsp += 1;
+            continue;
+          }
           const recipe = recipes.get(line.id) ?? 'NOT_USABLE';
           if (recipe === 'NOT_USABLE') {
             recipeNotUsable += 1;
@@ -896,6 +1006,9 @@ export class AhspDocumentCanonicalizationService {
             complete,
             awaitingIdentity,
             recipeNotUsable,
+            // Additive field only for an actual deletion: legacy responses and
+            // existing consumers are unchanged when no AHSP was deleted.
+            ...(deletedAhsp > 0 ? { deletedAhsp } : {}),
             writtenUnitQuestions,
             identityQuestions: { questions: open.keys.size, uses: open.uses },
           },
