@@ -84,6 +84,7 @@ import {
   type GuidedIdentityCandidate,
 } from '../utils/basicPriceImportDisplay';
 import { importRequestMessage } from '../utils/basicPriceIntakeErrors';
+import { equipmentCatalogBroaderSearchSeed, equipmentCatalogSearchSeed, sourceCatalogContradictions, supplierSourceClarification } from '../utils/basicPriceSourceContradictions';
 import '../styles/basicPrice.css';
 
 type BatchReadback = (value: BasicPriceImportBatchSummary) => void;
@@ -1484,6 +1485,13 @@ export function BasicPriceReviewPage() {
                   {candidateResourceTypeLabel(candidate.type)} Â· satuan katalog: {candidate.baseUnit}
                   {candidate.code ? ' Â· kode: ' + candidate.code : ''}
                 </span>
+                {row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') &&
+                  row.section !== null && candidate.type !== row.section ? (
+                  <span className="bp-field__help">
+                    Jenis katalog berbeda dari jenis baris yang sudah Anda konfirmasi.
+                    Ini hanya petunjuk terkait, bukan kandidat yang harus ditolak untuk penetapan item baru.
+                  </span>
+                ) : null}
                 {candidate.hasPriorHumanDecision ? (
                   <span className="bp-field__help">Pernah dipilih manusia; belum membuktikan kesamaan item pada impor ini.</span>
                 ) : null}
@@ -1530,6 +1538,7 @@ export function BasicPriceReviewPage() {
             busy: isBusy || draft.resourcePending || draft.unitPending,
           });
           const admissionOffered = rowIdentityAdmissionOffered(row);
+          const sourceContradictions = sourceCatalogContradictions(row, batch?.rows ?? []);
           const sourceSpecUnverified = row.machineProposal?.blockingFacts.includes('SOURCE_SPECIFICATION_UNVERIFIED') ?? false;
           const refusalChoices = rowIdentityRefusalChoices(row);
           const admissionReview = row.machineProposal?.resource.admissionReview;
@@ -1825,6 +1834,35 @@ export function BasicPriceReviewPage() {
 
                   <div className="bp-rowcard__actions bp-rowcard__resolution">
                     <h3>Pilih Penyelesaian</h3>
+                    {sourceContradictions.length > 0 ? (
+                      <section className="bp-note bp-note--info" role="note" aria-label={`Ketidaksesuaian data sumber baris ${row.sourceRowNumber}`}>
+                        <strong>Data sumber perlu diklarifikasi</strong>
+                        <p>Ada informasi yang bertentangan antara baris Excel, atau antara Excel dan kandidat katalog. SIMPROK belum menetapkan informasi mana yang salah.</p>
+                        <ul>
+                          {sourceContradictions.map((finding) => (
+                            <li key={finding.candidateId}>
+                              <strong>{finding.evidenceOrigin === 'SOURCE_ROW' ? `Baris ${finding.otherSourceRowNumber} di Excel: ` : 'Kandidat katalog: '}{finding.candidateName}</strong>
+                              {' — '}
+                              {finding.conflictText}
+                            </li>
+                          ))}
+                        </ul>
+                        <p>Kemungkinan: kode dalam dokumen salah, atau nama/ukuran dalam dokumen salah, atau kedua item memang berbeda. Jangan ubah data sumber asli atau pilih padanan berdasarkan dugaan.</p>
+                        <button type="button" className="bp-btn bp-btn--sm" onClick={() => {
+                          const message = supplierSourceClarification(row, sourceContradictions);
+                          if (!navigator.clipboard?.writeText) {
+                            setRowNotice({ rowId: row.id, text: 'Clipboard tidak tersedia. Gunakan rincian di atas untuk meminta klarifikasi tertulis dari penyedia.' });
+                            return;
+                          }
+                          void navigator.clipboard.writeText(message).then(() => {
+                            setRowNotice({ rowId: row.id, text: 'Permintaan klarifikasi berhasil disalin. Kirimkan kepada penyedia melalui saluran resmi Anda; SIMPROK belum mengirimkannya.' });
+                          }).catch(() => {
+                            setRowNotice({ rowId: row.id, text: 'Teks belum dapat disalin. Periksa izin clipboard browser.' });
+                          });
+                        }}>Salin permintaan klarifikasi penyedia</button>
+                        <p className="bp-field__help">Setelah penyedia mengonfirmasi, gunakan koreksi nama kerja atau keputusan padanan yang sudah tersedia, dengan bukti yang sesuai. Status baris tidak berubah hanya karena catatan ini disalin.</p>
+                      </section>
+                    ) : null}
                     {/* Reuse the sole canonical category editor in the decision panel. */}
                     {mutable &&
                      (row.section === null || categoryEditRows.has(row.id) || (row.sectionProvenance === 'UPLOADER_DECLARED' && !row.reasonCodes.includes('ROW_CATEGORY_CONFIRMED_BY_REVIEWER') && row.machineProposal?.categoryReusedFromPriorReview !== true)) &&
@@ -1989,13 +2027,34 @@ export function BasicPriceReviewPage() {
                               <CatalogSearchSelect
                                 mode="resource"
                                 key={[row.id, candidateSearchSeeds[row.id]?.id ?? draft.correctedCanonicalName ?? row.name].join(':')}
-                                initialQuery={(candidateSearchSeeds[row.id]?.name ?? draft.correctedCanonicalName ?? row.name).trim().replace(/^-\s+/, '')}
+                                initialQuery={candidateSearchSeeds[row.id]?.name ?? equipmentCatalogSearchSeed(draft.correctedCanonicalName ?? row.name, row.section)}
                                 initialResourceType={reviewResourceSearchFamily(row)}
                                 selected={draft.resource}
                                 disabled={isBusy}
                                 onSelect={(item) => updateDraft(row.id, { resource: item as ResourceLookupItem | null })}
                                 onPendingChange={(resourcePending) => updateDraft(row.id, { resourcePending })}
                               />
+                            ) : null}
+                            {!resourceProven && equipmentCatalogBroaderSearchSeed(draft.correctedCanonicalName ?? row.name, row.section) ? (
+                              <button
+                                type="button"
+                                className="bp-btn bp-btn--link bp-btn--sm"
+                                disabled={isBusy}
+                                onClick={() => {
+                                  const term = equipmentCatalogBroaderSearchSeed(draft.correctedCanonicalName ?? row.name, row.section);
+                                  if (!term) return;
+                                  setCandidateSearchSeeds((current) => ({ ...current, [row.id]: { id: 'broader:' + term, name: term } }));
+                                  updateDraft(row.id, { resource: null, resourcePending: false });
+                                  setRowNotice({ rowId: row.id, text: 'Pencarian diperluas hanya untuk menemukan calon alat. Kapasitas pada dokumen belum terbukti sama dengan katalog; jangan simpan pilihan tanpa bukti spesifikasi.' });
+                                }}
+                              >Cari nama jenis alat saja (kapasitas wajib diverifikasi)</button>
+                            ) : null}
+                            {!resourceProven && row.section === 'EQUIPMENT' &&
+                              equipmentCatalogSearchSeed(draft.correctedCanonicalName ?? row.name, row.section) !== (draft.correctedCanonicalName ?? row.name).trim() ? (
+                              <p className="bp-field__help" role="status">
+                                Kata “Sewa” dihilangkan hanya dari <strong>kata pencarian katalog</strong>, bukan dari Excel atau identitas alat.
+                                Periksa jenis, kapasitas, dan spesifikasi sebelum memilih. Hasil yang mirip belum tentu sama.
+                              </p>
                             ) : null}
                             {!resourceProven && !draft.resource ? (
                               <p className="bp-field__help">
