@@ -1,13 +1,15 @@
 import { useState } from 'react';
+import { previewCatalogNameImpact, correctActiveResourceCatalogName, type CatalogNameImpact } from '../../api/basicPriceExplorer';
 import { X } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
-import { enrichBasicPriceKdn, enrichCatalogBasicPriceKdn, correctPrivateBasicPrice, observePrivateBasicPrice, observePrivateKdn, correctPrivateKdn, submitPrivateBasicPrice, ImportRequestError } from '../../api/basicPriceImport';
+import { enrichBasicPriceKdn, enrichCatalogBasicPriceKdn, correctPrivateBasicPrice, observePrivateBasicPrice, observePrivateKdn, correctPrivateKdn, submitPrivateBasicPrice, ImportRequestError, type PriceSourceOrigin } from '../../api/basicPriceImport';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   cakupanLabel,
   effectiveDateProvenanceLabel,
   EVIDENCE_FILE_RETAINED_NOTE,
   explorerSourceNameLabel,
+  explorerVerifiedUnitLabel,
   formatExplorerPrice,
   kdnLabel,
   observationBasisLabel,
@@ -27,6 +29,10 @@ import {
   EVIDENCE_BASIS_FIELD,
   EVIDENCE_BASIS_QUESTION,
   FIELD_REPORTED_SOURCE_NAME_LABEL,
+  FIELD_REPORTED_SOURCE_ORIGIN_LABEL,
+  DIFFERENT_SOURCE_IDENTITY_CONFLICT_NOTE,
+  DIFFERENT_SOURCE_ORIGIN_REQUIRED_NOTE,
+  OBSERVATION_SOURCE_ORIGIN_OPTIONS,
   KDN_CHANGE_HELP,
   KDN_CHANGE_QUESTION,
   KDN_CHOICE_CORRECTION,
@@ -52,6 +58,7 @@ import {
   PROPOSAL_FAMILY_NOT_ROUTED,
   priceCorrectionRefusalLabel,
   priceRouteLabel,
+  isGenuinelyDifferentSourceIdentity,
   type DetailChangeIntent,
   type DetailSubjectOffer,
 } from '../../utils/basicPriceDetailChange';
@@ -134,6 +141,17 @@ export function BasicPriceDetailPanel({
   const [detailEpoch, setDetailEpoch] = useState(0);
   const [changeOpen, setChangeOpen] = useState(false);
   const [alreadyProposed, setAlreadyProposed] = useState(false);
+  const [nameImpactOpen, setNameImpactOpen] = useState(false);
+  const [nameProposal, setNameProposal] = useState(item.resource.name);
+  const [nameImpactBusy, setNameImpactBusy] = useState(false);
+  const [nameImpactResult, setNameImpactResult] = useState<CatalogNameImpact | null>(null);
+  const [nameImpactError, setNameImpactError] = useState<string | null>(null);
+  const [nameCorrectionReason, setNameCorrectionReason] = useState('');
+  const [nameCorrectionEvidence, setNameCorrectionEvidence] = useState('');
+  const [nameCorrectionConfirmed, setNameCorrectionConfirmed] = useState(false);
+  const [nomenclatureVerified, setNomenclatureVerified] = useState(false);
+  const [confirmedCatalogCode, setConfirmedCatalogCode] = useState('');
+  const [nameSourceReference, setNameSourceReference] = useState('');
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
   const detail = useBasicPriceDetail(item.basicPriceId, detailEpoch);
@@ -287,7 +305,10 @@ export function BasicPriceDetailPanel({
         >
           <dl className="bp-facts">
             <Fact label="Harga" value={formatExplorerPrice(item.price)} variant="price" />
-            <Fact label="Satuan" value={item.resource.baseUnit} />
+            <Fact label="Satuan" value={explorerVerifiedUnitLabel(item.resource)} />
+            {item.resource.displayUnit !== undefined && item.resource.baseUnit !== item.resource.displayUnit ? (
+              <Fact label="Satuan katalog asal" value={item.resource.baseUnit} />
+            ) : null}
             <Fact label="Kategori" value={resourceTypeLabel(item.resource.type)} />
             <Fact label="Wilayah" value={basicPriceRegionLabel(item)} />
             <Fact label="Sumber" value={explorerSourceNameLabel(item.sourceName)} />
@@ -381,6 +402,235 @@ export function BasicPriceDetailPanel({
               <Fact label="Verifikasi ulang pada" value={formatDate(item.reviewDate)} />
             ) : null}
           </dl>
+
+          {/* BP-C3 — catalog name impact preview only, NOT a false Edit writer. */}
+          <div className="bp-note" style={{ marginTop: 12 }}>
+            <button
+              type="button"
+              className="bp-btn bp-btn--secondary"
+              onClick={() => {
+                setNameImpactOpen((open) => !open);
+                setNameImpactResult(null);
+                setNameImpactError(null);
+              }}
+              aria-expanded={nameImpactOpen}
+            >
+              {nameImpactOpen ? 'Tutup pemeriksaan nama' : 'Periksa usulan nama baku'}
+            </button>
+            {nameImpactOpen ? (
+              <div style={{ paddingTop: 10 }}>
+                <label className="bp-field">
+                  <span className="bp-field__label">Usulan nama yang benar untuk katalog ini</span>
+                  <input
+                    className="bp-input"
+                    value={nameProposal}
+                    maxLength={180}
+                    onChange={(event) => {
+                      setNameProposal(event.target.value);
+                      setNameImpactResult(null);
+                      setNameImpactError(null);
+                      setNameCorrectionConfirmed(false);
+                      setNomenclatureVerified(false);
+                    }}
+                  />
+                </label>
+                <p className="bp-field__help">Pemeriksaan hanya membaca dampak nama pada katalog yang sudah aktif. Identitas, harga, satuan, dan catatan sumber tidak berubah.</p>
+                <button
+                  type="button"
+                  className="bp-btn bp-btn--primary"
+                  disabled={nameImpactBusy || nameProposal.trim().length < 3}
+                  onClick={async () => {
+                    setNameImpactBusy(true);
+                    setNameImpactError(null);
+                    setNameImpactResult(null);
+                    try {
+                      const outcome = await previewCatalogNameImpact(item.resource.id, nameProposal);
+                      setNameImpactResult(outcome);
+                    } catch {
+                      setNameImpactError('Dampak belum dapat diperiksa. Tidak ada perubahan data.');
+                    } finally {
+                      setNameImpactBusy(false);
+                    }
+                  }}
+                >
+                  {nameImpactBusy ? 'Memeriksa...' : 'Periksa dampak, tanpa menyimpan'}
+                </button>
+                {nameImpactError ? <p role="alert" className="bp-field__help">{nameImpactError}</p> : null}
+                {nameImpactResult ? (
+                  <div className="bp-note" role="status" aria-live="polite" style={{ marginTop: 10 }}>
+                    <p><strong>Nama katalog saat ini:</strong> <code style={{ whiteSpace: 'pre-wrap' }}>{nameImpactResult.currentName}</code></p>
+                    <p><strong>Nama yang diusulkan:</strong> <code style={{ whiteSpace: 'pre-wrap' }}>{nameImpactResult.proposedName}</code></p>
+                    <p className="bp-field__help">Spasi asli dipertahankan di atas agar perbedaan penulisan terlihat sebelum keputusan.</p>
+                    <p>
+                      {nameImpactResult.verdict === 'SPELLING_ONLY_PREVIEW'
+                        ? 'Indikasi koreksi penulisan tanpa perubahan makna; tetap memerlukan otorisasi dan jurnal koreksi.'
+                        : nameImpactResult.verdict === 'NO_CHANGE'
+                          ? 'Tidak ada perubahan nama yang diajukan.'
+                          : nameImpactResult.verdict === 'IDENTITY_CONFLICT_REVIEW_REQUIRED'
+                            ? 'Terdapat nama serupa pada identitas katalog lain. Perlu adjudikasi identitas.'
+                            : nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED'
+                              ? 'Penulisan istilah berbeda. Ini dapat berupa salah tulis (misalnya TC → Ton), BUKAN berarti kedua istilah sinonim. Kurator perlu mendokumentasikan dasar koreksi nama pada item yang sama.'
+                              : 'Perubahan ini dapat mengubah mutu, kapasitas, atau identitas. Tidak boleh diproses sebagai koreksi nama.'}
+                    </p>
+                    <p>Jenis: {resourceTypeLabel(nameImpactResult.resourceType as typeof item.resource.type)} · Kode: {nameImpactResult.resourceCode ?? 'Tidak ditetapkan'} · Satuan: {nameImpactResult.baseUnit}</p>
+                    {(nameImpactResult.specificationFacts?.length ?? 0) > 0 ? (
+                      <p>Spesifikasi katalog: {nameImpactResult.specificationFacts.map((entry) => entry.name + ': ' + entry.value).join(' · ')}</p>
+                    ) : (
+                      <p className="bp-field__help">Tidak ada spesifikasi terverifikasi yang dapat ditampilkan. Cocokkan identitas dengan bukti sumber sebelum memutuskan.</p>
+                    )}
+                    <p>Dipakai oleh {nameImpactResult.impact.basicPrices} Basic Price, {nameImpactResult.impact.projectAhspResolutions} resolusi AHSP proyek, {nameImpactResult.impact.importRows} baris impor, {nameImpactResult.impact.sourceIdentityRecords} catatan sumber, dan {nameImpactResult.impact.conversionRules} aturan konversi.</p>
+                    <p className="bp-field__help">Pemeriksaan ini belum menyimpan apa pun. ID resource, satuan, dan seluruh hubungan tetap utuh.</p>
+                    {(nameImpactResult.verdict === 'SPELLING_ONLY_PREVIEW' ||
+                      nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED') &&
+                      hasPermission('AHSP_RESOURCE_IDENTITY_DECIDE') ? (
+                      <div style={{ paddingTop: 10 }}>
+                        <p><strong>Koreksi nama katalog — khusus kurator identitas</strong></p>
+                        <p className="bp-field__help">Koreksi hanya untuk identitas resource yang SAMA. Angka mutu, kapasitas, jenis dan satuan tidak boleh berubah. Salah tulis seperti TC menjadi Ton bukan penyamaan arti dua istilah; keputusan koreksi harus dapat ditelusuri.</p>
+                        {nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' ? (
+                          <div>
+                            <p><strong>Pemeriksaan salah tulis / nomenklatur — keputusan kurator</strong></p>
+                            <label className="bp-field">
+                              <span className="bp-field__label">Dasar koreksi nama (dokumen atau penetapan Owner/kurator yang nyata)</span>
+                              <input className="bp-input" value={nameSourceReference}
+                                onChange={(event) => setNameSourceReference(event.target.value)}
+                                maxLength={350} placeholder="Mis. Penetapan Owner, 26 Oktober 2026, untuk item E07" />
+                            </label>
+                            <p className="bp-field__help">
+                              Catat keputusan atau referensi yang benar-benar ada, beserta pihak dan tanggalnya. Jangan menyatakan dokumen impor menulis Ton bila sumbernya menulis TC.
+                            </p>
+                            <label className="bp-field">
+                              <span className="bp-field__label">Ketik ulang kode katalog untuk memastikan item yang dipilih</span>
+                              <input className="bp-input" value={confirmedCatalogCode}
+                                onChange={(event) => setConfirmedCatalogCode(event.target.value)}
+                                placeholder={nameImpactResult.resourceCode
+                                  ? 'Ketik ' + nameImpactResult.resourceCode + ' secara manual'
+                                  : 'Kode katalog tidak tersedia'}
+                                maxLength={80} />
+                            </label>
+                            <p className="bp-field__help" role="status" aria-live="polite">
+                              {!confirmedCatalogCode.trim()
+                                ? 'Kode belum diisi. Ketik ulang ' + (nameImpactResult.resourceCode ?? 'kode katalog') + ' pada kotak di atas; tulisan petunjuk bukan isian.'
+                                : confirmedCatalogCode.trim().toLocaleLowerCase('id-ID') !==
+                                  nameImpactResult.resourceCode?.toLocaleLowerCase('id-ID')
+                                  ? 'Kode yang diketik tidak cocok dengan identitas katalog. Periksa ulang.'
+                                  : 'Kode katalog sudah cocok.'}
+                            </p>
+                            <label className="bp-field">
+                              <input type="checkbox" checked={nomenclatureVerified}
+                                onChange={(event) => setNomenclatureVerified(event.target.checked)} />
+                              <span className="bp-field__label">Saya telah memeriksa dasar koreksi: nama lama salah tulis, nama baru benar untuk resource dan spesifikasi yang sama (bukan klaim kedua istilah sinonim).</span>
+                            </label>
+                            <p className="bp-field__help">Jangan mengarang isi dokumen sumber: nama asli yang salah tetap disimpan. Cantumkan dasar penetapan yang nyata; jika kesalahan belum dapat dipastikan, jangan simpan.</p>
+                          </div>
+                        ) : null}
+                        <label className="bp-field">
+                          <span className="bp-field__label">Alasan koreksi</span>
+                          <textarea
+                            className="bp-input"
+                            value={nameCorrectionReason}
+                            maxLength={500}
+                            aria-describedby="bp-c3-reason-guidance"
+                            onChange={(event) => setNameCorrectionReason(event.target.value)}
+                          />
+                        </label>
+                        <p id="bp-c3-reason-guidance" className="bp-field__help" role="status">
+                          {nameCorrectionReason.trim().length < 10
+                            ? `Alasan perlu minimal 10 karakter (sekarang ${nameCorrectionReason.trim().length}/10).`
+                            : 'Alasan memenuhi panjang minimal.'}
+                        </p>
+                        <label className="bp-field">
+                          <span className="bp-field__label">Bukti bahwa identitas item tetap sama</span>
+                          <textarea
+                            className="bp-input"
+                            value={nameCorrectionEvidence}
+                            maxLength={2000}
+                            aria-describedby="bp-c3-evidence-guidance"
+                            onChange={(event) => setNameCorrectionEvidence(event.target.value)}
+                          />
+                        </label>
+                        <p id="bp-c3-evidence-guidance" className="bp-field__help" role="status">
+                          {nameCorrectionEvidence.trim().length < 20
+                            ? `Bukti perlu minimal 20 karakter (sekarang ${nameCorrectionEvidence.trim().length}/20). Jelaskan fakta yang menunjukkan resource dan spesifikasinya tetap sama.`
+                            : 'Panjang bukti memenuhi syarat; pastikan bukti faktual dan benar.'}
+                        </p>
+                        <label className="bp-field">
+                          <input
+                            type="checkbox"
+                            checked={nameCorrectionConfirmed}
+                            onChange={(event) => setNameCorrectionConfirmed(event.target.checked)}
+                          />
+                          <span className="bp-field__label">Saya sudah memeriksa spesifikasi dan memastikan ini resource yang sama.</span>
+                        </label>
+                        <p className="bp-field__help" aria-live="polite">
+                          {nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' &&
+                            !confirmedCatalogCode.trim()
+                            ? 'Simpan belum aktif: kode ' + (nameImpactResult.resourceCode ?? 'katalog') + ' masih berupa petunjuk. Ketik ulang kode katalog di kotak kode.'
+                            : nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' &&
+                              (!nameImpactResult.resourceCode ||
+                                confirmedCatalogCode.trim().toLocaleLowerCase('id-ID') !== nameImpactResult.resourceCode.toLocaleLowerCase('id-ID'))
+                              ? 'Simpan belum aktif: kode katalog tidak cocok.'
+                              : nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' &&
+                                nameSourceReference.trim().length < 12
+                                ? 'Simpan belum aktif: lengkapi dasar koreksi yang nyata (minimal 12 karakter).'
+                                : nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' && !nomenclatureVerified
+                                  ? 'Simpan belum aktif: konfirmasikan keputusan kurator mengenai salah tulis.'
+                                  : !nameCorrectionConfirmed
+                              ? 'Simpan belum aktif: konfirmasikan bahwa identitas dan spesifikasi resource tetap sama.'
+                            : nameCorrectionReason.trim().length < 10
+                              ? 'Simpan belum aktif: lengkapi alasan koreksi.'
+                              : nameCorrectionEvidence.trim().length < 20
+                                ? 'Simpan belum aktif: lengkapi bukti identitas minimal 20 karakter.'
+                                : 'Persyaratan isian terpenuhi. Simpan akan memverifikasi ulang izin, identitas, versi data, dan jurnal audit.'}
+                        </p>
+                        <button
+                          type="button"
+                          className="bp-btn bp-btn--primary"
+                          disabled={nameImpactBusy ||
+                            !nameCorrectionConfirmed ||
+                            nameCorrectionReason.trim().length < 10 ||
+                            nameCorrectionEvidence.trim().length < 20 ||
+                            (nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' &&
+                              (!nomenclatureVerified ||
+                               nameSourceReference.trim().length < 12 ||
+                               !nameImpactResult.resourceCode ||
+                               confirmedCatalogCode.trim().toLocaleLowerCase('id-ID') !== nameImpactResult.resourceCode.toLocaleLowerCase('id-ID')))}
+                          onClick={async () => {
+                            setNameImpactBusy(true);
+                            setNameImpactError(null);
+                            try {
+                              await correctActiveResourceCatalogName(item.resource.id, {
+                                previousName: nameImpactResult.currentName,
+                                correctedName: nameImpactResult.proposedName,
+                                expectedUpdatedAt: nameImpactResult.observedVersion,
+                                reason: nameCorrectionReason,
+                                evidence: nameCorrectionEvidence,
+                                sameIdentityConfirmed: true,
+                                nomenclatureVerified: nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' && nomenclatureVerified,
+                                confirmedCatalogCode: confirmedCatalogCode.trim(),
+                                sourceReference: nameSourceReference.trim(),
+                              });
+                              setNameImpactOpen(false);
+                              setNameImpactResult(null);
+                              setNameCorrectionConfirmed(false);
+                              onCurrentChanged?.(item.basicPriceId, 'Nama katalog berhasil dikoreksi; identitas, satuan dan harga tetap.');
+                            } catch {
+                              setNameImpactError('Koreksi ditolak atau kondisi katalog sudah berubah. Periksa dampak ulang; tidak ada penyimpanan sebagian.');
+                              setNameImpactResult(null);
+                              setNameCorrectionConfirmed(false);
+                            } finally {
+                              setNameImpactBusy(false);
+                            }
+                          }}
+                        >
+                          {nameImpactBusy ? 'Menyimpan koreksi...' : 'Konfirmasi & Simpan Koreksi Nama'}
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
 
           {/*
             GAP-B — THREE SENTENCES, EACH GATED ON THE FACT THAT PROVES IT.
@@ -763,6 +1013,7 @@ function PrivatePriceChangeForm({
     sourceName ? null : true,
   );
   const [sourceIdentityName, setSourceIdentityName] = useState('');
+  const [sourceOrigin, setSourceOrigin] = useState<PriceSourceOrigin | ''>('');
   const [proposedValue, setProposedValue] = useState('');
   const [effectiveDate, setEffectiveDate] = useState('');
   const [reason, setReason] = useState('');
@@ -780,7 +1031,16 @@ function PrivatePriceChangeForm({
     if (busy || !intent) return;
     if (intent === 'NEW_OBSERVATION' && evidenceBasis !== 'FIELD') return;
     if (fieldPath && askSameSource && sameSource === null) return;
-    if (fieldPath && sameSource === false && !sourceIdentityName.trim()) return;
+    if (fieldPath && sameSource === false) {
+      if (!isGenuinelyDifferentSourceIdentity(sourceName, sourceIdentityName)) {
+        setRefusal(DIFFERENT_SOURCE_IDENTITY_CONFLICT_NOTE);
+        return;
+      }
+      if (!sourceOrigin) {
+        setRefusal(DIFFERENT_SOURCE_ORIGIN_REQUIRED_NOTE);
+        return;
+      }
+    }
     if (intent === 'CORRECTION' && !confirmCorrection) {
       setConfirmCorrection(true);
       return;
@@ -800,6 +1060,10 @@ function PrivatePriceChangeForm({
                 sameSource: sameSource !== false,
                 sourceIdentityName:
                   sameSource === false ? sourceIdentityName.trim() : undefined,
+                sourceOrigin:
+                  sameSource === false && sourceOrigin
+                    ? sourceOrigin
+                    : undefined,
               },
             )
           : await correctPrivateBasicPrice(
@@ -938,16 +1202,40 @@ function PrivatePriceChangeForm({
         </fieldset>
       ) : null}
       {fieldPath && sameSource === false ? (
-        <label className="bp-field" style={{ marginTop: '8px' }}>
-          <span className="bp-field__label">{FIELD_REPORTED_SOURCE_NAME_LABEL}</span>
-          <input
-            className="bp-input"
-            value={sourceIdentityName}
-            onChange={(event) => setSourceIdentityName(event.target.value)}
-            disabled={busy}
-            autoComplete="off"
-          />
-        </label>
+        <>
+          <label className="bp-field" style={{ marginTop: '8px' }}>
+            <span className="bp-field__label">{FIELD_REPORTED_SOURCE_NAME_LABEL}</span>
+            <input
+              className="bp-input"
+              value={sourceIdentityName}
+              onChange={(event) => setSourceIdentityName(event.target.value)}
+              disabled={busy}
+              autoComplete="off"
+            />
+          </label>
+          <label className="bp-field">
+            <span className="bp-field__label">{FIELD_REPORTED_SOURCE_ORIGIN_LABEL}</span>
+            <select
+              className="bp-input"
+              value={sourceOrigin}
+              onChange={(event) =>
+                setSourceOrigin(event.target.value as PriceSourceOrigin | '')
+              }
+              disabled={busy}
+            >
+              <option value="">Pilih asal sumber</option>
+              {OBSERVATION_SOURCE_ORIGIN_OPTIONS.map((origin) => (
+                <option key={origin} value={origin}>
+                  {sourceOriginLabel(origin)}
+                </option>
+              ))}
+            </select>
+          </label>
+          {sourceIdentityName.trim() &&
+          !isGenuinelyDifferentSourceIdentity(sourceName, sourceIdentityName) ? (
+            <p className="bp-field__error">{DIFFERENT_SOURCE_IDENTITY_CONFLICT_NOTE}</p>
+          ) : null}
+        </>
       ) : null}
       {showMoneyFields ? (
         <>

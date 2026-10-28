@@ -387,11 +387,12 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
       $queryRaw: jest.Mock;
       basicPrice: {
         findFirst: jest.Mock;
+        findMany: jest.Mock;
         create: jest.Mock;
         update: jest.Mock;
         updateMany: jest.Mock;
       };
-      basicPriceProvenanceCorrection: { create: jest.Mock };
+      basicPriceProvenanceCorrection: { create: jest.Mock; findFirst: jest.Mock };
     };
 
     beforeEach(() => {
@@ -399,6 +400,7 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
         $queryRaw: jest.fn().mockResolvedValue([{ id: PREDECESSOR.id }]),
         basicPrice: {
           findFirst: jest.fn(),
+          findMany: jest.fn().mockResolvedValue([]),
           create: jest.fn().mockResolvedValue({
             id: 'bp-aug',
             value: new Prisma.Decimal('65000.00'),
@@ -410,6 +412,7 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
         },
         basicPriceProvenanceCorrection: {
           create: jest.fn().mockResolvedValue({}),
+          findFirst: jest.fn().mockResolvedValue(null),
         },
       };
       const prisma = {
@@ -418,6 +421,51 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
         ),
       };
       service = new BasicPricePrivateAssetService(prisma as never);
+    });
+
+    it('BP-PR212-P1: correcting a field observation retains its proven publisher without copying old import evidence', async () => {
+      tx.basicPrice.findFirst
+        .mockResolvedValueOnce({
+          ...PREDECESSOR,
+          sourceImportRowId: null,
+          sourceImportRow: null,
+          sourceSubmission: null,
+          provenanceCorrections: [{
+            after: {
+              semantic: 'NEW_OBSERVATION',
+              sourceIdentityName: 'Tim Simprok',
+              evidenceClass: 'FIELD_REPORTED',
+              sameSourceIdentity: true,
+            },
+          }],
+        })
+        .mockResolvedValueOnce(null);
+      await service.correctPrivatePrice({
+        basicPriceId: PREDECESSOR.id,
+        actor: ACTOR,
+        expectedValue: '62500.00',
+        proposedValue: '65000.00',
+        reason: 'correct typo in the field observation',
+      });
+      const lookup = firstCallArg<{
+        include: { provenanceCorrections?: {
+          take: number; select: { after: boolean };
+        } };
+      }>(tx.basicPrice.findFirst);
+      expect(lookup.include.provenanceCorrections).toMatchObject({
+        orderBy: { createdAt: 'asc' }, take: 1,
+        select: { after: true },
+      });
+      const data = firstCallArg<{ data: Record<string, unknown> }>(
+        tx.basicPrice.create,
+      ).data;
+      expect(data.sourceImportRowId).toBeUndefined();
+      expect(data.sourceType).toBe('VENDOR_QUOTE');
+      const audit = firstCallArg<{ data: {
+        after: Record<string, unknown>;
+      } }>(tx.basicPriceProvenanceCorrection.create).data;
+      expect(audit.after.sourceIdentityName).toBe('Tim Simprok');
+      expect(audit.after.evidenceClass).toBe('FIELD_REPORTED');
     });
 
     it('PRICE-EVID-01 / PRICE-EVID-04 / PRICE-EVID-10 — field-reported new money keeps source identity and does not inherit VENDOR_QUOTE', async () => {
@@ -519,11 +567,12 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
         reason: 'toko lain',
         sameSource: false,
         sourceIdentityName: 'Toko Baru',
+        sourceOrigin: 'STORE',
       });
       const data = firstCallArg<{ data: Record<string, unknown> }>(
         tx.basicPrice.create,
       ).data;
-      expect(data.sourceOrigin).toBe('FIELD_REPORT');
+      expect(data.sourceOrigin).toBe('STORE');
       expect(data.sourceType).toBe('MARKET_SURVEY');
       const audit = firstCallArg<{
         data: {
@@ -534,6 +583,62 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
       expect(audit.after.sameSourceIdentity).toBe(false);
       expect(tx.basicPrice.update).not.toHaveBeenCalled();
       expect(tx.basicPrice.updateMany).not.toHaveBeenCalled();
+    });
+
+    it.each(['toko baru', '  TOKO   BARU  ', 'Ｔｏｋｏ　Ｂａｒｕ'])(
+      'PRICE-IDEMP-02 — normalized publisher retry %s reuses its canonical observation',
+      async (retryPublisher) => {
+        tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR);
+        tx.basicPrice.findMany.mockResolvedValueOnce([{
+          id: 'existing-toko-baru',
+          value: new Prisma.Decimal('65000.00'),
+          kdnPercent: new Prisma.Decimal('72.50'),
+          provenanceCorrections: [{
+            after: { semantic: 'NEW_OBSERVATION', sourceIdentityName: 'Toko Baru' },
+          }],
+        }]);
+        const result = await service.observePrivatePrice({
+          basicPriceId: PREDECESSOR.id,
+          actor: ACTOR,
+          expectedValue: '62500.00',
+          proposedValue: '65000.00',
+          effectiveDate: '2026-08-28',
+          reason: 'retry dari sumber berbeda yang sama',
+          sameSource: false,
+          sourceIdentityName: retryPublisher,
+          sourceOrigin: 'STORE',
+        });
+        expect(result).toMatchObject({
+          basicPriceId: 'existing-toko-baru',
+          unchanged: true,
+        });
+        expect(tx.basicPrice.create).not.toHaveBeenCalled();
+        expect(tx.basicPriceProvenanceCorrection.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it('PRICE-IDEMP-02 — distinct publishers with equal price and date remain distinct', async () => {
+      tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR);
+      tx.basicPrice.findMany.mockResolvedValueOnce([{
+        id: 'other-publisher',
+        value: new Prisma.Decimal('65000.00'),
+        kdnPercent: new Prisma.Decimal('72.50'),
+        provenanceCorrections: [{
+          after: { semantic: 'NEW_OBSERVATION', sourceIdentityName: 'Toko Lain' },
+        }],
+      }]);
+      await service.observePrivatePrice({
+        basicPriceId: PREDECESSOR.id,
+        actor: ACTOR,
+        expectedValue: '62500.00',
+        proposedValue: '65000.00',
+        effectiveDate: '2026-08-28',
+        reason: 'penawaran lain yang sah',
+        sameSource: false,
+        sourceIdentityName: 'Toko Baru',
+        sourceOrigin: 'STORE',
+      });
+      expect(tx.basicPrice.create).toHaveBeenCalledTimes(1);
     });
 
     it('PRICE-EVID-02 — different source without a name fails closed', async () => {
@@ -549,6 +654,47 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
           sameSource: false,
         }),
       ).rejects.toMatchObject({ message: 'SOURCE_IDENTITY_REQUIRED' });
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    });
+
+    it.each(['toko abc', '  TOKO   ABC  ', 'Ｔｏｋｏ　ＡＢＣ'])(
+      'refuses false different-source identity %s after safe normalization',
+      async (falseClaim) => {
+        tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR);
+        await expect(
+          service.observePrivatePrice({
+            basicPriceId: PREDECESSOR.id,
+            actor: ACTOR,
+            expectedValue: '62500.00',
+            proposedValue: '65000.00',
+            effectiveDate: '2026-08-28',
+            reason: 'claim says different but names the proven publisher',
+            sameSource: false,
+            sourceIdentityName: falseClaim,
+            sourceOrigin: 'SUPPLIER',
+          }),
+        ).rejects.toMatchObject({
+          message: 'SOURCE_IDENTITY_FALSE_DIFFERENT_CLAIM',
+        });
+        expect(tx.basicPrice.create).not.toHaveBeenCalled();
+        expect(tx.basicPriceProvenanceCorrection.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it('requires an explicit origin for a genuinely different source', async () => {
+      tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR);
+      await expect(
+        service.observePrivatePrice({
+          basicPriceId: PREDECESSOR.id,
+          actor: ACTOR,
+          expectedValue: '62500.00',
+          proposedValue: '65000.00',
+          effectiveDate: '2026-08-28',
+          reason: 'toko lain',
+          sameSource: false,
+          sourceIdentityName: 'Toko Baru',
+        }),
+      ).rejects.toMatchObject({ message: 'SOURCE_ORIGIN_REQUIRED' });
       expect(tx.basicPrice.create).not.toHaveBeenCalled();
     });
 

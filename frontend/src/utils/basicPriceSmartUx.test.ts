@@ -309,6 +309,20 @@ test("a same-identity collision never appears as a successful stored price", () 
   assert.doesNotMatch(message, /pasti.*duplikat/iu);
 });
 
+test("a same-publisher competing price is held while healthy prices remain saved", () => {
+  const message = smartSaveOutcomeMessage({
+    accepted: { acceptedCount: 7, remainingEligible: 0 },
+    kept: {
+      createdCount: 6, alreadyPrivateCount: 0,
+      heldRows: [{ rowId: "amp-10-tebet", reasonCode: "SAME_PUBLISHER_PRICE_CONTEXT_REQUIRES_REVIEW" }],
+    },
+  });
+  assert.match(message, /6 harga tersimpan/u);
+  assert.match(message, /1 baris harga ditahan/u);
+  assert.match(message, /Koreksi Harga atau Harga Terbaru/u);
+  assert.doesNotMatch(message, /7 harga tersimpan/u);
+});
+
 test("a skipped row with no newly saved prices is still reported", () => {
   const message = smartSaveOutcomeMessage({
     accepted: { acceptedCount: 0, skippedCount: 1, remainingEligible: 0 },

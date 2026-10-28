@@ -350,6 +350,8 @@ export function mapPrivateBasicPriceItem(
 /** A resource identity that also carries its base unit, for the Explorer list. */
 export interface ExplorerResourceIdentity extends ResourceIdentity {
   baseUnit: string;
+  /** Verified display of THIS price's denominator; never converted money. */
+  displayUnit?: string | null;
 }
 
 export function mapExplorerResourceIdentity(resource: {
@@ -435,6 +437,8 @@ interface ImportBatchSourceNames {
 export interface ExplorerRowSource {
   id: string;
   workspaceId: string | null;
+  /** Exact original price for a monetary correction; not evidence of a new quote. */
+  supersedesBasicPriceId?: string | null;
   assetScope: string;
   status?: string;
   verificationStatus?: string;
@@ -464,6 +468,7 @@ export interface ExplorerRowSource {
   } | null;
   sourceSubmission?: {
     importRow?: {
+      unitDefinitionId?: string | null;
       batch?: ImportBatchSourceNames | null;
     } | null;
   } | null;
@@ -473,6 +478,8 @@ export interface ExplorerRowSource {
    * PriceSubmission in between — not a second provenance subsystem.
    */
   sourceImportRow?: {
+    /** The source offer's proven denominator, not the catalog's default. */
+    unitDefinitionId?: string | null;
     /** Read-only proposal evidence; never emitted by mapExplorerItem. */
     priceSubmissionId?: string | null;
     batch?: ImportBatchSourceNames | null;
@@ -507,7 +514,7 @@ export function sameSourceObservationPredecessorId(
     : null;
 }
 
-function sourceNameFromBatch(
+export function sourceNameFromBatch(
   batch: ImportBatchSourceNames | null | undefined,
 ): string | null {
   if (!batch) return null;
@@ -516,6 +523,23 @@ function sourceNameFromBatch(
   const organizationName = batch.sourceOrganizationName?.trim();
   if (organizationName) return organizationName;
   return null;
+}
+
+/**
+ * Exact source-identity comparison spelling. This deliberately performs no
+ * synonym or fuzzy expansion: it only removes Unicode/case/whitespace spelling
+ * differences that cannot prove two publishers are different.
+ */
+export function normalizeSourceIdentityName(
+  value: string | null | undefined,
+): string {
+  return (
+    value
+      ?.normalize('NFKC')
+      .replace(/\s+/gu, ' ')
+      .trim()
+      .toLocaleLowerCase('id-ID') ?? ''
+  );
 }
 
 /**

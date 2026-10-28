@@ -54,6 +54,22 @@ export function trustedUnitContext(
     : undefined;
 }
 
+/**
+ * Unit Kernel's fail-closed compatibility check for DISPLAYING a persisted
+ * offer-unit identity. Does not admit aliases, convert quantities, or change
+ * the existing matching policy. LABOR prices require person-time; MATERIAL
+ * must not borrow labor or equipment time. Equipment may have time or count.
+ */
+export function unitDimensionAllowedForPriceDisplay(
+  dimension: string | null | undefined,
+  context: UnitAliasContext | undefined,
+): boolean {
+  if (!dimension || !context) return false;
+  if (context === 'LABOR') return dimension === 'PERSON_TIME';
+  if (context === 'MATERIAL') return dimension !== 'PERSON_TIME' && dimension !== 'EQUIPMENT_TIME';
+  return dimension === 'EQUIPMENT_TIME' || dimension === 'COUNT';
+}
+
 export const UNIT_REASON = {
   EXACT_UNIT_IDENTITY: 'EXACT_UNIT_IDENTITY',
   EXACT_UNIT_ALIAS_EQUIVALENCE: 'EXACT_UNIT_ALIAS_EQUIVALENCE',

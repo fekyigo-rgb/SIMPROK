@@ -27,7 +27,9 @@ test('BP-MULTI-ACTION-01: select one or this page only, not invisible other page
   assert.match(explorer, /aria-label=\{'Pilih harga ' \+ item\.resource\.name\}/u);
   assert.match(explorer, /visibleRows\.every\(\(item\) => selectedIds\.has\(item\.basicPriceId\)\)/u);
   assert.match(explorer, /const selectedRows = visibleRows\.filter/u);
-  assert.match(explorer, /setSelectedIds\(new Set\(\)\)/u);
+  assert.match(explorer, /replaceSelectedIds\(new Set\(\)\)/u);
+  assert.match(explorer, /const replaceSelectedIds = [\s\S]*resetCorrectionForm\(\);[\s\S]*setSelectedIds\(next\);/u);
+  assert.match(explorer, /const resetCorrectionForm = [\s\S]*setCorrectionOpen\(false\);[\s\S]*setCorrectionWinnerId\(''\);[\s\S]*setCorrectionReason\(''\);[\s\S]*setCorrectionConfirmed\(false\);/u);
   assert.match(explorer, /colSpan=\{8\}/u);
 });
 

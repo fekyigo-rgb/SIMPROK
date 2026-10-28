@@ -5,6 +5,7 @@ import {
   Get,
   NotFoundException,
   Param,
+  ParseUUIDPipe,
   Post,
   Query,
   Req,
@@ -21,6 +22,7 @@ import {
   ahspSourceRowKey,
 } from '../ahsp/services/ahsp-import.service';
 import { ObservedResourceNameReviewService } from './observed-resource-name-review.service';
+import { ResourceCatalogNameCorrectionService } from './resource-catalog-name-correction.service';
 
 /**
  * THE shared curation door for observed resources — the backend behind
@@ -51,6 +53,7 @@ export class ResourceObservationController {
     private readonly ahspJournal: AhspImportService,
     /** Append-only spelling interpretation; never an identity authority. */
     private readonly nameReviews: ObservedResourceNameReviewService,
+    private readonly nameCorrections?: ResourceCatalogNameCorrectionService,
   ) {}
 
   private workspaceId(request: any): string {
@@ -65,6 +68,43 @@ export class ResourceObservationController {
     const actor: string | undefined = request.user?.id;
     if (!actor) throw new BadRequestException('ACTOR_REQUIRED');
     return actor;
+  }
+
+  /** BP-C3: curator-only ACTIVE catalog typo correction, never price or unit edit. */
+  @Post('catalog/:resourceId/correct-name')
+  @Permissions('AHSP_RESOURCE_IDENTITY_DECIDE')
+  async correctCatalogName(
+    @Req() request: any,
+    @Param('resourceId', ParseUUIDPipe) resourceId: string,
+    @Body() body: {
+      previousName?: string;
+      correctedName?: string;
+      expectedUpdatedAt?: string;
+      reason?: string;
+      evidence?: string;
+      sameIdentityConfirmed?: boolean;
+      nomenclatureVerified?: boolean;
+      confirmedCatalogCode?: string;
+      sourceReference?: string;
+    },
+  ) {
+    if (!this.nameCorrections) {
+      throw new BadRequestException('RESOURCE_NAME_CORRECTION_UNAVAILABLE');
+    }
+    return this.nameCorrections.correct({
+      workspaceId: this.workspaceId(request),
+      resourceCatalogId: resourceId,
+      actorAccountId: this.actor(request),
+      previousName: body?.previousName ?? '',
+      correctedName: body?.correctedName ?? '',
+      expectedUpdatedAt: body?.expectedUpdatedAt ?? '',
+      reason: body?.reason ?? '',
+      evidence: body?.evidence ?? '',
+      sameIdentityConfirmed: body?.sameIdentityConfirmed === true,
+      nomenclatureVerified: body?.nomenclatureVerified === true,
+      confirmedCatalogCode: body?.confirmedCatalogCode,
+      sourceReference: body?.sourceReference,
+    });
   }
 
   /**

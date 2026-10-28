@@ -59,6 +59,24 @@ export class BasicPriceController {
    * service/query logic under the Explorer's own permission). Region is a
    * canonical GLOBAL entity — no workspaceId is invented here.
    */
+  /**
+   * BP-C3 — Impact PREVIEW, not an Edit endpoint.
+   * Existing BASIC_PRICE_VIEW and workspace guard; no state change or grant.
+   */
+  @Get('catalog-name-impact/:resourceId')
+  @Permissions('BASIC_PRICE_VIEW')
+  previewCatalogNameCorrection(
+    @Req() request: WorkspaceScopedRequest,
+    @Param('resourceId', ParseUUIDPipe) resourceId: string,
+    @Query('proposedName') proposedName: string,
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId) throw new BadRequestException('BASIC_PRICE_WORKSPACE_CONTEXT_REQUIRED');
+    return this.basicPriceService.previewCatalogNameCorrection(
+      workspaceId, resourceId, proposedName ?? '',
+    );
+  }
+
   @Get('lookups/regions')
   @Permissions('BASIC_PRICE_VIEW')
   searchRegions(@Query() dto: SearchRegionDto) {

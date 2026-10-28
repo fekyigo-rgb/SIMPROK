@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Download, FileInput, RefreshCw, Send, Trash2 } from 'lucide-react';
-import { submitPrivateBasicPrice } from '../api/basicPriceImport';
+import { submitPrivateBasicPrice, reconcileImportedPrivateCorrection, ImportRequestError } from '../api/basicPriceImport';
 import {
   BasicPriceExplorerError,
   fetchBasicPriceExplorer,
@@ -26,9 +26,13 @@ import {
   explorerErrorMessageFromStatus,
   explorerErrorStateFromStatus,
   explorerSourceNameLabel,
+  explorerVerifiedUnitLabel,
   formatExplorerPrice,
   basicPriceRegionLabel,
+  basicPriceCorrectionPairKey,
   canProposePrivateExplorerItem,
+  canLinkExistingImportedPricePair,
+  correctionConsentMatchesPair,
   privateProposalIsNotPublication,
   resourceLabel,
   resourceTypeLabel,
@@ -194,7 +198,29 @@ export function BasicPriceExplorerPage() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [selectionBusy, setSelectionBusy] = useState(false);
   const [selectionNotice, setSelectionNotice] = useState<string | null>(null);
+  const [correctionOpen, setCorrectionOpen] = useState(false);
+  const [correctionWinnerId, setCorrectionWinnerId] = useState('');
+  const [correctionReason, setCorrectionReason] = useState('');
+  const [correctionConfirmed, setCorrectionConfirmed] = useState(false);
+  const [correctionConsentPairKey, setCorrectionConsentPairKey] = useState<string | null>(null);
   const requestGate = useRef(createLatestRequestGate());
+
+  const resetCorrectionForm = () => {
+    setCorrectionOpen(false);
+    setCorrectionWinnerId('');
+    setCorrectionReason('');
+    setCorrectionConfirmed(false);
+    setCorrectionConsentPairKey(null);
+  };
+
+  const replaceSelectedIds = (
+    next: Set<string> | ((previous: Set<string>) => Set<string>),
+  ) => {
+    // Selection is the object of the human decision. Any selection mutation
+    // invalidates the entire form before the next pair can be presented.
+    resetCorrectionForm();
+    setSelectedIds(next);
+  };
 
   useEffect(() => {
     const sequence = requestGate.current.begin();
@@ -278,7 +304,7 @@ export function BasicPriceExplorerPage() {
 
   const updateDraft = <K extends keyof DraftFilters>(key: K, value: DraftFilters[K]) => {
     setDraft((current) => ({ ...current, [key]: value }));
-    setSelectedIds(new Set());
+    replaceSelectedIds(new Set());
     setSelectionNotice(null);
     setPage(1);
     // A detail panel describes ONE row. When the list beneath it changes, the
@@ -290,7 +316,7 @@ export function BasicPriceExplorerPage() {
 
   const resetFilters = () => {
     setDraft(EMPTY_DRAFT);
-    setSelectedIds(new Set());
+    replaceSelectedIds(new Set());
     setSelectionNotice(null);
     setPage(1);
     setOpenDetailId(null);
@@ -298,7 +324,7 @@ export function BasicPriceExplorerPage() {
   };
 
   const reload = () => {
-    setSelectedIds(new Set());
+    replaceSelectedIds(new Set());
     setReloadNonce((n) => n + 1);
   };
 
@@ -309,15 +335,23 @@ export function BasicPriceExplorerPage() {
 
   const visibleRows = state.kind === 'ready' ? state.items : [];
   const selectedRows = visibleRows.filter((item) => selectedIds.has(item.basicPriceId));
+  const correctionPairKey = basicPriceCorrectionPairKey(
+    selectedRows.map((item) => item.basicPriceId),
+  );
   const allPageSelected =
     visibleRows.length > 0 && visibleRows.every((item) => selectedIds.has(item.basicPriceId));
   const canSubmit = hasPermission('BASIC_PRICE_SUBMIT');
   const proposableRows = selectedRows.filter((item) => canProposePrivateExplorerItem(item, canSubmit));
   const removableRows = selectedRows.filter((item) => item.canRemoveOwn === true);
+  // UI invitation only. The server rechecks the actual persisted publisher,
+  // resource identity, temporal context, trusted actor and both original files.
+  const canReconcileImportedPair = hasPermission('BASIC_PRICE_SUBMIT') &&
+    selectedRows.length === 2 &&
+    canLinkExistingImportedPricePair(selectedRows[0], selectedRows[1]);
 
   const toggleOne = (id: string) => {
     setSelectionNotice(null);
-    setSelectedIds((previous) => {
+    replaceSelectedIds((previous) => {
       const next = new Set(previous);
       if (next.has(id)) next.delete(id);
       else next.add(id);
@@ -327,7 +361,7 @@ export function BasicPriceExplorerPage() {
 
   const togglePage = () => {
     setSelectionNotice(null);
-    setSelectedIds((previous) => {
+    replaceSelectedIds((previous) => {
       const next = new Set(previous);
       for (const item of visibleRows) {
         if (allPageSelected) next.delete(item.basicPriceId);
@@ -335,6 +369,47 @@ export function BasicPriceExplorerPage() {
       }
       return next;
     });
+  };
+
+  const reconcileSelectedCorrection = async () => {
+    if (
+      selectionBusy ||
+      !canReconcileImportedPair ||
+      !correctionReason.trim() ||
+      !correctionConsentMatchesPair(
+        correctionConsentPairKey,
+        selectedRows.map((row) => row.basicPriceId),
+        correctionWinnerId,
+        correctionConfirmed,
+      )
+    ) return;
+    const correct = selectedRows.find(row => row.basicPriceId === correctionWinnerId);
+    const previous = selectedRows.find(row => row.basicPriceId !== correctionWinnerId);
+    if (!correct || !previous) return;
+    setSelectionBusy(true);
+    setSelectionNotice(null);
+    try {
+      const result = await reconcileImportedPrivateCorrection(
+        previous.basicPriceId, correct.basicPriceId,
+        previous.price, correct.price, correctionReason.trim(),
+      );
+      setCorrectionOpen(false);
+      setCorrectionWinnerId('');
+      setCorrectionReason('');
+      setCorrectionConfirmed(false);
+      setCorrectionConsentPairKey(null);
+      replaceSelectedIds(new Set());
+      setReloadNonce(n => n + 1);
+      setSelectionNotice(result.unchanged
+        ? 'Hubungan koreksi ini sudah tercatat; harga tidak digandakan.'
+        : 'Koreksi harga tercatat. Harga sebelumnya tetap dapat dibaca dalam riwayat; tampilan harga berlaku dimuat ulang.');
+    } catch (error) {
+      const code = error instanceof ImportRequestError ? error.detail : '';
+      setSelectionNotice('Koreksi belum dilakukan. Periksa sumber, identitas, atau hak akses; tidak ada harga yang diubah. ' +
+        (code ? 'Server: ' + code.slice(0, 180) : 'Silakan muat ulang data.'));
+    } finally {
+      setSelectionBusy(false);
+    }
   };
 
   const exportSelection = () => {
@@ -348,7 +423,7 @@ export function BasicPriceExplorerPage() {
         resourceTypeLabel(item.resource.type),
         item.resource.code ?? '',
         item.price,
-        item.resource.baseUnit,
+        explorerVerifiedUnitLabel(item.resource),
         basicPriceRegionLabel(item),
         item.sourceName ?? '',
         formatDate(item.effectiveDate),
@@ -413,7 +488,7 @@ export function BasicPriceExplorerPage() {
         }
       }
     } finally {
-      setSelectedIds(remaining);
+      replaceSelectedIds(remaining);
       setSelectionBusy(false);
       setReloadNonce((n) => n + 1);
       setSelectionNotice(
@@ -456,7 +531,7 @@ export function BasicPriceExplorerPage() {
         }
       }
     } finally {
-      setSelectedIds(stillSelected);
+      replaceSelectedIds(stillSelected);
       setSelectionBusy(false);
       setReloadNonce((n) => n + 1);
       setSelectionNotice(
@@ -682,7 +757,7 @@ export function BasicPriceExplorerPage() {
             value={sortOrder}
             onChange={(event) => {
                setSortOrder(event.target.value as 'asc' | 'desc');
-               setSelectedIds(new Set());
+               replaceSelectedIds(new Set());
                setSelectionNotice(null);
                setPage(1);
             }}
@@ -704,6 +779,17 @@ export function BasicPriceExplorerPage() {
             onClick={() => void submitSelection()}>
             <Send size={14} /> {selectionBusy ? 'Memproses...' : 'Usulkan ke SIMPROK'}
           </button>
+          {canReconcileImportedPair ? (
+            <button type="button" className="bp-btn bp-btn--sm"
+              disabled={selectionBusy}
+              onClick={() => {
+                setCorrectionOpen(open => !open);
+                setCorrectionConfirmed(false);
+                setCorrectionConsentPairKey(null);
+              }}>
+              Hubungkan koreksi harga
+            </button>
+          ) : null}
           <button type="button" className="bp-btn bp-btn--sm" disabled={selectionBusy} onClick={exportSelection}>
             <Download size={14} /> Export
           </button>
@@ -714,10 +800,55 @@ export function BasicPriceExplorerPage() {
             <Trash2 size={14} /> Hapus
           </button>
           <button type="button" className="bp-btn bp-btn--link" disabled={selectionBusy}
-            onClick={() => { setSelectedIds(new Set()); setSelectionNotice(null); }}>
+            onClick={() => { replaceSelectedIds(new Set()); setSelectionNotice(null); }}>
             Batal pilih
           </button>
         </div>
+      ) : null}
+      {correctionOpen && canReconcileImportedPair ? (
+        <section className="bp-note" aria-label="Tentukan harga yang benar" style={{ marginBottom: 12 }}>
+          <strong>Koreksi dua harga yang sudah tersimpan</strong>
+          <p className="bp-field__help">
+            Pilih harga yang benar. Harga lama tidak dihapus dan tetap tercatat pada riwayat koreksi.
+            Hanya boleh digunakan untuk dua harga dari penerbit, resource, satuan, wilayah, dan periode yang sama.
+          </p>
+          {selectedRows.map(row => (
+            <label className="bp-choice__item" key={row.basicPriceId} style={{ display: 'block' }}>
+              <input type="radio" name="bp-existing-price-winner"
+                checked={correctionWinnerId === row.basicPriceId}
+                onChange={() => {
+                  setCorrectionWinnerId(row.basicPriceId);
+                  setCorrectionConfirmed(false);
+                  setCorrectionConsentPairKey(null);
+                }}/>
+              {' '} Harga yang benar: {formatExplorerPrice(row.price)} — {resourceLabel(row.resource)}
+            </label>
+          ))}
+          <label className="bp-field" style={{ marginTop: 8 }}>
+            <span className="bp-field__label">Alasan dan dasar koreksi</span>
+            <textarea className="bp-textarea" value={correctionReason}
+              onChange={event => {
+                setCorrectionReason(event.target.value);
+                setCorrectionConfirmed(false);
+                setCorrectionConsentPairKey(null);
+              }}
+              placeholder="Contoh: Penerbit mengoreksi harga sebelumnya yang salah."/>
+          </label>
+          <label className="bp-choice__item" style={{ display: 'block', marginTop: 8 }}>
+            <input type="checkbox" checked={correctionConfirmed}
+              onChange={event => {
+                const confirmed = event.target.checked;
+                setCorrectionConfirmed(confirmed);
+                setCorrectionConsentPairKey(confirmed ? correctionPairKey : null);
+              }}/>
+            {' '} Saya memastikan harga terpilih mengoreksi catatan lama, bukan harga dari varian teknis atau sumber berbeda.
+          </label>
+          <button type="button" className="bp-btn bp-btn--sm"
+            disabled={selectionBusy || !correctionWinnerId || !correctionReason.trim() || !correctionConfirmed}
+            onClick={() => void reconcileSelectedCorrection()}>
+            {selectionBusy ? 'Mencatat koreksi...' : 'Simpan hubungan koreksi'}
+          </button>
+        </section>
       ) : null}
       {selectionNotice ? (
         <p className="bp-note bp-note--info" role="status" aria-live="polite">{selectionNotice}</p>
@@ -764,7 +895,7 @@ export function BasicPriceExplorerPage() {
             type="button"
             className="bp-btn bp-btn--sm"
             style={{ marginTop: '10px' }}
-onClick={() => { setSelectedIds(new Set()); setPage(1); }}
+onClick={() => { replaceSelectedIds(new Set()); setPage(1); }}
           >
             Kembali ke halaman 1
           </button>
@@ -828,7 +959,9 @@ onClick={() => { setSelectedIds(new Set()); setPage(1); }}
                       {formatExplorerPrice(item.price)}
                     </td>
                     <td data-label="Satuan" className="bp-cell-unit">
-                      {item.resource.baseUnit}
+                      <span title={item.resource.displayUnit === null ? 'Satuan harga perlu diverifikasi oleh Unit Kernel' : 'Satuan harga terverifikasi (tanpa konversi)'}>
+                        {explorerVerifiedUnitLabel(item.resource)}
+                      </span>
                     </td>
                     <td data-label="Wilayah" className="bp-cell-region">
                       {basicPriceRegionLabel(item)}
@@ -922,7 +1055,7 @@ onClick={() => { setSelectedIds(new Set()); setPage(1); }}
               className="bp-btn bp-btn--sm"
               disabled={state.meta.page <= 1}
               aria-disabled={state.meta.page <= 1}
-onClick={() => { setSelectedIds(new Set()); setSelectionNotice(null); setPage((current) => Math.max(1, current - 1)); }}
+onClick={() => { replaceSelectedIds(new Set()); setSelectionNotice(null); setPage((current) => Math.max(1, current - 1)); }}
             >
               Sebelumnya
             </button>
@@ -934,7 +1067,7 @@ onClick={() => { setSelectedIds(new Set()); setSelectionNotice(null); setPage((c
               className="bp-btn bp-btn--sm"
               disabled={state.meta.page >= state.meta.totalPages}
               aria-disabled={state.meta.page >= state.meta.totalPages}
-onClick={() => { setSelectedIds(new Set()); setSelectionNotice(null); setPage((current) => current + 1); }}
+onClick={() => { replaceSelectedIds(new Set()); setSelectionNotice(null); setPage((current) => current + 1); }}
             >
               Berikutnya
             </button>

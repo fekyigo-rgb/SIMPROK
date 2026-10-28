@@ -410,7 +410,152 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction (e2e)', () => {
     expect(detailJson).not.toContain('basic-price-intake');
   });
 
-  it('PRICE-EVID-02 — different-source field observation keeps predecessor source and records a new identity', async () => {
+  it('BP-PR212-P1 — observed price corrected in place keeps its exact publisher and never revives the older offer', async () => {
+    const vendor = 'QA-Publisher-Chain-PR212';
+    const { predecessorId } = await importAndKeep({
+      vendor,
+      includeKdnColumn: false,
+    });
+    const predecessor = await prisma.basicPrice.findUniqueOrThrow({
+      where: { id: predecessorId },
+    });
+
+    const observed = asMutationBody(
+      (await request(http())
+        .post(`/basic-price-imports/prices/${predecessorId}/observations`)
+        .set(hdr())
+        .send({
+          expectedValue: predecessor.value.toFixed(2),
+          proposedValue: '105000.00',
+          effectiveDate: '2026-08-28',
+          reason: 'later field observation, same real source',
+          sameSource: true,
+        })
+        .expect(201)).body,
+    );
+    const corrected = asMutationBody(
+      (await request(http())
+        .post(`/basic-price-imports/prices/${observed.basicPriceId}/corrections`)
+        .set(hdr())
+        .send({
+          expectedValue: '105000.00',
+          proposedValue: '104500.00',
+          reason: 'corrected an erroneous entry, not a new market price',
+        })
+        .expect(201)).body,
+    );
+    expect(corrected.unchanged).toBe(false);
+
+    const birth = await prisma.basicPrice.findUniqueOrThrow({
+      where: { id: corrected.basicPriceId },
+      include: { provenanceCorrections: true },
+    });
+    expect(birth.supersedesBasicPriceId).toBe(observed.basicPriceId);
+    expect(birth.recordsNewObservation).toBe(false);
+    expect(birth.sourceImportRowId).toBeNull();
+    const after = birth.provenanceCorrections[0]?.after as {
+      sourceIdentityName?: string | null;
+      evidenceClass?: string;
+    } | undefined;
+    expect(after?.sourceIdentityName).toBe(vendor);
+    expect(after?.evidenceClass).toBe('FIELD_REPORTED');
+
+    // Use the CURRENT request instant. A date-only 2026-10-28 means UTC
+    // midnight, earlier than the correction that was just created today.
+    const list = asListBody((await request(http())
+      .get('/basic-prices')
+      .query({ resourceId: RESOURCE_ID })
+      .set(hdr())
+      .expect(200)).body);
+    const foundIds = list.data.map((row) => row.basicPriceId);
+    expect(foundIds).toContain(corrected.basicPriceId);
+    expect(foundIds).not.toContain(predecessorId);
+    expect(foundIds).not.toContain(observed.basicPriceId);
+
+    // Search is also part of source truth: the corrected current price must
+    // remain discoverable by its exact publisher, not just display its name.
+    const bySource = asListBody((await request(http())
+      .get('/basic-prices')
+      .query({ resourceId: RESOURCE_ID, sourceName: vendor })
+      .set(hdr())
+      .expect(200)).body);
+    expect(bySource.data.map((row) => row.basicPriceId))
+      .toContain(corrected.basicPriceId);
+
+    const current = (await request(http())
+      .get(`/basic-prices/${corrected.basicPriceId}/detail`)
+      .set(hdr())
+      .expect(200)).body as {
+        price: { sourceName: string | null; price: string };
+        evidence: { originalFileRetained: boolean; importBatchLinked: boolean };
+        history: unknown;
+      };
+    expect(current.price.sourceName).toBe(vendor);
+    expect(current.price.price).toBe('104500.00');
+    expect(current.evidence.importBatchLinked).toBe(false);
+    expect(current.evidence.originalFileRetained).toBe(false);
+
+    const historical = asListBody((await request(http())
+      .get('/basic-prices')
+      .query({ resourceId: RESOURCE_ID, asOf: '2026-05-01' })
+      .set(hdr())
+      .expect(200)).body);
+    expect(historical.data.map((row) => row.basicPriceId))
+      .toContain(predecessorId);
+    expect(historical.data.map((row) => row.basicPriceId))
+      .not.toContain(corrected.basicPriceId);
+
+    // P1 independent review: the SAME publisher may issue another later
+    // observation AFTER a correction. Neither a legacy quote nor the first
+    // corrected observation may reappear as a competing current offer.
+    const secondObserved = asMutationBody((await request(http())
+      .post(`/basic-price-imports/prices/${corrected.basicPriceId}/observations`)
+      .set(hdr())
+      .send({
+        expectedValue: '104500.00',
+        proposedValue: '106000.00',
+        effectiveDate: '2026-09-02',
+        reason: 'later real price after an earlier corrected observation',
+        sameSource: true,
+      })
+      .expect(201)).body);
+    const secondCorrected = asMutationBody((await request(http())
+      .post(`/basic-price-imports/prices/${secondObserved.basicPriceId}/corrections`)
+      .set(hdr())
+      .send({
+        expectedValue: '106000.00',
+        proposedValue: '105750.00',
+        reason: 'corrected second observation entry, preserving source',
+      })
+      .expect(201)).body);
+    const repeatedList = asListBody((await request(http())
+      .get('/basic-prices')
+      .query({ resourceId: RESOURCE_ID })
+      .set(hdr())
+      .expect(200)).body);
+    expect(repeatedList.data.map((row) => row.basicPriceId))
+      .toEqual([secondCorrected.basicPriceId]);
+    const repeatedSource = asListBody((await request(http())
+      .get('/basic-prices')
+      .query({ resourceId: RESOURCE_ID, sourceName: vendor })
+      .set(hdr())
+      .expect(200)).body);
+    expect(repeatedSource.data.map((row) => row.basicPriceId))
+      .toContain(secondCorrected.basicPriceId);
+    expect(repeatedSource.data.map((row) => row.basicPriceId))
+      .not.toContain(predecessorId);
+    const secondDetail = (await request(http())
+      .get(`/basic-prices/${secondCorrected.basicPriceId}/detail`)
+      .set(hdr()).expect(200)).body as {
+        price: { sourceName: string | null; price: string };
+        evidence: { importBatchLinked: boolean };
+      };
+    expect(secondDetail.price.sourceName).toBe(vendor);
+    expect(secondDetail.price.price).toBe('105750.00');
+    expect(secondDetail.evidence.importBatchLinked).toBe(false);
+  });
+
+  it('PRICE-EVID-02 — a different-store field observation preserves the predecessor and records the stated source origin', async () => {
     const { predecessorId } = await importAndKeep({
       vendor: 'sem-03-diffsrc',
       includeKdnColumn: false,
@@ -420,6 +565,19 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction (e2e)', () => {
     });
     const predecessorType = predecessor.sourceType;
     const predecessorOrigin = predecessor.sourceOrigin;
+    // A different publisher without an explicitly stated origin must fail closed.
+    await request(http())
+      .post(`/basic-price-imports/prices/${predecessorId}/observations`)
+      .set(hdr())
+      .send({
+        expectedValue: predecessor.value.toFixed(2),
+        proposedValue: '107000.00',
+        effectiveDate: '2026-08-28',
+        reason: 'sumber berbeda',
+        sameSource: false,
+        sourceIdentityName: 'Toko Baru Ambon',
+      })
+      .expect(409);
     const observed = asMutationBody(
       (
         await request(http())
@@ -432,10 +590,51 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction (e2e)', () => {
             reason: 'sumber berbeda',
             sameSource: false,
             sourceIdentityName: 'Toko Baru Ambon',
+            sourceOrigin: 'STORE',
           })
           .expect(201)
       ).body,
     );
+
+    // The same real observation, even with Unicode/case/spacing variants,
+    // must return one canonical id. A genuinely different shop may quote
+    // the same money on the same date without being falsely joined.
+    const retry = asMutationBody((
+      await request(http())
+        .post(`/basic-price-imports/prices/${predecessorId}/observations`)
+        .set(hdr())
+        .send({
+          expectedValue: predecessor.value.toFixed(2),
+          proposedValue: '107000.00',
+          effectiveDate: '2026-08-28',
+          reason: 'retry sumber yang sama',
+          sameSource: false,
+          sourceIdentityName: '  ＴＯＫＯ　ＢＡＲＵ   ＡＭＢＯＮ ',
+          sourceOrigin: 'STORE',
+        })
+        .expect(201)
+    ).body);
+    expect(retry.basicPriceId).toBe(observed.basicPriceId);
+    expect(retry.unchanged).toBe(true);
+
+    const anotherShop = asMutationBody((
+      await request(http())
+        .post(`/basic-price-imports/prices/${predecessorId}/observations`)
+        .set(hdr())
+        .send({
+          expectedValue: predecessor.value.toFixed(2),
+          proposedValue: '107000.00',
+          effectiveDate: '2026-08-28',
+          reason: 'harga dari toko lain yang sah',
+          sameSource: false,
+          sourceIdentityName: 'Toko Lain Ambon',
+          sourceOrigin: 'STORE',
+        })
+        .expect(201)
+    ).body);
+    expect(anotherShop.basicPriceId).not.toBe(observed.basicPriceId);
+    expect(anotherShop.unchanged).toBe(false);
+
     const stillOld = await prisma.basicPrice.findUniqueOrThrow({
       where: { id: predecessorId },
     });
@@ -445,7 +644,7 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction (e2e)', () => {
       where: { id: observed.basicPriceId },
       include: { provenanceCorrections: true },
     });
-    expect(observation.sourceOrigin).toBe('FIELD_REPORT');
+    expect(observation.sourceOrigin).toBe('STORE');
     expect(observation.sourceType).toBe('MARKET_SURVEY');
     expect(observation.sourceImportRowId).toBeNull();
     const after = observation.provenanceCorrections[0]?.after as {
@@ -461,7 +660,7 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction (e2e)', () => {
         .expect(200)
     ).body as { price: { sourceName: string | null; sourceOrigin: string } };
     expect(detail.price.sourceName).toBe('Toko Baru Ambon');
-    expect(detail.price.sourceOrigin).toBe('FIELD_REPORT');
+    expect(detail.price.sourceOrigin).toBe('STORE');
   });
 
   it('PRICE-SEM-02 / PRICE-IDEMP-02 — correction remains correction and is idempotent', async () => {

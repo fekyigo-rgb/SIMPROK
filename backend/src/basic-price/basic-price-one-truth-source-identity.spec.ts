@@ -471,6 +471,64 @@ describe('BP-ONE-TRUTH-01 — same-source observation display, no money inherita
     expect(prisma.basicPrice.findMany).toHaveBeenCalledTimes(1);
   });
 
+  it('BP-PR212-P1: correction without a stored source name follows only the exact price and same-source audit lineage', async () => {
+    const correctionId = '3d3ccfcc-e1b0-4f5d-9b3e-6bf52e6a9d98';
+    const corrected = {
+      ...latest,
+      id: correctionId,
+      value: '166900.00',
+      supersedesBasicPriceId: latestId,
+      provenanceCorrections: [{ after: { sourceIdentityName: null } }],
+    };
+    const { service } = await setup(
+      [corrected],
+      [latest],
+      [middle],
+      [ancestor],
+    );
+    const item = (await service.findAllForWorkspace(ws)).data[0];
+    expect(item).toMatchObject({
+      basicPriceId: correctionId,
+      price: '166900.00',
+      sourceName: 'Tim Simprok',
+    });
+  });
+
+  it('BP-PR212-P1: a correction never inherits another resource or region\'s source', async () => {
+    const corrected = {
+      ...latest,
+      id: '78e73be9-0ab6-40eb-a33f-507cbb1b0268',
+      supersedesBasicPriceId: latestId,
+      provenanceCorrections: [{ after: { sourceIdentityName: null } }],
+    };
+    const { service } = await setup([corrected], [
+      { ...latest, resource: { ...base.resource, id: 'foreign-resource' } },
+    ]);
+    expect((await service.findAllForWorkspace(ws)).data[0].sourceName)
+      .toBeNull();
+  });
+
+  it('BP-PR212-P1: SQL offer lineage continues only by exact correction id and matching immutable scope', async () => {
+    const db = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      basicPrice: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    await BasicPriceService.olderSameSourceObservationOfferIds(
+      db as never, new BasicPriceEligibilityPolicy(), ws,
+      new Date('2026-10-28T00:00:00Z'), {},
+    );
+    const [query] = db.$queryRaw.mock.calls[0] as [
+      { strings: readonly string[] },
+    ];
+    const sql = query.strings.join(' ');
+    expect(sql).toContain('previous.id = corrected."supersedesBasicPriceId"');
+    expect(sql).toContain('previous."workspaceId" = corrected."workspaceId"');
+    expect(sql).toContain('corrected."resourceId" = previous."resourceId"');
+    expect(sql).toContain('corrected."sourceOrigin" = previous."sourceOrigin"');
+    expect(sql).toContain('corrected."effectiveDate" = previous."effectiveDate"');
+    expect(sql).toContain('corrected."recordsNewObservation" = FALSE');
+  });
+
   it('uses the same source identity on Detail while preserving price and evidence', async () => {
     const { service, prisma } = await setup([middle], [ancestor], []);
     prisma.basicPrice.findFirst.mockResolvedValueOnce({
