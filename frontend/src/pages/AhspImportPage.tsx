@@ -18,6 +18,9 @@ import {
   admissionShownAfterSave,
   workItemHasGenuineNewOnly,
   confirmImportFigures,
+  confirmImportDoorRows,
+  previewIdentityQuestions,
+  type ConfirmImportDoor,
   describeImportIntake,
   describeImportRecheck,
   describeImportRecheckFailure,
@@ -279,6 +282,7 @@ export function AhspImportPage() {
     useState<AssistedClassificationContext>(() => emptyAssistedContext());
   const [commitResult, setCommitResult] = useState<null | {
     summary?: IntakeSummaryWire | null;
+    importJobId?: string | null;
     written?: ReadonlyArray<{
       workType: string;
       methodName: string;
@@ -358,6 +362,15 @@ export function AhspImportPage() {
   // DETAIL ON DEMAND. What an import needs is said once per question; the item by
   // item list behind it opens only when the reader asks.
   const [previewDetailOpen, setPreviewDetailOpen] = useState(false);
+  const [previewDetailDoor, setPreviewDetailDoor] = useState<ConfirmImportDoor>('understood');
+  const [showAllPreviewQuestions, setShowAllPreviewQuestions] = useState(false);
+  const confirmDetailRef = useRef<HTMLDivElement | null>(null);
+  const primarySaveRef = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => {
+    if (journeyStep !== 'confirm' || !previewDetailOpen || isReviewPage) return;
+    confirmDetailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    confirmDetailRef.current?.focus();
+  }, [journeyStep, previewDetailOpen, previewDetailDoor, isReviewPage]);
   const [openJobDetails, setOpenJobDetails] = useState<Record<string, boolean>>({});
   // Detail is CONCISE by default and COMPLETE on demand: the rest of a saved
   // import's waiting work, and the reasons behind one curation question.
@@ -1256,6 +1269,20 @@ export function AhspImportPage() {
   const confirmFigures = preview
     ? confirmImportFigures(settled ? currentWorkItems : (preview.workItems ?? []))
     : null;
+  const focusedDoorRows = preview
+    ? confirmImportDoorRows(settled ? currentWorkItems : preview.workItems ?? [], previewDetailDoor)
+    : [];
+  const previewIdentityRows = previewIdentityQuestions(preview?.workItems);
+  const previewIdentityUses = previewIdentityRows.reduce((sum, question) => sum + question.uses, 0);
+  const openConfirmDoor = (door: ConfirmImportDoor) => {
+    setPreviewDetailDoor(door);
+    setPreviewDetailOpen(true);
+    if (door !== 'review') setShowAllPreviewQuestions(false);
+  };
+  const moveToPrimarySave = () => {
+    primarySaveRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    primarySaveRef.current?.focus();
+  };
 
   // AUTOMATION BEFORE HUMAN INTERVENTION.
   //
@@ -1632,10 +1659,9 @@ export function AhspImportPage() {
     rows.length > 0 ? (
       <ul className="ahsp-attention" aria-label={label}>
         {rows.map((row) => {
-          const identityDoor =
-            canCurate &&
-            identityScope !== null &&
-            (row.tone === 'IDENTITY' || row.key === 'identity' || row.key.startsWith('identity:'));
+          const isIdentity = row.tone === 'IDENTITY' || row.key === 'identity' || row.key.startsWith('identity:');
+          const previewIdentityDoor = unitScope?.source === 'preview' && !settled && isIdentity;
+          const identityDoor = previewIdentityDoor || (canCurate && identityScope !== null && isIdentity);
           const unitDoorRow = unitScope !== null && row.tone === 'UNIT' && row.key.startsWith('unit:');
           const badge = attentionBadge(row.detail);
           return (
@@ -1665,7 +1691,10 @@ export function AhspImportPage() {
                 <button
                   type="button"
                   className="ahsp-action ahsp-action--quiet ahsp-attention__door"
-                  onClick={() => void openIdentityReview(identityScope)}
+                  onClick={() => {
+                    if (previewIdentityDoor) openConfirmDoor('review');
+                    else if (identityScope) void openIdentityReview(identityScope);
+                  }}
                   aria-label={'Tinjau: ' + row.title}
                 >
                   <span className="ahsp-attention__title">{row.title}</span>
@@ -2267,53 +2296,85 @@ export function AhspImportPage() {
                   <button
                     type="button"
                     className="ahsp-action ahsp-action--primary"
+                    ref={primarySaveRef}
                     disabled={!file || importing || settled}
                     aria-busy={importAction === 'COMMIT' || undefined}
                     onClick={() => void commitDocument()}
                   >
                     {importAction === 'COMMIT' ? 'Menyimpan…' : 'Simpan Hasil Import'}
                   </button>
+                  {settled && commitResult?.importJobId ? (
+                    <button
+                      type="button"
+                      className="ahsp-action ahsp-action--primary"
+                      onClick={() => navigate('/ahsp/import/review/' + encodeURIComponent(commitResult.importJobId!))}
+                    >Buka Pemeriksaan Dokumen</button>
+                  ) : null}
                 </div>
               </header>
               {confirmFigures ? (
                 <>
                   <div className="ahsp-confirm-summary" aria-label="Ringkasan konfirmasi import">
-                    <div className="ahsp-confirm-summary__card ahsp-confirm-summary__card--understood">
+                    <button
+                      type="button"
+                      className="ahsp-action ahsp-action--quiet ahsp-confirm-summary__card ahsp-confirm-summary__card--understood"
+                      onClick={() => openConfirmDoor('understood')}
+                      aria-expanded={previewDetailOpen && previewDetailDoor === 'understood'}
+                    >
                       <span className="ahsp-confirm-summary__icon" aria-hidden>
                         <CheckCircle2 size={22} />
                       </span>
-                      <div>
-                        <p className="ahsp-confirm-summary__value">{confirmFigures.understood} AHSP dipahami</p>
-                        <p className="ahsp-confirm-summary__hint">Dari pekerjaan yang dikenali dalam dokumen.</p>
-                      </div>
-                    </div>
-                    <div className="ahsp-confirm-summary__card ahsp-confirm-summary__card--existing">
+                      <span className="ahsp-confirm-summary__body">
+                        <span className="ahsp-confirm-summary__value">{confirmFigures.understood} AHSP dipahami</span>
+                        <span className="ahsp-confirm-summary__hint">Dari pekerjaan yang dikenali dalam dokumen.</span>
+                        <span className="ahsp-confirm-summary__action">Buka rincian</span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="ahsp-action ahsp-action--quiet ahsp-confirm-summary__card ahsp-confirm-summary__card--existing"
+                      onClick={() => openConfirmDoor('existing')}
+                      aria-expanded={previewDetailOpen && previewDetailDoor === 'existing'}
+                    >
                       <span className="ahsp-confirm-summary__icon" aria-hidden>
                         <Database size={22} />
                       </span>
-                      <div>
-                        <p className="ahsp-confirm-summary__value">{confirmFigures.already} sudah ada di SIMPROK</p>
-                        <p className="ahsp-confirm-summary__hint">Tidak disimpan dua kali.</p>
-                      </div>
-                    </div>
-                    <div className="ahsp-confirm-summary__card ahsp-confirm-summary__card--will-save">
+                      <span className="ahsp-confirm-summary__body">
+                        <span className="ahsp-confirm-summary__value">{confirmFigures.already} sudah ada di SIMPROK</span>
+                        <span className="ahsp-confirm-summary__hint">Tidak disimpan dua kali.</span>
+                        <span className="ahsp-confirm-summary__action">Buka rincian</span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="ahsp-action ahsp-action--quiet ahsp-confirm-summary__card ahsp-confirm-summary__card--will-save"
+                      onClick={() => openConfirmDoor('willSave')}
+                      aria-expanded={previewDetailOpen && previewDetailDoor === 'willSave'}
+                    >
                       <span className="ahsp-confirm-summary__icon" aria-hidden>
                         <FileText size={22} />
                       </span>
-                      <div>
-                        <p className="ahsp-confirm-summary__value">{confirmFigures.willSave} akan disimpan</p>
-                        <p className="ahsp-confirm-summary__hint">Disimpan dari dokumen; siap digunakan hanya bila seluruh faktanya terbukti.</p>
-                      </div>
-                    </div>
-                    <div className="ahsp-confirm-summary__card ahsp-confirm-summary__card--review">
+                      <span className="ahsp-confirm-summary__body">
+                        <span className="ahsp-confirm-summary__value">{confirmFigures.willSave} akan disimpan</span>
+                        <span className="ahsp-confirm-summary__hint">Disimpan dari dokumen; siap digunakan hanya bila seluruh faktanya terbukti.</span>
+                        <span className="ahsp-confirm-summary__action">Buka rincian</span>
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="ahsp-action ahsp-action--quiet ahsp-confirm-summary__card ahsp-confirm-summary__card--review"
+                      onClick={() => openConfirmDoor('review')}
+                      aria-expanded={previewDetailOpen && previewDetailDoor === 'review'}
+                    >
                       <span className="ahsp-confirm-summary__icon" aria-hidden>
                         <AlertTriangle size={22} />
                       </span>
-                      <div>
-                        <p className="ahsp-confirm-summary__value">{confirmFigures.needsReview} masih perlu ditinjau</p>
-                        <p className="ahsp-confirm-summary__hint">Independen dari penyimpanan — tinjauan dapat dilanjutkan setelah simpan.</p>
-                      </div>
-                    </div>
+                      <span className="ahsp-confirm-summary__body">
+                        <span className="ahsp-confirm-summary__value">{confirmFigures.needsReview} masih perlu ditinjau</span>
+                        <span className="ahsp-confirm-summary__hint">Jumlah AHSP tertahan, bukan jumlah pertanyaan identitas sumber daya.</span>
+                        <span className="ahsp-confirm-summary__action">Buka rincian</span>
+                      </span>
+                    </button>
                   </div>
                   {confirmFigures.cannotSave > 0 ? (
                     <p className="ahsp-confirm-held" role="status">
@@ -2324,7 +2385,8 @@ export function AhspImportPage() {
               ) : null}
               <div className="ahsp-confirm-panels">
                 <section className="ahsp-confirm-panel ahsp-confirm-panel--save">
-                  <h3 className="ahsp-section-title">Apa yang akan disimpan</h3>
+                  <h3 className="ahsp-section-title">{confirmFigures?.willSave === 0 ? 'Tidak ada AHSP baru untuk disimpan' : 'Apa yang akan disimpan'}</h3>
+                  {confirmFigures?.willSave === 0 ? <p className="ahsp-line ahsp-line--abu">AHSP telah dikenali sebagai data yang sudah ada. Buka kartu "Sudah ada di SIMPROK" untuk melihat daftar pekerjaan tanpa membuat duplikat.</p> : null}
                   <ul className="ahsp-confirm-checklist">
                     <li>Identitas AHSP dari dokumen</li>
                     <li>Klasifikasi &amp; konteks yang Anda pilih</li>
@@ -2349,6 +2411,11 @@ export function AhspImportPage() {
                     )
                   )}
                   {renderUnitWorkspace('preview', null)}
+                  {previewIdentityRows.length > 0 ? (
+                    <p className="ahsp-line" role="status">
+                      {previewIdentityRows.length} pertanyaan identitas sumber daya mewakili {previewIdentityUses} kemunculan. Angka ini berbeda dari jumlah AHSP yang ditahan pada ringkasan.
+                    </p>
+                  ) : null}
                   <p className="ahsp-confirm-info-strip" role="note">
                     <Info size={16} aria-hidden />
                     <span>
@@ -2357,6 +2424,50 @@ export function AhspImportPage() {
                   </p>
                 </section>
               </div>
+              {previewDetailOpen ? (
+                <div id="ahsp-confirm-focus" ref={confirmDetailRef} tabIndex={-1} className="ahsp-confirm-focus">
+                  <div className="ahsp-confirm-focus__header">
+                    <h3 className="ahsp-section-title">
+                      {previewDetailDoor === 'understood' ? 'AHSP yang dipahami' :
+                        previewDetailDoor === 'existing' ? 'AHSP yang sudah ada di SIMPROK' :
+                        previewDetailDoor === 'willSave' ? 'AHSP yang dapat disimpan' : 'Tinjauan AHSP dan identitas sumber daya'}
+                    </h3>
+                    <button type="button" className="ahsp-action ahsp-action--quiet ahsp-action--compact" onClick={() => setPreviewDetailOpen(false)}>Tutup rincian</button>
+                  </div>
+                  <p className="ahsp-line ahsp-line--abu">{focusedDoorRows.length} pekerjaan sesuai kartu yang dipilih. Rincian pekerjaan ada pada tabel di bawah.</p>
+                  {previewDetailDoor === 'review' ? (
+                    <section aria-label="Pertanyaan identitas dari dokumen" className="ahsp-preview-identity">
+                      <h4>Pertanyaan identitas sumber daya yang belum terbukti</h4>
+                      {previewIdentityRows.length > 0 ? (
+                        <>
+                          <p>{previewIdentityRows.length} pertanyaan identitas berbeda, {previewIdentityUses} kemunculan. Ini hasil pembacaan dokumen, bukan keputusan tersimpan.</p>
+                          <ul>
+                            {previewIdentityRows.slice(0, showAllPreviewQuestions ? undefined : 12).map((question) => (
+                              <li key={JSON.stringify([question.group, question.name, question.code, question.unit])}>
+                                <strong>{question.name}</strong>
+                                <span>{question.group} · Kode {question.code ?? '—'} · Satuan {question.unit ?? '—'} · {question.uses} kemunculan</span>
+                              </li>
+                            ))}
+                          </ul>
+                          {previewIdentityRows.length > 12 ? (
+                            <button type="button" className="ahsp-action ahsp-action--quiet ahsp-action--compact" onClick={() => setShowAllPreviewQuestions((shown) => !shown)}>
+                              {showAllPreviewQuestions ? 'Tampilkan lebih sedikit' : 'Tampilkan semua ' + previewIdentityRows.length + ' pertanyaan'}
+                            </button>
+                          ) : null}
+                          {!settled ? (
+                            <div className="ahsp-preview-identity__next">
+                              <p>Ini belum menjadi keputusan identitas. Simpan dokumen melalui aksi resmi, lalu buka Pemeriksaan Dokumen untuk menyelesaikan pertanyaan tanpa mengunggah ulang.</p>
+                              <button type="button" className="ahsp-action ahsp-action--primary" onClick={moveToPrimarySave}>Ke tombol Simpan Hasil Import</button>
+                            </div>
+                          ) : commitResult?.importJobId ? (
+                            <button type="button" className="ahsp-action ahsp-action--primary" onClick={() => navigate('/ahsp/import/review/' + encodeURIComponent(commitResult.importJobId!))}>Buka Penyelesaian Dokumen Tersimpan</button>
+                          ) : null}
+                        </>
+                      ) : <p>Tidak ada pertanyaan identitas yang terdeteksi dari pembacaan saat ini.</p>}
+                    </section>
+                  ) : null}
+                </div>
+              ) : null}
               <div className="ahsp-confirm-detail-bar">
                 <button
                   type="button"
@@ -2384,7 +2495,7 @@ export function AhspImportPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(settled ? currentWorkItems : preview.workItems).map((item, index) => {
+                      {focusedDoorRows.map(({ item, index }) => {
                         const admission = admissionOf(item);
                         const genuineNew = workItemHasGenuineNewOnly(item);
                         const condition =
