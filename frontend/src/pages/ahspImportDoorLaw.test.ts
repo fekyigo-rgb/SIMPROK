@@ -56,7 +56,7 @@ test("the second holder reaches ONLY the learning card: import, curation and cre
   // unchanged and still first. TEST_WEAKENING=NO.
   assert.ok(importPage.includes("{canCurate &&"));
   assert.ok(importPage.includes("observationsPhase === 'FAILED'"));
-  assert.ok(importPage.includes("{canManage ? ("));
+  assert.ok(importPage.includes("{canManage && !isReviewPage ? ("));
   // No door that lands on a refusal: the list links exist only for AHSP readers.
   assert.ok(importPage.includes('canViewAhsp ? <Link to="/ahsp"'));
   assert.ok(importPage.includes("canViewAhsp ? ("));
@@ -426,8 +426,8 @@ test("F03: a list that could not be read says so, offers one retry, and never re
   assert.ok(importPage.includes("const FAILED_READ_LINE ="));
   assert.ok(importPage.includes("const STALE_READ_LINE ="));
   assert.ok(importPage.includes("function ReadNotice({ phase, onRetry, label }"));
-  // One notice, used by each of the three lists this page reads.
-  assert.equal(importPage.split("<ReadNotice").length - 1, 3);
+  // Three original guarded lists plus the review page's own read-only retry.
+  assert.equal(importPage.split("<ReadNotice").length - 1, 4);
   // Retry reads the list again — it never carries a decision or a method.
   const notice = importPage.slice(importPage.indexOf("function ReadNotice("), importPage.indexOf("export function AhspImportPage"));
   assert.ok(!notice.includes("method:"));
@@ -624,4 +624,51 @@ test("a duplicate decision never rides a stale document to commit (reset + flagg
   // a decision left on a now-DISTINCT item is never silently transmitted.
   assert.ok(importPage.includes("item.identityVerdict === 'IDENTICAL'"));
   assert.ok(importPage.includes("item.identityVerdict === 'POSSIBLY_IDENTICAL'"));
+});
+
+// OWNER VISUAL AMENDMENT 2026-10-28: two pages, same journal and guarded writers.
+test('AHSP history and selected-document review are distinct routes without a second importer', () => {
+  assert.ok(app.includes('path="review/:importJobId" element={null}'));
+  assert.ok(importPage.includes("useMatch('/ahsp/import/review/:importJobId')"));
+  assert.ok(importPage.includes("navigate('/ahsp/import/review/' + encodeURIComponent(importJobId))"));
+  assert.ok(importPage.includes('aria-label="Pekerjaan import sebelumnya"'));
+  assert.ok(importPage.includes('aria-label="Rincian pekerjaan terpilih"'));
+  assert.ok(importPage.includes('Kembali ke Riwayat Import'));
+  assert.ok(importPage.includes('selectedReviewJob ? importJobList'));
+  assert.ok(importPage.includes('canManage && !isReviewPage'));
+  assert.ok(importPage.includes("const navigationBlocker = useBlocker(hasUnsavedWork)"));
+  assert.equal(importPage.split("'/ahsp/document/jobs/' + job.key + '/continue'").length - 1, 1);
+});
+
+// Owner visual gate: old review pages and the canonical resource review must stay intact.
+test('saved AHSP direct review uses the existing bounded journal cursor and never invents a second review writer', () => {
+  assert.ok(importPage.includes('pagesExamined < 8'));
+  assert.ok(importPage.includes('await loadOlderImports()'));
+  assert.ok(importPage.includes('olderImportsCursor(before) === null'));
+  assert.ok(importPage.includes('setReviewLookupPausedFor(reviewJobId)'));
+  assert.ok(importPage.includes('Cari di riwayat lebih lama'));
+  assert.ok(importPage.includes("scopeRef.current.phase !== 'READY'"));
+  assert.ok(importPage.includes('Dokumen tidak ditemukan pada riwayat yang dapat dibaca'));
+  assert.ok(importPage.includes('Lanjutkan pemeriksaan'));
+  assert.ok(importPage.includes('Hapus draft'));
+  assert.ok(!app.includes('ahsp/import/jobs'));
+  assert.equal(importPage.split("'/ahsp/document/jobs/' + job.key + '/continue'").length - 1, 1);
+});
+
+test('import history has one visible heading in either collapsed or expanded state and keeps the protected buttons', () => {
+  assert.ok(importPage.includes("{savedImportsOpen ? 'Riwayat dokumen AHSP' : 'Pekerjaan import sebelumnya'}"));
+  assert.ok(importPage.includes('className="ahsp-import-history-overview"'));
+  assert.ok(importPage.includes('className="ahsp-import-history-state"'));
+  assert.ok(importPage.includes("job.waitingItems.length > 0 ? 'Draft perlu dilengkapi'"));
+  assert.ok(importPage.includes('setDraftDeleteTarget(job)'));
+  assert.ok(importPage.includes("job.historyOnlyDeleted ? 'Lihat riwayat' : 'Lanjutkan pemeriksaan'"));
+});
+
+test('second import room keeps one document title, a truthful waiting status, and no second save action', () => {
+  assert.ok(importPage.includes("!isReviewPage ? <span className=\"ahsp-curation-item__title\">{job.title}</span> : null"));
+  assert.ok(importPage.includes("selectedReviewJob.waitingItems.length > 0 ? 'Masih perlu dilengkapi'"));
+  assert.ok(importPage.includes("const quietRecheckLabel = busy ? 'Memproses…' : 'Periksa ulang status'"));
+  assert.ok(importPage.includes('tidak menjamin hasil tersimpan'));
+  assert.ok(importPage.includes('Catatan jurnal dan pekerjaan yang masih menunggu'));
+  assert.equal(importPage.split("'/ahsp/document/jobs/' + job.key + '/continue'").length - 1, 1);
 });
