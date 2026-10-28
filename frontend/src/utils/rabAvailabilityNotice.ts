@@ -56,6 +56,7 @@ export type AhspSearchEvidence =
   | { kind: 'idle' }
   | { kind: 'loading' }
   | { kind: 'error' }
+  | { kind: 'eligible_catalog_empty' }
   | {
       kind: 'ready';
       query: string;
@@ -107,6 +108,25 @@ export const ahspDiscoveryEvidence = (
 };
 
 /**
+ * Catalogue emptiness proof uses the SAME eligibility endpoint with q EMPTY,
+ * page 1 and an empty response. A filtered zero-hit is never eligible here.
+ * The response body must echo the unfiltered query and first page; unknown,
+ * malformed, or partial responses must fail closed.
+ */
+export const hasNoEligibleAhspInUnfilteredSearch = (payload: unknown): boolean => {
+  if (!payload || typeof payload !== 'object') return false;
+  const response = payload as {
+    items?: unknown;
+    hasNext?: unknown;
+    page?: unknown;
+    query?: unknown;
+  };
+  return response.query === '' && response.page === 1 &&
+    Array.isArray(response.items) && response.items.length === 0 &&
+    response.hasNext === false;
+};
+
+/**
  * Search results are paged and lexical: an empty search is NOT proof that no
  * suitable AHSP exists in the catalog. A recommended row is NOT identity proof.
  */
@@ -126,6 +146,10 @@ export function describeAhspAvailability(
   if (search.kind === 'error') return {
     title: 'Ketersediaan AHSP belum dapat diperiksa',
     message: 'Pencarian tidak berhasil; ini bukan bukti bahwa AHSP tidak tersedia.',
+  };
+  if (search.kind === 'eligible_catalog_empty') return {
+    title: 'Belum ada AHSP yang dapat digunakan',
+    message: 'SIMPROK belum menemukan AHSP yang memenuhi syarat untuk proyek, workspace, dan tanggal perhitungan ini. AHSP historis, belum lengkap, atau yang telah dihapus tidak boleh otomatis digunakan. Baris tetap belum dihitung sampai ada AHSP yang sah.',
   };
 
   const scope = search.query.trim()

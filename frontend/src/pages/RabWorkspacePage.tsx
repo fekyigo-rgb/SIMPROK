@@ -53,6 +53,7 @@ import {
   ahspDiscoveryEvidence,
   describeAhspAvailability,
   describeAhspBasicPriceGaps,
+  hasNoEligibleAhspInUnfilteredSearch,
   type AhspSearchEvidence,
 } from '../utils/rabAvailabilityNotice';
 import {
@@ -1080,7 +1081,35 @@ export function RabWorkspacePage() {
           const payload: unknown = await response.json();
           const evidence = ahspDiscoveryEvidence(payload, q);
           if (!evidence) throw new Error('ahsp-discovery-invalid-response');
-          if (!cancelled) setAutomaticDiscovery({ key: automaticDiscoveryKey, evidence });
+          let verifiedEvidence: AhspSearchEvidence = evidence;
+          if (evidence.kind === 'ready' && evidence.fetchedCount === 0 &&
+            !evidence.hasNext && !cancelled) {
+            // A filtered zero-result cannot prove catalogue-wide ineligibility.
+            // Only the same canonical endpoint with NO query and an empty first
+            // page (confirmed by its response metadata) may say that no AHSP
+            // is presently eligible for this project/workspace/date.
+            const unfiltered = new URLSearchParams({
+              businessPricingAsOfDate: calculationAsOfDate,
+              boqItemId: selectedItem.id,
+              page: '1', limit: '1',
+            });
+            try {
+              const fullResponse = await apiFetch(
+                `/projects/${projectId}/ahsp-occurrences/eligible-versions/search?${unfiltered}`,
+              );
+              if (fullResponse.ok &&
+                hasNoEligibleAhspInUnfilteredSearch(await fullResponse.json())) {
+                verifiedEvidence = { kind: 'eligible_catalog_empty' };
+              }
+            } catch {
+              // Fail closed: a failed universal check leaves only the
+              // narrower, search-scoped zero-result as evidence.
+            }
+          }
+          if (!cancelled) setAutomaticDiscovery({
+            key: automaticDiscoveryKey,
+            evidence: verifiedEvidence,
+          });
         })
         .catch(() => {
           if (!cancelled) setAutomaticDiscovery({ key: automaticDiscoveryKey, evidence: { kind: 'error' } });

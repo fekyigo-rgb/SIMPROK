@@ -5,6 +5,7 @@ import {
   ahspDiscoveryEvidence,
   describeAhspAvailability,
   describeAhspBasicPriceGaps,
+  hasNoEligibleAhspInUnfilteredSearch,
 } from './rabAvailabilityNotice.ts';
 
 test('unlinked AHSP does not claim a failed or unrun search means absent catalog', () => {
@@ -100,4 +101,25 @@ test('malformed or failed candidate responses never masquerade as an empty catal
     { items: [{ invalid: 'missing-id' }], hasNext: false }]) {
     assert.equal(ahspDiscoveryEvidence(payload, 'DS 10A'), null);
   }
+});
+
+
+test('only verified empty UNFILTERED eligible first page can declare catalogue not ready', () => {
+  const empty = { items: [], hasNext: false, query: '', page: 1, limit: 1 };
+  assert.equal(hasNoEligibleAhspInUnfilteredSearch(empty), true);
+  assert.equal(hasNoEligibleAhspInUnfilteredSearch({ ...empty, query: 'DS 10A' }), false);
+  assert.equal(hasNoEligibleAhspInUnfilteredSearch({ ...empty, page: 2 }), false);
+  assert.equal(hasNoEligibleAhspInUnfilteredSearch({ ...empty, hasNext: true }), false);
+  assert.equal(hasNoEligibleAhspInUnfilteredSearch({ ...empty, items: [{ id: 'any' }] }), false);
+  assert.equal(hasNoEligibleAhspInUnfilteredSearch({ items: [], hasNext: false }), false);
+  assert.equal(hasNoEligibleAhspInUnfilteredSearch(null), false);
+});
+
+test('complete eligible emptiness is a separate honest exception from missing global AHSP records', () => {
+  const n = describeAhspAvailability(false, { kind: 'eligible_catalog_empty' });
+  assert.equal(n?.title, 'Belum ada AHSP yang dapat digunakan');
+  assert.match(n?.message ?? '', /memenuhi syarat/);
+  assert.match(n?.message ?? '', /historis/);
+  assert.match(n?.message ?? '', /belum dihitung/);
+  assert.equal(describeAhspAvailability(true, { kind: 'eligible_catalog_empty' }), null);
 });
