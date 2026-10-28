@@ -2131,3 +2131,27 @@ li.ahsp-completion:last-child {
     min-height: 44px;
   }
 }
+
+/* AHSP import door recovery: status cards are real, keyboard-accessible doors. */
+button.ahsp-confirm-summary__card {
+  width: 100%; display: flex; text-align: left; font: inherit; color: inherit;
+  background: var(--simprok-white); border-style: solid; border-width: 1px; cursor: pointer;
+  transition: border-color .15s ease, box-shadow .15s ease;
+}
+button.ahsp-confirm-summary__card:hover,
+button.ahsp-confirm-summary__card:focus-visible,
+button.ahsp-confirm-summary__card[aria-expanded="true"] {
+  outline: none; border-color: #1da1f2; box-shadow: 0 0 0 2px rgba(29,161,242,.13);
+}
+.ahsp-confirm-summary__body { min-width: 0; display: flex; flex-direction: column; }
+.ahsp-confirm-summary__action { display: block; font-size: 12px; font-weight: 600; color: #1da1f2; margin-top: 7px; }
+.ahsp-confirm-focus { border: 1px solid var(--simprok-engineering-blue-100); border-radius: 10px; margin-top: 16px; padding: 16px; background: var(--simprok-surface-light); scroll-margin-top: 105px; }
+.ahsp-confirm-focus:focus { outline: none; }
+.ahsp-confirm-focus__header { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; }
+.ahsp-preview-identity { margin-top: 12px; }
+.ahsp-preview-identity h4 { margin: 0 0 8px; color: #16294b; }
+.ahsp-preview-identity ul { list-style: none; margin: 12px 0; padding: 0; max-height: 370px; overflow: auto; }
+.ahsp-preview-identity li { display: flex; flex-direction: column; gap: 3px; padding: 9px 12px; border-bottom: 1px solid var(--simprok-engineering-blue-100); font-size: 13px; }
+.ahsp-preview-identity li span { color: var(--simprok-engineering-blue-500); }
+.ahsp-preview-identity__next { margin-top: 12px; padding: 10px 12px; border-left: 3px solid #1da1f2; background: var(--simprok-surface-light); }
+@media (max-width: 640px) { .ahsp-confirm-focus { padding: 12px; } }
