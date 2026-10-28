@@ -1,5 +1,5 @@
 ﻿import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
-import { Link, useBlocker } from 'react-router-dom';
+import { Link, useBlocker, useMatch, useNavigate } from 'react-router-dom';
 import { ArrowLeft, AlertTriangle, CheckCircle2, Database, FileText, Info, Sparkles } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
 import { useAuth } from '../contexts/AuthContext';
@@ -248,6 +248,9 @@ const savedDraftFacts = (context: AssistedClassificationContext | null) => ({
 });
 
 export function AhspImportPage() {
+  const navigate = useNavigate();
+  const reviewJobId = useMatch('/ahsp/import/review/:importJobId')?.params.importJobId ?? null;
+  const isReviewPage = reviewJobId !== null;
   const { hasPermission, activeWorkspaceId } = useAuth();
   const canManage = hasPermission('AHSP_MANAGE');
   const canCurate = hasPermission('AHSP_RESOURCE_IDENTITY_DECIDE');
@@ -343,6 +346,7 @@ export function AhspImportPage() {
   const importHasMore = importScope.hasMore;
   const importMayLoadOlder = olderImportsCursor(importScope) !== null;
   const [olderImports, setOlderImports] = useState<'IDLE' | 'LOADING' | 'FAILED'>('IDLE');
+  const [reviewLookupPausedFor, setReviewLookupPausedFor] = useState<string | null>(null);
   const [jobBusy, setJobBusy] = useState<string | null>(null);
   const jobLock = useRef<ActionTicket | null>(null);
   const [jobOutcomes, setJobOutcomes] = useState<AnchoredOutcome[]>([]);
@@ -623,10 +627,11 @@ export function AhspImportPage() {
     setFile(null);
     setDraftSaved(false);
     setDraftReceipt(null);
-    setSavedImportsOpen(false);
-    setSelectedSavedImport(null);
+    setSavedImportsOpen(Boolean(reviewJobId));
+    setSelectedSavedImport(reviewJobId);
+    setObservationScope(reviewJobId ? { kind: 'importJobId', importJobId: reviewJobId } : null);
     setLearningOpen(false);
-    void loadObservations('INITIAL');
+    void loadObservations('INITIAL', reviewJobId ? { kind: 'importJobId', importJobId: reviewJobId } : null);
     void loadQuestions('INITIAL');
     void loadImportJobs('INITIAL');
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1693,6 +1698,7 @@ export function AhspImportPage() {
     ) : null;
 
   const waitingImports = describeWaitingImports(importJobs, { canCurate });
+  const selectedReviewJob = isReviewPage ? waitingImports.find((job) => job.key === reviewJobId) : null;
   const hasEarlierWorkOrUnreadHistory =
     waitingImports.length > 0 ||
     importHasMore ||
@@ -1706,6 +1712,7 @@ export function AhspImportPage() {
     const scope: ObservationScope = { kind: 'importJobId', importJobId };
     setObservationScope(scope);
     void loadObservations('REFRESH', scope);
+    navigate('/ahsp/import/review/' + encodeURIComponent(importJobId));
   };
   const jobEntries = placeOutcomes(waitingImports, (job) => job.key, jobOutcomes).filter(
     (entry) => entry.kind === 'ITEM'
@@ -1769,6 +1776,7 @@ export function AhspImportPage() {
     const detailId = 'ahsp-import-detail-' + at;
     const decisionItems = job.waitingItems.filter((item) => item.sameness !== null);
     const recheckLabel = busy ? 'Memproses…' : 'Periksa & simpan yang siap';
+    const quietRecheckLabel = busy ? 'Memproses…' : 'Periksa ulang status';
     const recheck = () => void recheckImport(job, at);
     // The blue action is emphasized only where something is worth checking again — a
     // change the server reported, a write to retry, or a decision the reader chose
@@ -1782,8 +1790,8 @@ export function AhspImportPage() {
         return chosen !== undefined && chosen !== 'SKIP';
       });
     return (
-      <li key={job.key} aria-label={'Import ' + job.title} className="ahsp-completion">
-        <span className="ahsp-curation-item__title">{job.title}</span>
+      <li key={job.key} aria-label={'Import ' + job.title} className={isReviewPage ? 'ahsp-completion ahsp-completion--review' : 'ahsp-completion'}>
+        {!isReviewPage ? <span className="ahsp-curation-item__title">{job.title}</span> : null}
         <p className="ahsp-completion__summary">{job.summaryLine}</p>
         {renderAttention(
           job.attention,
@@ -1834,6 +1842,9 @@ export function AhspImportPage() {
             {job.decisionLine ? <span className="ahsp-line" style={{ color: NAVY }}>{job.decisionLine}</span> : null}
           </div>
         ) : null}
+        {isReviewPage && job.canRecheck && !urged ? (
+          <p className="ahsp-import-review-action-note">Belum ada perubahan baru yang ditandai untuk disimpan. Pemeriksaan ulang meminta SIMPROK mengecek kembali status dokumen; tidak menjamin hasil tersimpan.</p>
+        ) : null}
         <div className="ahsp-action-row">
           {/* One check for the whole document; shown only where there is something to check. */}
           {job.canRecheck && urged ? (
@@ -1843,7 +1854,7 @@ export function AhspImportPage() {
           ) : null}
           {job.canRecheck && !urged ? (
             <button type="button" className="ahsp-action ahsp-action--outline" disabled={jobBusy !== null} aria-busy={busy || undefined} onClick={recheck}>
-              {recheckLabel}
+              {isReviewPage ? quietRecheckLabel : recheckLabel}
             </button>
           ) : null}
           <button
@@ -1858,6 +1869,7 @@ export function AhspImportPage() {
         </div>
         {open ? (
           <div id={detailId} className="ahsp-detail">
+            <h3 className="ahsp-import-review-detail-title">Catatan jurnal dan pekerjaan yang masih menunggu</h3>
             <span className="ahsp-line">{job.receivedLine}</span>
             {job.canRecheck ? <span className="ahsp-line">{job.waitingLine}</span> : null}
             <ul className="ahsp-detail-list">
@@ -1899,7 +1911,7 @@ export function AhspImportPage() {
   };
 
   const importJobList = (
-    <ul className="ahsp-curation-list">
+    <ul className="ahsp-curation-list" aria-label="Rincian pekerjaan terpilih">
       {jobEntries.map((entry: PlacedEntry<ImportJobView>, at) =>
         entry.kind === 'ITEM' ? renderImportJob(entry.item, at, entry.outcome) : renderReceipt(entry.outcome, dismissJob),
       )}
@@ -1907,12 +1919,10 @@ export function AhspImportPage() {
   );
 
   const importJobIntro = (
-    <>
-      <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-2)' }}>Riwayat dokumen AHSP</h2>
-      <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>
-        Ini adalah riwayat dokumen yang telah dicatat oleh SIMPROK, bukan berkas yang baru saja Anda pilih. Pencatatan dokumen, penyimpanan AHSP, dan kesiapan AHSP adalah status berbeda. Pilih satu pekerjaan untuk memeriksanya tanpa mengunggah ulang.
-      </p>
-    </>
+    <div className="ahsp-import-history-overview">
+      <span>{waitingImports.length} dokumen pada halaman riwayat yang dimuat{importHasMore ? ' · masih ada riwayat lebih lama' : ''}</span>
+      <span>Status impor dan kesiapan AHSP tidak selalu sama.</span>
+    </div>
   );
 
   const curationIntro = (
@@ -1933,23 +1943,61 @@ export function AhspImportPage() {
     </>
   );
 
+  // Follow the existing paged, workspace-guarded import journal on a direct
+  // detail link. Do not create a second API, download the whole catalogue, or
+  // mistake an unloaded historical page for a missing document.
+  useEffect(() => {
+    if (!isReviewPage || !reviewJobId || importPhase !== 'READY' || selectedReviewJob || !canManage) return;
+    let active = true;
+    void (async () => {
+      let pagesExamined = 0;
+      while (active && pagesExamined < 8) {
+        const before = scopeRef.current;
+        if (describeWaitingImports(before.jobs, { canCurate }).some((job) => job.key === reviewJobId)) return;
+        if (olderImportsCursor(before) === null) return;
+        await loadOlderImports();
+        if (!active || scopeRef.current === before || scopeRef.current.phase !== 'READY') return;
+        pagesExamined++;
+      }
+      if (active && olderImportsCursor(scopeRef.current) !== null) {
+        setReviewLookupPausedFor(reviewJobId);
+      }
+    })();
+    return () => { active = false; };
+    // Intentional one lookup per navigated document and refreshed server list.
+    // The existing serialized cursor loader owns every subsequent page.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reviewJobId, importPhase, activeWorkspaceId, canManage]);
+
   return (
-    <main aria-label="Import AHSP" style={{ padding: 'var(--space-5, 1.25rem)' }}>
+    <main aria-label={isReviewPage ? 'Pemeriksaan dokumen AHSP' : 'Import AHSP'} className="ahsp-import-room">
       <nav aria-label="Jejak navigasi" style={{ fontSize: 'var(--text-sm)', color: MUTED, marginBottom: 'var(--space-3)' }}>
         {/* A door only for whoever may open it — the second holder may judge here, not browse AHSP. */}
         {canViewAhsp ? <Link to="/ahsp" style={{ color: MUTED, textDecoration: 'none' }}>AHSP</Link> : <span>AHSP</span>}
         <span style={{ margin: '0 var(--space-2)' }}>{'\u203A'}</span>
-        <span style={{ color: NAVY }}>Import AHSP</span>
+        {isReviewPage ? (
+          <>
+            <Link to="/ahsp/import" style={{ color: MUTED, textDecoration: 'none' }}>Import AHSP</Link>
+            <span style={{ margin: '0 var(--space-2)' }}>{'\u203A'}</span>
+            <span style={{ color: NAVY }}>Pemeriksaan dokumen</span>
+          </>
+        ) : <span style={{ color: NAVY }}>Import AHSP</span>}
       </nav>
 
       <header style={{ display: 'flex', flexWrap: 'wrap', gap: 'var(--space-3)', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 'var(--space-4)' }}>
         <div>
-          <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: NAVY, margin: 0 }}>Import AHSP</h1>
+          <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 700, color: NAVY, margin: 0 }}>
+            {isReviewPage ? 'Pemeriksaan Dokumen AHSP' : 'Import AHSP'}
+          </h1>
           <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: 'var(--space-1) 0 0' }}>
-            {IMPORT_JOURNEY_SUBTITLE}
+            {isReviewPage ? 'Tinjau pekerjaan tersimpan dan selesaikan pertanyaan yang memerlukan keputusan Anda.' : IMPORT_JOURNEY_SUBTITLE}
           </p>
         </div>
-        {canViewAhsp ? (
+        {isReviewPage ? (
+          <Link to="/ahsp/import" className="ahsp-action ahsp-action--outline">
+            <ArrowLeft size={16} /> Kembali ke Riwayat Import
+          </Link>
+        ) : canViewAhsp ? (
           <Link to="/ahsp" className="ahsp-action ahsp-action--outline">
             <ArrowLeft size={16} /> Kembali ke Daftar AHSP
           </Link>
@@ -1964,7 +2012,7 @@ export function AhspImportPage() {
       ) : null}
 
       {/* Upload -> Pahami dokumen -> Simpan hasil import -> Import selesai */}
-      {canManage ? (
+      {canManage && !isReviewPage ? (
         <section aria-label="Unggah dan pahami dokumen" className="ahsp-import-upload" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
           <input
             ref={fileInputRef}
@@ -2458,18 +2506,23 @@ export function AhspImportPage() {
       ) : null}
 
       {/* Earlier imports are visible as a CHOICE, never opened as the new upload. */}
-      {canManage ? (
+      {canManage && !isReviewPage ? (
         <section aria-label="Pekerjaan import sebelumnya" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
-          <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-2)' }}>
-            Pekerjaan import sebelumnya
-          </h2>
-          <p className="ahsp-line" style={{ color: MUTED }}>
-            Dokumen lama tidak dipilih otomatis. SIMPROK menyimpan catatan import, tetapi
-            dokumen yang dicatat belum tentu menjadi AHSP siap digunakan.
-          </p>
-          {hasEarlierWorkOrUnreadHistory ? (
-            <p className="ahsp-line ahsp-line--abu">Riwayat atau pekerjaan yang masih membutuhkan pemeriksaan tersedia di bawah, setelah Anda membukanya.</p>
-          ) : null}
+          <div className="ahsp-import-history-topline">
+            <div>
+              <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: 0 }}>
+                {savedImportsOpen ? 'Riwayat dokumen AHSP' : 'Pekerjaan import sebelumnya'}
+              </h2>
+              <p className="ahsp-line" style={{ color: MUTED }}>
+                {savedImportsOpen
+                  ? 'Pilih dokumen untuk memeriksa detailnya pada halaman tersendiri.'
+                  : 'Buka daftar dokumen yang pernah dicatat SIMPROK tanpa mengunggah ulang.'}
+              </p>
+            </div>
+            {hasEarlierWorkOrUnreadHistory && importPhase === 'READY' ? (
+              <span className="ahsp-import-history-count">{waitingImports.length}{importHasMore ? '+' : ''} dokumen</span>
+            ) : null}
+          </div>
           <button
             type="button"
             className="ahsp-action ahsp-action--outline"
@@ -2505,32 +2558,32 @@ export function AhspImportPage() {
               {draftDeleteReceipt ? (
                 <p className="ahsp-line" role="status" aria-live="polite">{draftDeleteReceipt}</p>
               ) : null}
-              <ul className="ahsp-curation-list" aria-label="Daftar pekerjaan tersimpan">
+              <ul className="ahsp-curation-list ahsp-import-history-list" aria-label="Daftar pekerjaan tersimpan">
                 {waitingImports.map((job) => (
-                  <li key={job.key} style={{ padding: 'var(--space-2)', borderBottom: HAIRLINE }}>
+                  <li key={job.key} className="ahsp-import-history-card">
                     <div className="ahsp-import-history__heading">
                       <strong style={{ color: NAVY }}>{job.title}</strong>
-                      {job.historyOnlyDeleted ? (
-                        <span className="ahsp-line ahsp-line--abu">AHSP telah dihapus</span>
-                      ) : null}
                       {job.recordedAtLine ? (
                         <span className="ahsp-import-history__recorded-at" title={`ID jurnal: ${job.key}`}>
                           Dicatat {job.recordedAtLine}
                         </span>
                       ) : null}
                     </div>
-                    <span className="ahsp-line" style={{ color: MUTED }}>{job.summaryLine}</span>
-                    <div className="ahsp-action-row">
+                    <div className="ahsp-import-history-state">
+                      <span className="ahsp-import-history-tag">
+                        {job.historyOnlyDeleted ? 'Riwayat penghapusan' : job.waitingItems.length > 0 ? 'Draft perlu dilengkapi' : 'Perlu ditinjau'}
+                      </span>
+                      <p className="ahsp-import-history-summary">{job.summaryLine}</p>
+                    </div>
+                    <div className="ahsp-action-row ahsp-import-history-actions">
                       <button
                         type="button"
-                        className="ahsp-action ahsp-action--outline ahsp-action--compact"
+                        className="ahsp-action ahsp-action--primary ahsp-action--compact"
                         aria-pressed={selectedSavedImport === job.key}
                         disabled={jobBusy !== null}
                         onClick={() => openSavedImport(job.key)}
                       >
-                        {job.historyOnlyDeleted
-                          ? (selectedSavedImport === job.key ? 'Riwayat terbuka' : 'Lihat riwayat')
-                          : (selectedSavedImport === job.key ? 'Sedang ditinjau' : 'Lanjutkan pemeriksaan')}
+                        {job.historyOnlyDeleted ? 'Lihat riwayat' : 'Lanjutkan pemeriksaan'}
                       </button>
                       {job.waitingItems.length > 0 ? (
                         <button
@@ -2549,16 +2602,6 @@ export function AhspImportPage() {
                   </li>
                 ))}
               </ul>
-              {selectedSavedImport ? (
-                <div style={{ marginTop: 'var(--space-3)' }}>
-                  <h3 className="ahsp-section-title">
-                    {waitingImports.find((item) => item.key === selectedSavedImport)?.historyOnlyDeleted
-                      ? 'Riwayat AHSP yang telah dihapus'
-                      : 'Rincian pekerjaan terpilih'}
-                  </h3>
-                  {importJobList}
-                </div>
-              ) : null}
               {importMayLoadOlder ? (
                 <div className="ahsp-action-row" style={{ marginTop: 'var(--space-2)' }}>
                   <button
@@ -2592,10 +2635,40 @@ export function AhspImportPage() {
         </section>
       ) : null}
 
+      {isReviewPage && canManage ? (
+        <section aria-label="Rincian pekerjaan terpilih" className="ahsp-import-review-section" style={{ ...CARD, marginBottom: 'var(--space-4)' }}>
+          <div className="ahsp-import-review-heading">
+            <div>
+              <span className="ahsp-import-review-kicker">Dokumen yang ditinjau</span>
+              <h2 className="ahsp-section-title">{selectedReviewJob?.title ?? 'Memuat pekerjaan tersimpan'}</h2>
+              {selectedReviewJob?.recordedAtLine ? <p className="ahsp-import-history-summary">Dicatat {selectedReviewJob.recordedAtLine}</p> : null}
+            </div>
+            {selectedReviewJob ? <span className="ahsp-import-review-status">{selectedReviewJob.historyOnlyDeleted ? 'Riwayat penghapusan' : selectedReviewJob.waitingItems.length > 0 ? 'Masih perlu dilengkapi' : 'Dokumen tersimpan'}</span> : null}
+          </div>
+          <ReadNotice phase={importPhase} onRetry={() => void loadImportJobs(importJobs.length === 0 ? 'INITIAL' : 'REFRESH')} label="Muat ulang dokumen tersimpan" />
+          {selectedReviewJob ? importJobList : importPhase === 'READY' && importMayLoadOlder ? (
+            <div className="ahsp-import-review-lookup" role="status">
+              <p className="ahsp-line">
+                {reviewLookupPausedFor === reviewJobId
+                  ? 'Dokumen belum ditemukan pada halaman riwayat yang diperiksa. Riwayat lama masih tersedia.'
+                  : 'Mencari dokumen pada halaman riwayat yang sudah disimpan SIMPROK…'}
+              </p>
+              {reviewLookupPausedFor === reviewJobId ? (
+                <button type="button" className="ahsp-action ahsp-action--outline" disabled={olderImports === 'LOADING'} onClick={() => void loadOlderImports()}>
+                  {olderImports === 'LOADING' ? 'Mencari…' : 'Cari di riwayat lebih lama'}
+                </button>
+              ) : null}
+            </div>
+          ) : importPhase === 'READY' ? (
+            <p role="alert" className="ahsp-line">Dokumen tidak ditemukan pada riwayat yang dapat dibaca di workspace ini. Kembali ke Riwayat Import untuk memeriksa daftar dokumen.</p>
+          ) : null}
+        </section>
+      ) : null}
+
       {/* Curation queue — the shared observed-resource lifecycle. Shown when there
           is work, when the last decisions still have something to say, or when the
           queue could not be read at all: an unread queue is never an empty one. */}
-      {canCurate && (savedImportsOpen && selectedSavedImport !== null || settled && observationScope !== null) &&
+      {canCurate && (isReviewPage && selectedSavedImport !== null || !isReviewPage && settled && observationScope !== null) &&
       (observations.length > 0 ||
         curationOutcomes.length > 0 ||
         observationScope !== null ||
