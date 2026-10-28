@@ -17,6 +17,13 @@ The authenticated-looking `localhost:5173/ahsp` page shows source 'Semua', all c
 3. GET /ahsp non-2xx: normally source UI shows FAILED; screenshot not enough to read status.
 4. Nonempty GET /ahsp response but empty screen: investigate differing runtime bundle, route stale state, or frontend issue; don't assert no records.
 
+## 2026-10-28 Owner browser retest — HTTP 200 CONFIRMED
+- Owner checked **Disable cache** and reloaded the AHSP screen.
+- Browser DevTools Network shows GET `http://localhost:3000/ahsp` **200 OK**, while AHSP room still displays the empty-library sentence.
+- This rules out HTTP 304 cache validation as the sole explanation. It does **not** yet establish body `[]`: no DevTools Response panel screenshot has been provided.
+- Existing client logic treats any HTTP 200 nonarray JSON as `[]`; the observed empty state alone cannot distinguish `[]` from an unexpected object.
+- Next discriminating observation: select Network GET `ahsp`, open **Response**, report only shape `[]` / array with items / object. Do not share Authorization headers, token, or cookies.
+
 ## Next evidence and protection
 - Single authenticated Chrome Network request: F12 > Network > Fetch/XHR > refresh /ahsp > choose GET /ahsp; inspect **Status** and response **shape/count**. Avoid sharing JWT, cookies, or Authorization headers.
 - No new AHSP import, no arbitrary manual AHSP linking, no Basic Price rework, no schema write, no main merge.
