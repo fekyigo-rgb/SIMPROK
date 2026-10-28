@@ -1152,3 +1152,62 @@ export const describeImportRecheckFailure = (failure: ApiFailure): ActionOutcome
       explainStatus(failure, 'Workspace aktif Anda tidak memiliki kewenangan untuk mengimpor AHSP.'),
   ),
 });
+
+
+/**
+ * The one actionable next step for a saved Import document.
+ * This is a navigation projection ONLY: it neither resolves an identity nor
+ * changes an AHSP. If the journal cannot yet be read, do not imply completion.
+ */
+export type ReviewNextAction = 'DECIDE' | 'UNIT' | 'IDENTITY' | 'RECHECK' | 'BLOCKED' | 'VERIFY';
+export function nextSavedImportAction(
+  job: ImportJobView,
+  canCurate: boolean,
+): { kind: ReviewNextAction; title: string; explanation: string; buttonLabel: string | null } {
+  const decisions = job.waitingItems.filter((item) => item.sameness !== null).length;
+  if (decisions > 0) return {
+    kind: 'DECIDE',
+    title: 'Putuskan kesamaan AHSP terlebih dahulu',
+    explanation: decisions + ' pekerjaan perlu pilihan Anda. Setelah memilih, gunakan Periksa & simpan yang siap untuk menyampaikan keputusan kepada SIMPROK.',
+    buttonLabel: 'Mulai keputusan AHSP (' + decisions + ')',
+  };
+  const unknownUnits = job.waitingItems.reduce((sum, item) => sum + item.unknownUnits.length, 0);
+  if (unknownUnits > 0) return {
+    kind: 'UNIT',
+    title: 'Selesaikan satuan yang belum terbukti',
+    explanation: 'Gunakan pemeriksaan Unit Kernel yang sudah ada. Jangan menebak satuan dari nama pekerjaan.',
+    buttonLabel: 'Buka penyelesaian satuan',
+  };
+  const hasIdentity = job.attention.some((item) =>
+    item.tone === 'IDENTITY' || item.key === 'identity' || item.key.startsWith('identity:'),
+  );
+  if (hasIdentity) return canCurate ? {
+    kind: 'IDENTITY',
+    title: 'Tinjau identitas sumber daya dalam dokumen ini',
+    explanation: 'Satu keputusan identitas yang sama dipakai pada seluruh kemunculannya. Hasil disimpan melalui pintu tinjauan yang sudah ada.',
+    buttonLabel: 'Buka pertanyaan identitas dokumen',
+  } : {
+    kind: 'BLOCKED',
+    title: 'Identitas masih memerlukan petugas berwenang',
+    explanation: 'Akun ini tidak memiliki kewenangan memilih identitas sumber daya. Belum dapat dinyatakan selesai.',
+    buttonLabel: null,
+  };
+  if (job.canRecheck) return {
+    kind: 'RECHECK',
+    title: 'Periksa kembali dokumen tersimpan',
+    explanation: 'SIMPROK akan membaca ulang status dan keputusan yang telah dicatat. Periksa ulang tidak menjamin semua AHSP menjadi siap.',
+    buttonLabel: 'Periksa ulang status dokumen',
+  };
+  if (job.deletedAhsp > 0) return {
+    kind: 'BLOCKED',
+    title: job.deletedAhsp + ' AHSP terhapus belum mempunyai jalur pemulihan',
+    explanation: 'Riwayat tetap tersedia, tetapi belum ada tindakan pemulihan terotorisasi pada backend. Jangan membuat duplikat atau menganggapnya aktif.',
+    buttonLabel: null,
+  };
+  return {
+    kind: 'VERIFY',
+    title: 'Periksa kesiapan sebenarnya pada daftar AHSP',
+    explanation: 'Dokumen yang tersimpan belum otomatis berarti resep lengkap, memiliki harga, atau siap menghitung RAB.',
+    buttonLabel: null,
+  };
+}

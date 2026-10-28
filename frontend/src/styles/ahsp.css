@@ -2172,3 +2172,51 @@ button.ahsp-confirm-summary__card[aria-expanded="true"] {
   flex: 1 1 280px;
   margin: 0;
 }
+
+/* One honest next step from the persisted Import journal. No parallel workflow. */
+.ahsp-guided-review {
+  margin: 16px 0;
+  padding: 16px;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 10px;
+  background: var(--simprok-surface-light);
+}
+.ahsp-guided-review__kicker {
+  margin: 0 0 12px;
+  font-weight: 700;
+  color: var(--simprok-engineering-blue-900);
+}
+.ahsp-guided-review__steps {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin: 0 0 14px;
+  padding: 0;
+  list-style: none;
+  gap: 10px;
+}
+.ahsp-guided-review__steps li {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 8px;
+  background: var(--simprok-white);
+  padding: 12px;
+  min-width: 0;
+  font-size: 12px;
+}
+.ahsp-guided-review__steps span { color: var(--simprok-engineering-blue-500); }
+.ahsp-guided-review__next {
+  padding: 12px;
+  border-left: 3px solid var(--simprok-engineering-blue-500);
+  background: var(--simprok-white);
+  border-radius: 6px;
+}
+.ahsp-guided-review__next p { margin: 8px 0; font-size: 13px; }
+.ahsp-guided-review__blocker { font-weight: 600; }
+@media (max-width: 850px) {
+  .ahsp-guided-review__steps { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 480px) {
+  .ahsp-guided-review__steps { grid-template-columns: 1fr; }
+}
