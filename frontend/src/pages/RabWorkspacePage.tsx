@@ -37,6 +37,11 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
+import {
+  parseRabAutoDraftPage,
+  summarizeRabAutoDraft,
+  type RabAutoDraftLine,
+} from '../utils/rabAutoDraftReadiness';
 import { appendBoqImportApprovalIdentity, dismissBoqImportPreview, requiresBoqImportConfirmation, type BoqImportDraftImpact } from '../utils/boqImportApproval';
 import {
   projectFieldContextView,
@@ -544,6 +549,7 @@ export function RabWorkspacePage() {
   const [volumes, setVolumes] = useState<Record<string, number>>(recovery?.volumes ?? {});
   const [unitPrices, setUnitPrices] = useState<Record<string, number>>(recovery?.unitPrices ?? {});
   const [costRowStatuses, setCostRowStatuses] = useState<Record<string, CostRowStatus>>({});
+  const [workingDraftLoaded, setWorkingDraftLoaded] = useState(false);
   const costLoadGenerationRef = useRef(0);
   /**
    * RM-03 — the read-only re-proof of the selected persisted line. Null means
@@ -647,6 +653,7 @@ export function RabWorkspacePage() {
   const [selectedAhspVersionId, setSelectedAhspVersionId] = useState('');
   const [selectedRegionId, setSelectedRegionId] = useState('');
   const [isSelectingAhsp, setIsSelectingAhsp] = useState(false);
+  const [isAutoPricing, setIsAutoPricing] = useState(false);
   // The analysis remains primary; the editor is opened only by explicit user intent.
   const [showAhspSelection, setShowAhspSelection] = useState(false);
   const persistGenerationRef = useRef(0);
@@ -872,6 +879,7 @@ export function RabWorkspacePage() {
     }
 
     if (!projectId) {
+      setWorkingDraftLoaded(false);
       if (isProvisional) {
         // New RAB is local-only; no Project, BOQ or RabDocument DB calls yet.
         setCapabilityState({ kind: 'ready', canEditDraft: true });
@@ -894,6 +902,7 @@ export function RabWorkspacePage() {
 
     let cancelled = false;
     setCapabilityState({ kind: 'loading' });
+    setWorkingDraftLoaded(false);
     setStatusMessage('Memuat draft...');
 
     const run = async () => {
@@ -944,6 +953,7 @@ export function RabWorkspacePage() {
       applyRecap(data.recap);
       if (data.items.length > 0) {
         applyRows(data.items, 'WORKING_DRAFT');
+        setWorkingDraftLoaded(!frozen);
         loadCostCalculations(data.items);
         setStatusMessage(frozen ? 'RAB terkunci dimuat. Mode baca.' : 'Draft tersimpan dimuat. Ruang kerja siap.');
         return;
@@ -1118,6 +1128,75 @@ export function RabWorkspacePage() {
     return () => { cancelled = true; window.clearTimeout(timer); };
   }, [automaticDiscoveryKey, projectId, selectedItem,
     calculationAsOfDate, showAhspSelection]);
+  // RAB-AUTO-02 — automatic, read-only assessment of the SAVED Working Draft.
+  // Its backend shares one AHSP eligibility truth; no frontend matcher exists.
+  const persistedWorkIds = useMemo(
+    () => rows.filter((r) => r.type === 'item' && !r.id.startsWith('local-'))
+      .map((r) => r.id).join('|'),
+    [rows],
+  );
+  const draftAssessmentKey = projectId && workingDraftLoaded && !draftDirty &&
+    persistedWorkIds.length > 0
+    ? [projectId, calculationAsOfDate, persistedWorkIds, retryToken].join('|')
+    : '';
+  const [draftAssessment, setDraftAssessment] = useState<{
+    key: string;
+    state: 'loading' | 'ready' | 'partial' | 'error';
+    lines: readonly RabAutoDraftLine[];
+  }>({ key: '', state: 'loading', lines: [] });
+  useEffect(() => {
+    if (!draftAssessmentKey || !projectId) return;
+    let cancelled = false;
+    const project = projectId;
+    const contextKey = draftAssessmentKey;
+    // Maximum 20 pages / 500 lines per opening. A larger draft is explicitly
+    // PARTIAL, never represented as exhaustively checked.
+    const run = async () => {
+      const seen = new Set<string>();
+      const lines: RabAutoDraftLine[] = [];
+      try {
+        for (let page = 1; page <= 20; page++) {
+          const query = new URLSearchParams({
+            businessPricingAsOfDate: calculationAsOfDate,
+            page: String(page), limit: '25',
+          });
+          const response = await apiFetch(
+            `/projects/${project}/ahsp-occurrences/boq-items/working-draft/automation-readiness?${query}`,
+          );
+          if (!response.ok) throw new Error('READINESS_ENDPOINT_UNAVAILABLE');
+          const payload: unknown = await response.json();
+          const parsed = parseRabAutoDraftPage(payload, project, page);
+          if (!parsed) throw new Error('INVALID_READINESS_PROOF');
+          for (const line of parsed.results) {
+            if (seen.has(line.boqItemId)) throw new Error('DUPLICATE_READINESS_ROW');
+            seen.add(line.boqItemId);
+            lines.push(line);
+          }
+          if (cancelled) return;
+          if (!parsed.hasNext) {
+            setDraftAssessment({ key: contextKey, state: 'ready', lines });
+            return;
+          }
+          if (parsed.results.length === 0) throw new Error('EMPTY_PAGINATION');
+        }
+        if (!cancelled) setDraftAssessment({ key: contextKey, state: 'partial', lines });
+      } catch {
+        // Never present a partial failed result as authoritative completion.
+        if (!cancelled) setDraftAssessment({ key: contextKey, state: 'error', lines: [] });
+      }
+    };
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      setDraftAssessment({ key: contextKey, state: 'loading', lines: [] });
+      void run();
+    }, 350);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [draftAssessmentKey, projectId, calculationAsOfDate]);
+  const draftAssessmentDisplay = draftAssessmentKey &&
+    draftAssessment.key === draftAssessmentKey &&
+    (draftAssessment.state === 'ready' || draftAssessment.state === 'partial')
+    ? summarizeRabAutoDraft(draftAssessment.lines)
+    : null;
   const selectedAhspPreference = eligibleAhspVersions.find(
     (version) => version.id === selectedAhspVersionId,
   )?.preference;
@@ -1653,6 +1732,60 @@ export function RabWorkspacePage() {
     setSelectedRegionId('');
     setRegionQuery('');
     setRegionLevel('PROVINCE');
+  };
+
+  const handleAutoPriceReady = async () => {
+    if (!projectId || !canEditDraft || !workingDraftLoaded || draftDirty || isAutoPricing) return;
+    setIsAutoPricing(true);
+    // A concurrent local edit/project switch must never be overwritten by a
+    // completion-triggered reload. The canonical server may have committed
+    // some rows; ask for an explicit reconciliation instead.
+    const startedRevision = draftRevisionRef.current;
+    const startedProject = projectId;
+    let priced = 0;
+    let unpriced = 0;
+    try {
+      for (let page = 1; page <= 20; page++) {
+        const query = new URLSearchParams({ page: String(page), limit: '25' });
+        const response = await apiFetch(
+          `/projects/${projectId}/rab/auto-price-ready?${query}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ calculationAsOfDate }) },
+        );
+        if (!response.ok) throw new Error('AUTO_PRICE_REQUEST_FAILED');
+        const payload: unknown = await response.json();
+        if (!payload || typeof payload !== 'object' ||
+          !('projectId' in payload) || payload.projectId !== projectId ||
+          !('hasNext' in payload) || typeof payload.hasNext !== 'boolean' ||
+          !('counts' in payload) || !payload.counts || typeof payload.counts !== 'object' ||
+          !('calculatedAndPersisted' in payload.counts) ||
+          typeof payload.counts.calculatedAndPersisted !== 'number' ||
+          !('unpriced' in payload.counts) || typeof payload.counts.unpriced !== 'number') {
+          throw new Error('AUTO_PRICE_INVALID_RESULT');
+        }
+        priced += payload.counts.calculatedAndPersisted;
+        unpriced += payload.counts.unpriced;
+        if (!payload.hasNext) {
+          if (draftRevisionRef.current !== startedRevision || currentProjectIdRef.current !== startedProject) {
+            setStatusMessage('Perhitungan selesai pada server, tetapi draft berubah selama proses. Simpan perubahan lokal sebelum memuat ulang hasil.');
+            return;
+          }
+          setStatusMessage(`${priced} baris dihitung dan disimpan otomatis. ${unpriced} baris belum memenuhi syarat harga. Pemeriksaan tetap menggunakan Cost Kernel.`);
+          setRetryToken((value) => value + 1);
+          return;
+        }
+      }
+      throw new Error('AUTO_PRICE_INCOMPLETE_PAGINATION');
+    } catch {
+      // Some pages may have committed before a later failure. Never announce
+      // full success or retry without reloading the server's canonical truth.
+      setStatusMessage('Hasil perhitungan otomatis belum pasti lengkap. Periksa kembali data tersimpan; jangan menganggap seluruh baris berhasil.');
+      if (draftRevisionRef.current === startedRevision && currentProjectIdRef.current === startedProject) {
+        setRetryToken((value) => value + 1);
+      }
+    } finally {
+      setIsAutoPricing(false);
+    }
   };
 
   const handlePickAhsp = () => {
@@ -2923,6 +3056,19 @@ export function RabWorkspacePage() {
                 ? 'Tersimpan di server — dapat dibaca dan ditelusuri, tidak dapat diubah'
                 : 'Draft tersimpan di server — edit bebas, simpan kapan saja'}
             </span>
+            {draftAssessmentDisplay ? (
+              <small role="status" aria-label="Pemeriksaan AHSP otomatis"
+                style={{ display: 'block', color: 'var(--simprok-catatan-muted)', maxWidth: '68ch' }}>
+                {draftAssessmentDisplay.label}
+                {draftAssessment.state === 'partial' ? ' Pemeriksaan belum mencakup semua baris.' : ''}
+              </small>
+            ) : null}
+            {draftAssessmentKey && draftAssessment.key === draftAssessmentKey &&
+              draftAssessment.state === 'error' ? (
+                <small role="status" style={{ color: 'var(--simprok-catatan-muted)' }}>
+                  Pemeriksaan kesiapan AHSP belum dapat dibaca. RAB tetap aman; tidak ada harga yang diubah.
+                </small>
+              ) : null}
             <div className="simprok-rab-sheet__tools">
               {/* THE CREATION DOOR, BACK WHERE IT IS ALWAYS REACHABLE.
                   `addChild` never stopped working — but its only visible doors
@@ -2930,6 +3076,15 @@ export function RabWorkspacePage() {
                   draft that already had rows and no sub-heading offered no way
                   to add anything at all. Same function, same row types, same
                   design language; only the door is restored. */}
+              {canEditDraft && draftAssessmentDisplay && draftAssessmentDisplay.linked > 0 ? (
+                <button type="button" className="simprok-rab-add-item"
+                  disabled={draftDirty || isAutoPricing || !workingDraftLoaded}
+                  onClick={() => { void handleAutoPriceReady(); }}
+                  title="Hitung hanya item yang telah mempunyai AHSP dan harga terbukti; item lain tetap belum dihitung"
+                  aria-label="Hitung otomatis baris RAB yang sudah siap">
+                  {isAutoPricing ? 'Sedang menghitung...' : 'Hitung yang Siap'}
+                </button>
+              ) : null}
               {rabLocked ? null : (
                 <>
                   <button
