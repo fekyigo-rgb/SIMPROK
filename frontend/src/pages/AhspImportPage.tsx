@@ -2531,7 +2531,7 @@ export function AhspImportPage() {
                       {job.waitingItems.length > 0 ? (
                         <button
                           type="button"
-                          className="ahsp-action ahsp-action--quiet ahsp-action--compact"
+                          className="ahsp-action ahsp-action--danger ahsp-action--compact"
                           disabled={jobBusy !== null || hasUnsavedWork}
                           aria-label={'Hapus sisa draft dari ' + job.title + (job.recordedAtLine ? ', ' + job.recordedAtLine : '')}
                           onClick={() => void deleteUnfinishedDraft(job)}
