@@ -435,6 +435,8 @@ interface ImportBatchSourceNames {
 export interface ExplorerRowSource {
   id: string;
   workspaceId: string | null;
+  /** Exact original price for a monetary correction; not evidence of a new quote. */
+  supersedesBasicPriceId?: string | null;
   assetScope: string;
   status?: string;
   verificationStatus?: string;

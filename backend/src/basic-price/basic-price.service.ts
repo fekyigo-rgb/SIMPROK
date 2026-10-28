@@ -50,6 +50,9 @@ import {
 const EXPLORER_ROW_SELECT = {
   id: true,
   workspaceId: true,
+  // Exact correction lineage is needed solely when older audit names were
+  // absent; never synthesize a source from a similar title or price.
+  supersedesBasicPriceId: true,
   // RM-03C: the Explorer must say WHICH asset family a row belongs to. A
   // workspace's own private price sitting silently among curated catalog rows,
   // visually indistinguishable from them, would be exactly the kind of
@@ -392,9 +395,38 @@ export class BasicPriceService {
             AND audit.after->>'semantic' = 'NEW_OBSERVATION'
             AND audit.after->>'sameSourceIdentity' = 'true'
             AND chain.depth < ${BASIC_PRICE_HISTORY_MAX_GENERATIONS}
+        ),
+        -- The correction still has the SAME proved publisher; its own birth
+        -- audit may contain only a monetary correction. Follow the exact
+        -- supersession chain for SOURCE-NAME SEARCH as we do for display.
+        corrected_chain AS (
+          SELECT root.id, root.depth, ARRAY[root.id] AS visited
+          FROM source_chain root
+          UNION ALL
+          SELECT corrected.id, chain.depth + 1,
+                 chain.visited || corrected.id
+          FROM corrected_chain chain
+          JOIN "basic_prices" previous
+            ON previous.id = chain.id
+           AND previous."workspaceId" = ${workspaceId}::uuid
+           AND previous."assetScope" = 'WORKSPACE_PRIVATE'
+          JOIN "basic_prices" corrected
+            ON corrected."supersedesBasicPriceId" = previous.id
+           AND corrected."workspaceId" = previous."workspaceId"
+           AND corrected."assetScope" = 'WORKSPACE_PRIVATE'
+           AND corrected."recordsNewObservation" = FALSE
+           AND corrected."resourceId" = previous."resourceId"
+           AND corrected."regionId" IS NOT DISTINCT FROM previous."regionId"
+           AND corrected."regionCoverageSetId"
+               IS NOT DISTINCT FROM previous."regionCoverageSetId"
+           AND corrected."sourceType" = previous."sourceType"
+           AND corrected."sourceOrigin" = previous."sourceOrigin"
+           AND corrected."effectiveDate" = previous."effectiveDate"
+          WHERE chain.depth < ${BASIC_PRICE_HISTORY_MAX_GENERATIONS}
+            AND NOT (corrected.id = ANY(chain.visited))
         )
         SELECT DISTINCT id, depth
-        FROM source_chain
+        FROM corrected_chain
         WHERE depth > 0
         LIMIT 10001
       `,
@@ -466,10 +498,38 @@ export class BasicPriceService {
         WHERE chain.depth < ${BASIC_PRICE_HISTORY_MAX_GENERATIONS}
           AND NOT (e.parent_id = ANY(chain.visited))
       )
+      -- Corrections replace the MONEY of an existing observation; they do
+      -- NOT break the exact SAME-SOURCE observation link proved above.
+      -- Extend only by canonical supersedesBasicPriceId, never by names,
+      -- amounts, date proximity, or an inferred source match.
+      , corrected_lineage AS (
+        SELECT chain.predecessor_id, chain.descendant_id, chain.depth,
+               ARRAY[chain.descendant_id] AS visited
+        FROM lineage chain
+        UNION ALL
+        SELECT chain.predecessor_id, corrected.id,
+               chain.depth + 1, chain.visited || corrected.id
+        FROM corrected_lineage chain
+        JOIN "basic_prices" previous ON previous.id = chain.descendant_id
+        JOIN "basic_prices" corrected
+          ON corrected."supersedesBasicPriceId" = previous.id
+         AND corrected."workspaceId" = previous."workspaceId"
+         AND corrected."assetScope" = 'WORKSPACE_PRIVATE'
+         AND corrected."recordsNewObservation" = FALSE
+         AND corrected."resourceId" = previous."resourceId"
+         AND corrected."regionId" IS NOT DISTINCT FROM previous."regionId"
+         AND corrected."regionCoverageSetId"
+             IS NOT DISTINCT FROM previous."regionCoverageSetId"
+         AND corrected."sourceType" = previous."sourceType"
+         AND corrected."sourceOrigin" = previous."sourceOrigin"
+         AND corrected."effectiveDate" = previous."effectiveDate"
+        WHERE chain.depth < ${BASIC_PRICE_HISTORY_MAX_GENERATIONS}
+          AND NOT (corrected.id = ANY(chain.visited))
+      )
       SELECT DISTINCT chain.predecessor_id AS "predecessorId",
                       chain.descendant_id AS "descendantId",
                       chain.depth
-      FROM lineage chain
+      FROM corrected_lineage chain
       JOIN "basic_prices" ancestor ON ancestor.id = chain.predecessor_id
       JOIN "basic_prices" newer ON newer.id = chain.descendant_id
       WHERE newer."effectiveDate" > ancestor."effectiveDate"
@@ -706,9 +766,12 @@ export class BasicPriceService {
       )
         return [];
       if (deriveExplorerSourceName(root)) return [];
-      const id = sameSourceObservationPredecessorId(
-        root.provenanceCorrections?.[0],
-      );
+      // A price correction is the SAME observation with corrected money.
+      // Follow only its exact supersession pointer; for real later quotes
+      // the separate same-source birth audit remains the required evidence.
+      const id =
+        root.supersedesBasicPriceId ??
+        sameSourceObservationPredecessorId(root.provenanceCorrections?.[0]);
       return id ? [{ root, id, visited: new Set([root.id]) }] : [];
     });
 
@@ -752,9 +815,9 @@ export class BasicPriceService {
           names.set(cursor.root.id, name);
           continue;
         }
-        const id = sameSourceObservationPredecessorId(
-          ancestor.provenanceCorrections?.[0],
-        );
+        const id =
+          ancestor.supersedesBasicPriceId ??
+          sameSourceObservationPredecessorId(ancestor.provenanceCorrections?.[0]);
         if (id && !cursor.visited.has(id)) next.push({ ...cursor, id });
       }
       pending = next;

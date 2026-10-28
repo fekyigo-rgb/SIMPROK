@@ -410,6 +410,101 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction (e2e)', () => {
     expect(detailJson).not.toContain('basic-price-intake');
   });
 
+  it('BP-PR212-P1 — observed price corrected in place keeps its exact publisher and never revives the older offer', async () => {
+    const vendor = 'QA-Publisher-Chain-PR212';
+    const { predecessorId } = await importAndKeep({
+      vendor,
+      includeKdnColumn: false,
+    });
+    const predecessor = await prisma.basicPrice.findUniqueOrThrow({
+      where: { id: predecessorId },
+    });
+
+    const observed = asMutationBody(
+      (await request(http())
+        .post(`/basic-price-imports/prices/${predecessorId}/observations`)
+        .set(hdr())
+        .send({
+          expectedValue: predecessor.value.toFixed(2),
+          proposedValue: '105000.00',
+          effectiveDate: '2026-08-28',
+          reason: 'later field observation, same real source',
+          sameSource: true,
+        })
+        .expect(201)).body,
+    );
+    const corrected = asMutationBody(
+      (await request(http())
+        .post(`/basic-price-imports/prices/${observed.basicPriceId}/corrections`)
+        .set(hdr())
+        .send({
+          expectedValue: '105000.00',
+          proposedValue: '104500.00',
+          reason: 'corrected an erroneous entry, not a new market price',
+        })
+        .expect(201)).body,
+    );
+    expect(corrected.unchanged).toBe(false);
+
+    const birth = await prisma.basicPrice.findUniqueOrThrow({
+      where: { id: corrected.basicPriceId },
+      include: { provenanceCorrections: true },
+    });
+    expect(birth.supersedesBasicPriceId).toBe(observed.basicPriceId);
+    expect(birth.recordsNewObservation).toBe(false);
+    expect(birth.sourceImportRowId).toBeNull();
+    const after = birth.provenanceCorrections[0]?.after as {
+      sourceIdentityName?: string | null;
+      evidenceClass?: string;
+    } | undefined;
+    expect(after?.sourceIdentityName).toBe(vendor);
+    expect(after?.evidenceClass).toBe('FIELD_REPORTED');
+
+    const list = asListBody((await request(http())
+      .get('/basic-prices')
+      .query({ resourceId: RESOURCE_ID, asOf: '2026-10-28' })
+      .set(hdr())
+      .expect(200)).body);
+    const foundIds = list.data.map((row) => row.basicPriceId);
+    expect(foundIds).toContain(corrected.basicPriceId);
+    expect(foundIds).not.toContain(predecessorId);
+    expect(foundIds).not.toContain(observed.basicPriceId);
+
+    // Search is also part of source truth: the corrected current price must
+    // remain discoverable by its exact publisher, not just display its name.
+    const bySource = asListBody((await request(http())
+      .get('/basic-prices')
+      .query({ resourceId: RESOURCE_ID, asOf: '2026-10-28',
+               sourceName: vendor })
+      .set(hdr())
+      .expect(200)).body);
+    expect(bySource.data.map((row) => row.basicPriceId))
+      .toContain(corrected.basicPriceId);
+
+    const current = (await request(http())
+      .get(`/basic-prices/${corrected.basicPriceId}/detail`)
+      .set(hdr())
+      .expect(200)).body as {
+        price: { sourceName: string | null; price: string };
+        evidence: { originalFileRetained: boolean; importBatchLinked: boolean };
+        history: unknown;
+      };
+    expect(current.price.sourceName).toBe(vendor);
+    expect(current.price.price).toBe('104500.00');
+    expect(current.evidence.importBatchLinked).toBe(false);
+    expect(current.evidence.originalFileRetained).toBe(false);
+
+    const historical = asListBody((await request(http())
+      .get('/basic-prices')
+      .query({ resourceId: RESOURCE_ID, asOf: '2026-05-01' })
+      .set(hdr())
+      .expect(200)).body);
+    expect(historical.data.map((row) => row.basicPriceId))
+      .toContain(predecessorId);
+    expect(historical.data.map((row) => row.basicPriceId))
+      .not.toContain(corrected.basicPriceId);
+  });
+
   it('PRICE-EVID-02 — a different-store field observation preserves the predecessor and records the stated source origin', async () => {
     const { predecessorId } = await importAndKeep({
       vendor: 'sem-03-diffsrc',

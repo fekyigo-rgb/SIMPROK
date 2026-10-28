@@ -423,6 +423,51 @@ describe('BP-EVIDENCE-MIG-04 evidence truth', () => {
       service = new BasicPricePrivateAssetService(prisma as never);
     });
 
+    it('BP-PR212-P1: correcting a field observation retains its proven publisher without copying old import evidence', async () => {
+      tx.basicPrice.findFirst
+        .mockResolvedValueOnce({
+          ...PREDECESSOR,
+          sourceImportRowId: null,
+          sourceImportRow: null,
+          sourceSubmission: null,
+          provenanceCorrections: [{
+            after: {
+              semantic: 'NEW_OBSERVATION',
+              sourceIdentityName: 'Tim Simprok',
+              evidenceClass: 'FIELD_REPORTED',
+              sameSourceIdentity: true,
+            },
+          }],
+        })
+        .mockResolvedValueOnce(null);
+      await service.correctPrivatePrice({
+        basicPriceId: PREDECESSOR.id,
+        actor: ACTOR,
+        expectedValue: '62500.00',
+        proposedValue: '65000.00',
+        reason: 'correct typo in the field observation',
+      });
+      const lookup = firstCallArg<{
+        include: { provenanceCorrections?: {
+          take: number; select: { after: boolean };
+        } };
+      }>(tx.basicPrice.findFirst);
+      expect(lookup.include.provenanceCorrections).toMatchObject({
+        orderBy: { createdAt: 'asc' }, take: 1,
+        select: { after: true },
+      });
+      const data = firstCallArg<{ data: Record<string, unknown> }>(
+        tx.basicPrice.create,
+      ).data;
+      expect(data.sourceImportRowId).toBeUndefined();
+      expect(data.sourceType).toBe('VENDOR_QUOTE');
+      const audit = firstCallArg<{ data: {
+        after: Record<string, unknown>;
+      } }>(tx.basicPriceProvenanceCorrection.create).data;
+      expect(audit.after.sourceIdentityName).toBe('Tim Simprok');
+      expect(audit.after.evidenceClass).toBe('FIELD_REPORTED');
+    });
+
     it('PRICE-EVID-01 / PRICE-EVID-04 / PRICE-EVID-10 — field-reported new money keeps source identity and does not inherit VENDOR_QUOTE', async () => {
       tx.basicPrice.findFirst
         .mockResolvedValueOnce(PREDECESSOR)

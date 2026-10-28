@@ -1663,6 +1663,14 @@ export class BasicPricePrivateAssetService {
               },
             },
           },
+          // Corrections of later observations have no import-row pointer.
+          // Preserve the OBSERVATION's proven publisher identity from its
+          // own birth audit, never the earlier document as new price proof.
+          provenanceCorrections: {
+            orderBy: { createdAt: 'asc' },
+            take: 1,
+            select: { after: true },
+          },
         },
       });
       if (!predecessor) throw new NotFoundException('BasicPrice not found');
