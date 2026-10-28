@@ -2600,13 +2600,6 @@ export function AhspImportPage() {
               ) : (
                 <>Pilihan kesamaan pada pekerjaan AHSP tersimpan masih belum disimpan.</>
               )}
-              {' '}SIMPROK tidak akan diam-diam menerima AHSP atau menghapus catatan yang sudah tersimpan.
-            </p>
-            <p className="ahsp-line ahsp-line--abu">
-              {hasUnsavedUpload || hasUnsavedPreviewChoices
-                ? 'Simpan sebagai draft merekam dokumen dan konteks klasifikasi di server. Pilihan kesamaan sementara yang belum dikomit tidak ikut tersimpan dan harus diputuskan lagi saat melanjutkan.'
-                : 'Pilihan kesamaan pada pekerjaan lama belum memiliki penyimpanan draft tersendiri. Tetap di halaman untuk menyelesaikannya melalui Periksa ulang yang meminta konfirmasi, atau tinggalkan hanya pilihan sementaranya.'}
-              {' '}Tinggalkan tanpa menyimpan tidak menghapus dokumen maupun AHSP yang sudah tercatat.
             </p>
             {previewIntakeJobId ? (
               <p className="ahsp-line ahsp-line--abu">
@@ -2628,15 +2621,24 @@ export function AhspImportPage() {
               >
                 Tetap di halaman
               </button>
-              <button
-                type="button"
-                className="ahsp-action ahsp-action--primary"
-                disabled={!file || draftBusy || importing || draftSaved}
-                aria-busy={draftBusy || undefined}
-                onClick={() => void saveAsDraft(true)}
-              >
-                {draftBusy ? 'Menyimpan draft…' : draftSaved ? 'Draft tersimpan' : 'Simpan sebagai draft'}
-              </button>
+              <span className="ahsp-draft-save-help">
+                <button
+                  type="button"
+                  className="ahsp-action ahsp-action--primary"
+                  disabled={!file || draftBusy || importing || draftSaved}
+                  aria-busy={draftBusy || undefined}
+                  aria-describedby="ahsp-draft-save-tooltip"
+                  onClick={() => void saveAsDraft(true)}
+                >
+                  {draftBusy ? 'Menyimpan draft…' : draftSaved ? 'Draft tersimpan' : 'Simpan sebagai draft'}
+                </button>
+                <span id="ahsp-draft-save-tooltip" className="ahsp-draft-save-help__tooltip" role="tooltip">
+                  {hasUnsavedUpload || hasUnsavedPreviewChoices
+                    ? 'Simpan sebagai draft merekam dokumen dan konteks klasifikasi di server. Pilihan kesamaan sementara yang belum dikomit tidak ikut tersimpan dan harus diputuskan lagi saat melanjutkan.'
+                    : 'Pilihan kesamaan pada pekerjaan lama belum memiliki penyimpanan draft tersendiri. Tetap di halaman untuk menyelesaikannya melalui Periksa ulang yang meminta konfirmasi, atau tinggalkan hanya pilihan sementaranya.'}
+                  {' '}Tinggalkan tanpa menyimpan tidak menghapus dokumen maupun AHSP yang sudah tercatat.
+                </span>
+              </span>
               <button
                 type="button"
                 className="ahsp-action ahsp-action--quiet"

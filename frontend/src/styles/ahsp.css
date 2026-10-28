@@ -215,6 +215,42 @@
   align-items: center;
 }
 
+/* Import AHSP exit dialog: quiet by default; explain a draft only on hover/focus. */
+.ahsp-draft-save-help {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ahsp-draft-save-help__tooltip {
+  position: absolute;
+  bottom: calc(100% + 0.55rem);
+  left: 0;
+  z-index: 1300;
+  box-sizing: border-box;
+  width: min(28rem, calc(100vw - 3rem));
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--simprok-engineering-blue-200);
+  border-radius: var(--radius-md);
+  background: var(--simprok-white);
+  color: var(--simprok-authority-navy-800);
+  box-shadow: 0 12px 28px rgb(15 61 89 / 18%);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(3px);
+  transition: opacity 0.14s ease, transform 0.14s ease, visibility 0.14s ease;
+}
+
+.ahsp-draft-save-help:hover > .ahsp-draft-save-help__tooltip,
+.ahsp-draft-save-help:focus-within > .ahsp-draft-save-help__tooltip {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0);
+}
+
 /* AHSP list only: clearly disclose selections retained outside the current page. */
 .ahsp-room__selection-summary {
   display: flex;
@@ -1482,7 +1518,9 @@ li.ahsp-completion:last-child {
   }
 
   .ahsp-action-row--stack > .ahsp-action,
-  .ahsp-new-resource > .ahsp-action {
+  .ahsp-new-resource > .ahsp-action,
+  .ahsp-action-row--stack > .ahsp-draft-save-help,
+  .ahsp-draft-save-help > .ahsp-action {
     width: 100%;
   }
 

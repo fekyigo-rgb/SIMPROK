@@ -39,6 +39,23 @@ test('three navigation choices are separate from canonical AHSP commit', () => {
   assert.match(commit, /\/ahsp\/document\/commit/);
 });
 
+test('Owner-approved leave dialog keeps its explanations in the save tooltip, not permanent copy', () => {
+  const modal = page.slice(page.indexOf('role="alertdialog"'), page.indexOf('{/* Manual AHSP create'));
+  const beforeTooltip = modal.slice(0, modal.indexOf('id="ahsp-draft-save-tooltip"'));
+  const tooltip = modal.slice(modal.indexOf('id="ahsp-draft-save-tooltip"'), modal.indexOf('</span>', modal.indexOf('id="ahsp-draft-save-tooltip"')));
+  const styles = readFileSync('src/styles/ahsp.css', 'utf8');
+  assert.doesNotMatch(modal, /SIMPROK tidak akan diam-diam menerima AHSP atau menghapus catatan yang sudah tersimpan/);
+  assert.doesNotMatch(beforeTooltip, /Simpan sebagai draft merekam dokumen dan konteks klasifikasi di server/);
+  assert.match(tooltip, /Simpan sebagai draft merekam dokumen dan konteks klasifikasi di server/);
+  assert.match(tooltip, /Pilihan kesamaan sementara yang belum dikomit tidak ikut tersimpan/);
+  assert.match(tooltip, /Tinggalkan tanpa menyimpan tidak menghapus dokumen maupun AHSP yang sudah tercatat/);
+  assert.match(modal, /aria-describedby="ahsp-draft-save-tooltip"/);
+  assert.match(tooltip, /role="tooltip"/);
+  assert.match(styles, /\.ahsp-draft-save-help:hover > \.ahsp-draft-save-help__tooltip/);
+  assert.match(styles, /\.ahsp-draft-save-help:focus-within > \.ahsp-draft-save-help__tooltip/);
+  assert.match(styles, /visibility: hidden/);
+});
+
 test('unsaved local decisions are explicitly disclosed and no job data is deleted', () => {
   assert.match(page, /Pilihan kesamaan sementara yang belum dikomit tidak ikut tersimpan/);
   assert.match(page, /tanpa menjadikannya AHSP siap digunakan/);
