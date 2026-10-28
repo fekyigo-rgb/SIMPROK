@@ -639,3 +639,27 @@ test('AHSP history and selected-document review are distinct routes without a se
   assert.ok(importPage.includes("const navigationBlocker = useBlocker(hasUnsavedWork)"));
   assert.equal(importPage.split("'/ahsp/document/jobs/' + job.key + '/continue'").length - 1, 1);
 });
+
+// Owner visual gate: old review pages and the canonical resource review must stay intact.
+test('saved AHSP direct review uses the existing bounded journal cursor and never invents a second review writer', () => {
+  assert.ok(importPage.includes('pagesExamined < 8'));
+  assert.ok(importPage.includes('await loadOlderImports()'));
+  assert.ok(importPage.includes('olderImportsCursor(before) === null'));
+  assert.ok(importPage.includes('setReviewLookupPausedFor(reviewJobId)'));
+  assert.ok(importPage.includes('Cari di riwayat lebih lama'));
+  assert.ok(importPage.includes("scopeRef.current.phase !== 'READY'"));
+  assert.ok(importPage.includes('Dokumen tidak ditemukan pada riwayat yang dapat dibaca'));
+  assert.ok(importPage.includes('Lanjutkan pemeriksaan'));
+  assert.ok(importPage.includes('Hapus draft'));
+  assert.ok(!app.includes('ahsp/import/jobs'));
+  assert.equal(importPage.split("'/ahsp/document/jobs/' + job.key + '/continue'").length - 1, 1);
+});
+
+test('import history has one visible heading in either collapsed or expanded state and keeps the protected buttons', () => {
+  assert.ok(importPage.includes("{savedImportsOpen ? 'Riwayat dokumen AHSP' : 'Pekerjaan import sebelumnya'}"));
+  assert.ok(importPage.includes('className="ahsp-import-history-overview"'));
+  assert.ok(importPage.includes('className="ahsp-import-history-state"'));
+  assert.ok(importPage.includes("job.waitingItems.length > 0 ? 'Draft perlu dilengkapi'"));
+  assert.ok(importPage.includes('setDraftDeleteTarget(job)'));
+  assert.ok(importPage.includes("job.historyOnlyDeleted ? 'Lihat riwayat' : 'Lanjutkan pemeriksaan'"));
+});
