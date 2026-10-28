@@ -70,6 +70,37 @@ export interface RabAhspAvailabilityNotice {
 }
 
 /**
+ * Read-only discovery anchor: it narrows an existing server search and never
+ * claims to represent the BOQ's complete specification or an AHSP identity.
+ * A long BOQ string cannot be sent as a single substring query because the
+ * existing endpoint searches one field at a time with q up to 120 chars.
+ */
+export const ahspDiscoveryAnchor = (boqName: string): string | null => {
+  const query = boqName.trim().split(/\s+/).slice(0, 3).join(' ').slice(0, 120).trim();
+  return query.length >= 2 ? query : null;
+};
+
+/** Read ONLY the count/recommendation metadata published by the existing API. */
+export const ahspDiscoveryEvidence = (
+  payload: unknown,
+  query: string,
+): AhspSearchEvidence | null => {
+  if (!payload || typeof payload !== 'object') return null;
+  const response = payload as { items?: unknown; hasNext?: unknown };
+  if (!Array.isArray(response.items) || typeof response.hasNext !== 'boolean') return null;
+  if (!response.items.every((v: unknown) => v && typeof v === 'object'
+    && typeof (v as { id?: unknown }).id === 'string')) return null;
+  return {
+    kind: 'ready',
+    query,
+    fetchedCount: response.items.length,
+    hasNext: response.hasNext,
+    recommendedCount: response.items.filter((v: { preference?: { recommended?: unknown } }) =>
+      v.preference?.recommended === true).length,
+  };
+};
+
+/**
  * Search results are paged and lexical: an empty search is NOT proof that no
  * suitable AHSP exists in the catalog. A recommended row is NOT identity proof.
  */

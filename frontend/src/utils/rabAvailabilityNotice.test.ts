@@ -1,6 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { describeAhspAvailability, describeAhspBasicPriceGaps } from './rabAvailabilityNotice.ts';
+import {
+  ahspDiscoveryAnchor,
+  ahspDiscoveryEvidence,
+  describeAhspAvailability,
+  describeAhspBasicPriceGaps,
+} from './rabAvailabilityNotice.ts';
 
 test('unlinked AHSP does not claim a failed or unrun search means absent catalog', () => {
   const idle = describeAhspAvailability(false, { kind: 'idle' });
@@ -60,4 +65,37 @@ test('a resolved row with a stale reason is not counted as missing price', () =>
   assert.equal(describeAhspBasicPriceGaps(true, [
     { rawAhspResourceRef: 'Semen', status: 'RESOLVED', reasonCodes: ['NO_BASIC_PRICE_CANDIDATE'] },
   ]), null);
+});
+
+
+test('automatic discovery uses a bounded lexical anchor, not an identity/specification claim', () => {
+  assert.equal(
+    ahspDiscoveryAnchor('Saluran U Pracetak Tipe DS 10A (140 cm x 140 cm dengan tutup)'),
+    'Saluran U Pracetak',
+  );
+  assert.equal(ahspDiscoveryAnchor(' Pekerjaan Pembersihan '), 'Pekerjaan Pembersihan');
+  assert.equal(ahspDiscoveryAnchor(''), null);
+  assert.equal(ahspDiscoveryAnchor('U'), null);
+  assert.ok((ahspDiscoveryAnchor('x '.repeat(200))?.length ?? 0) <= 120);
+});
+
+test('automatic candidate search reads existing API evidence without auto-selecting a version', () => {
+  const payload = { items: [
+    { id: 'ahsp-1', preference: { recommended: true } },
+    { id: 'ahsp-2', preference: { recommended: false } },
+  ], hasNext: true };
+  const evidence = ahspDiscoveryEvidence(payload, 'Saluran U Pracetak');
+  assert.deepEqual(evidence, {
+    kind: 'ready', query: 'Saluran U Pracetak',
+    fetchedCount: 2, hasNext: true, recommendedCount: 1,
+  });
+  const notice = describeAhspAvailability(false, evidence!);
+  assert.match(notice?.message ?? '', /bukan bukti identitas/);
+});
+
+test('malformed or failed candidate responses never masquerade as an empty catalog', () => {
+  for (const payload of [null, {}, { items: [], hasNext: 'false' },
+    { items: [{ invalid: 'missing-id' }], hasNext: false }]) {
+    assert.equal(ahspDiscoveryEvidence(payload, 'DS 10A'), null);
+  }
 });

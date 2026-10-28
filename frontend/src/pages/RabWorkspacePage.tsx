@@ -49,6 +49,8 @@ import {
   type AhspResolutionWire,
 } from '../utils/ahspCompositionDisplay';
 import {
+  ahspDiscoveryAnchor,
+  ahspDiscoveryEvidence,
   describeAhspAvailability,
   describeAhspBasicPriceGaps,
   type AhspSearchEvidence,
@@ -1046,6 +1048,47 @@ export function RabWorkspacePage() {
   }, [projectId, selectedItem?.id]);
   const preferenceBoqItemId =
     selectedItem && !selectedItem.id.startsWith('local-') ? selectedItem.id : '';
+  // First-page candidate discovery runs silently for one SAVED, unlinked BOQ
+  // line; its key prevents stale responses from crossing rows/projects/dates.
+  // This is an eligibility SEARCH, not authority to auto-attach an AHSP.
+  const automaticDiscoveryKey = projectId && preferenceBoqItemId && selectedItem &&
+    !selectedItem.ahspVersionId && !draftDirty && ahspDiscoveryAnchor(selectedItem.name)
+    ? [projectId, preferenceBoqItemId, calculationAsOfDate, selectedItem.name].join('|')
+    : '';
+  const [automaticDiscovery, setAutomaticDiscovery] = useState<{
+    key: string;
+    evidence: AhspSearchEvidence;
+  }>({ key: '', evidence: { kind: 'idle' } });
+  useEffect(() => {
+    if (!automaticDiscoveryKey || !projectId || !selectedItem || showAhspSelection) return;
+    const q = ahspDiscoveryAnchor(selectedItem.name);
+    if (!q) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      setAutomaticDiscovery({ key: automaticDiscoveryKey, evidence: { kind: 'loading' } });
+      const params = new URLSearchParams({
+        businessPricingAsOfDate: calculationAsOfDate,
+        boqItemId: selectedItem.id,
+        q, page: '1', limit: '25',
+      });
+      // Reuse EXACTLY the existing tenant-aware, date-aware and paginated
+      // AHSP candidate endpoint; do not add a matcher/price resolver.
+      apiFetch(`/projects/${projectId}/ahsp-occurrences/eligible-versions/search?${params}`)
+        .then(async (response) => {
+          if (!response.ok) throw new Error('ahsp-discovery-unavailable');
+          const payload: unknown = await response.json();
+          const evidence = ahspDiscoveryEvidence(payload, q);
+          if (!evidence) throw new Error('ahsp-discovery-invalid-response');
+          if (!cancelled) setAutomaticDiscovery({ key: automaticDiscoveryKey, evidence });
+        })
+        .catch(() => {
+          if (!cancelled) setAutomaticDiscovery({ key: automaticDiscoveryKey, evidence: { kind: 'error' } });
+        });
+    }, 320);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [automaticDiscoveryKey, projectId, selectedItem,
+    calculationAsOfDate, showAhspSelection]);
   const selectedAhspPreference = eligibleAhspVersions.find(
     (version) => version.id === selectedAhspVersionId,
   )?.preference;
@@ -1243,9 +1286,12 @@ export function RabWorkspacePage() {
               hasNext: ahspHasNext,
               recommendedCount: eligibleAhspVersions.filter((v) => v.preference?.recommended).length,
             };
+  const automaticAhspEvidence: AhspSearchEvidence = automaticDiscoveryKey &&
+    automaticDiscovery.key === automaticDiscoveryKey
+    ? automaticDiscovery.evidence : { kind: 'idle' };
   const ahspAvailabilityNotice = describeAhspAvailability(
     Boolean(selectedItem?.ahspVersionId),
-    ahspSearchEvidence,
+    showAhspSelection ? ahspSearchEvidence : automaticAhspEvidence,
   );
 
   const persistedProofDisplay = useMemo(
