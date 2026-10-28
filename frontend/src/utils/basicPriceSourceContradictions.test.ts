@@ -130,3 +130,20 @@ test('equipment catalog lookup removes rental price context but never capacity o
   assert.equal(equipmentCatalogSearchSeed('Sewa Crane On Track 10-15 Ton', 'LABOR'), 'Sewa Crane On Track 10-15 Ton');
   assert.equal(equipmentCatalogSearchSeed('Crane On Truck 10-15 TC', 'EQUIPMENT'), 'Crane On Truck 10-15 TC');
 });
+
+test('rental prefix does not falsely accuse a matching equipment catalog item', () => {
+  const base = proposal('FLATBED TRUCK 4 TON', 'E11');
+  const row = { ...base, name: 'Sewa Flatbed Truck 4 Ton', code: 'E11', section: 'EQUIPMENT' as const };
+  assert.deepEqual(sourceCatalogContradictions(row), []);
+  // Other resource families must not silently discard the source's first word.
+  assert.equal(sourceCatalogContradictions({ ...row, section: 'MATERIAL' }).length, 1);
+});
+
+test('rental prefix is not license to confuse truck and track', () => {
+  const base = proposal('CRANE ON TRUCK 10-15 TON', 'E07');
+  const row = { ...base, name: 'Sewa Crane On Track 10-15 Ton', code: 'E07', section: 'EQUIPMENT' as const };
+  const findings = sourceCatalogContradictions(row);
+  assert.equal(findings.length, 1);
+  assert.equal(findings[0].kind, 'SAME_CODE_DIFFERENT_NAME');
+  assert.match(findings[0].conflictText, /Belum terbukti/);
+});

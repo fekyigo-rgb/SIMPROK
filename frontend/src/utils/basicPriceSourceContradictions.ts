@@ -34,12 +34,16 @@ export function threePartDimensions(name: string): string | null {
 }
 
 export function sourceCatalogContradictions(
-  row: Pick<BasicPriceImportRowSummary, 'id' | 'sourceRowNumber' | 'status' | 'code' | 'name' | 'machineProposal'>,
+  row: Pick<BasicPriceImportRowSummary, 'id' | 'sourceRowNumber' | 'status' | 'code' | 'name' | 'machineProposal'> & Partial<Pick<BasicPriceImportRowSummary, 'section'>>,
   batchRows: ReadonlyArray<Pick<BasicPriceImportRowSummary, 'id' | 'sourceRowNumber' | 'code' | 'name'>> = [],
 ): SourceCatalogContradiction[] {
   if (row.status !== 'NEEDS_REVIEW' || row.machineProposal?.identityPairProven) return [];
   const sourceCode = normalizedCode(row.code);
   const sourceName = normalizedName(row.name);
+  // Rental is a PRICE context, not part of the equipment's catalog identity.
+  // Compare this narrower vocabulary only for catalog labels; never alter
+  // source-to-source evidence or silently treat technical differences as same.
+  const catalogComparisonName = normalizedName(equipmentCatalogSearchSeed(row.name, row.section));
   const sourceDimensions = threePartDimensions(row.name);
   const seen = new Set<string>();
   const conflicts: SourceCatalogContradiction[] = [];
@@ -73,7 +77,7 @@ export function sourceCatalogContradictions(
     if (!candidate.resourceCatalogId || seen.has(candidate.resourceCatalogId)) continue;
     seen.add(candidate.resourceCatalogId);
     const candidateCode = normalizedCode(candidate.code);
-    const nameIdentical = sourceName === normalizedName(candidate.name);
+    const nameIdentical = catalogComparisonName === normalizedName(candidate.name);
     const sameCode = sourceCode !== null && candidateCode === sourceCode;
     const differentCode = sourceCode !== null && candidateCode !== null && sourceCode !== candidateCode;
     const candidateDimensions = threePartDimensions(candidate.name);
