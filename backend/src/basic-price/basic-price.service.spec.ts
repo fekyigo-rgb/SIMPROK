@@ -292,6 +292,8 @@ describe('BasicPriceService', () => {
             name: 'Semen Portland 50kg',
             type: 'MATERIAL',
             baseUnit: 'Zak',
+            // No Unit Kernel in this isolated fixture: do not invent a unit.
+            displayUnit: null,
           },
           region: null,
           price: '150000.00',
