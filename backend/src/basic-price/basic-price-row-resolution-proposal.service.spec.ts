@@ -2316,3 +2316,93 @@ describe('BP-SEMANTIC-01 — related is not identical', () => {
     expect(proposal.resource.candidates).toHaveLength(0);
   });
 });
+
+describe('BP-M265 — front-end admissions and under-lock writer ask SAME typed question', () => {
+  const mk = (id: string, name: string, type: string, baseUnit: string): StubResourceCatalogRow => ({
+    id, name, type, baseUnit, workspaceId: WORKSPACE, code: null,
+    status: 'ACTIVE', specifications: null,
+  });
+
+  it('preserves cross-family hints for inspection but excludes weak EQUIPMENT from MATERIAL refusal fingerprint', async () => {
+    const catalog = [
+      mk('cat-pasir-beton', 'Pasir Beton', 'MATERIAL', 'M3'),
+      mk('cat-vibrator-beton', 'Sewa Vibrator Beton', 'EQUIPMENT', 'EQUIPMENT_HOUR'),
+    ];
+    const input = row({
+      id: 'm265-row20',
+      batchId: 'm265-batch',
+      rowVersion: 2,
+      sourceSha256: 'a'.repeat(64),
+      sourceSection: 'MATERIAL',
+      sourceSectionProvenance: 'UPLOADER_DECLARED',
+      rowCategoryConfirmedByReviewer: true,
+      rawResourceNameText: 'Beton fc 10 Mpa',
+      rawResourceCodeText: 'M265',
+      rawUnitText: 'ltr',
+    });
+    const outcome = (await createService(catalog).proposeForRows(WORKSPACE, [input])).get(input.id)!;
+    const review = outcome.resource.admissionReview!;
+    expect(outcome.resource.candidates.map(c => c.resourceCatalogId).sort()).toEqual([
+      'cat-pasir-beton', 'cat-vibrator-beton',
+    ]);
+    expect(review.offered).toBe(true);
+    expect(review.humanRefusableCandidateIds).toEqual(['cat-pasir-beton']);
+    expect(review.blockedCandidateIds).toEqual([]);
+    expect(outcome.resource.candidates.find(c => c.resourceCatalogId === 'cat-vibrator-beton')?.admissionDisposition).toBe('BLOCKED');
+    // The review digest must match the Material kernel verdict used by the
+    // existing writer; the suggestion list can still include the cross-family
+    // price-context hint without turning it into an extra refusal requirement.
+    const prisma = asPrismaClient(createPrisma(catalog));
+    const identity = new ResourceIdentityResolutionService(prisma, new UnitKernelService(prisma));
+    const evidence = await identity.loadEvidence(prisma, WORKSPACE);
+    const verdict = await identity.resolve(evidence, {
+      rawName: input.rawResourceNameText,
+      rawCode: input.rawResourceCodeText,
+      rawUnit: input.rawUnitText,
+      resourceType: 'MATERIAL',
+      sourceSha256: input.sourceSha256,
+    });
+    expect(review.candidateContextDigest).toBe(candidateContextDigest(verdict.candidates.map(c => ({
+      resourceCatalogId: c.resourceCatalogId,
+      name: c.name,
+      type: c.type,
+      baseUnit: c.baseUnit,
+      specifications: c.specifications,
+    }))));
+    expect(review.typeConfirmations).toEqual([{
+      resourceType: 'MATERIAL',
+      reviewBindingFingerprint: review.reviewBindingFingerprint,
+    }]);
+  });
+});
+
+describe('BP-CROSS-FAMILY-STRONG — proof from other resource types still blocks admission', () => {
+  it('cannot mint MATERIAL when the same raw name is a proven EQUIPMENT catalog item', async () => {
+    const catalog: StubResourceCatalogRow[] = [{
+      id: 'cat-confirmed-equipment',
+      name: 'Beton fc 10 Mpa',
+      code: 'M265',
+      type: 'EQUIPMENT',
+      baseUnit: 'EQUIPMENT_HOUR',
+      workspaceId: WORKSPACE,
+      status: 'ACTIVE',
+      specifications: null,
+    }];
+    const source = row({
+      id: 'source-cross-strong',
+      batchId: 'batch-cross-strong',
+      rowVersion: 2,
+      sourceSha256: 'c'.repeat(64),
+      sourceSection: 'MATERIAL',
+      sourceSectionProvenance: 'UPLOADER_DECLARED',
+      rowCategoryConfirmedByReviewer: true,
+      rawResourceNameText: 'Beton fc 10 Mpa',
+      rawResourceCodeText: 'M265',
+      rawUnitText: 'ltr',
+    });
+    const p = (await createService(catalog).proposeForRows(WORKSPACE, [source])).get(source.id)!;
+    expect(p.resource.admissionReview?.offered).toBe(false);
+    expect(p.resource.admissionReview?.typeConfirmations).toEqual([]);
+    expect(p.resource.candidates.some(c => c.resourceCatalogId === 'cat-confirmed-equipment')).toBe(true);
+  });
+});

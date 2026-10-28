@@ -595,10 +595,14 @@ export class BasicPriceRowResolutionProposalService {
 
     const resourceByRow = new Map<string, BasicPriceRowResourceProposal>();
     const resolutionByRow = new Map<string, ResourceIdentityResolution>();
+    // A mixed workbook's *discovery* suggestions may cross families, but the
+    // admission writer re-proves only the chosen type. Bind the admission
+    // review to that exact type-specific kernel verdict, not the display union.
+    const typedResolutionByRow = new Map<string, Map<ResourceType, ResourceIdentityResolution>>();
     for (const row of rows) {
       resourceByRow.set(
         row.id,
-        await this.proveResource(evidence, row, resolutionByRow),
+        await this.proveResource(evidence, row, resolutionByRow, typedResolutionByRow),
       );
     }
 
@@ -653,14 +657,24 @@ export class BasicPriceRowResolutionProposalService {
         : question.sourceSectionProvenance === 'UPLOADER_DECLARED'
           ? [ResourceType.LABOR, ResourceType.MATERIAL, ResourceType.EQUIPMENT]
           : [question.sourceSection];
-      const reviews = effectiveTypes.map((effectiveType) =>
-        buildBasicPriceAdmissionReview(
+      const typedVerdicts = typedResolutionByRow.get(row.id);
+      const reviews = effectiveTypes.map((effectiveType) => {
+        // Do not erase strong cross-family evidence when narrowing the candidate
+        // set to the exact TYPE the canonical writer will re-prove. A human
+        // category confirmation can dismiss weak *name-only* hints, but never
+        // an already proven or recorded identity in a different family.
+        const strongCrossFamily = resolution.candidates.some((candidate) =>
+          candidate.type !== effectiveType &&
+          candidate.identityBasis !== 'NAME_SIMILARITY_ONLY' &&
+          candidate.identityBasis !== 'RULED_OUT',
+        );
+        return buildBasicPriceAdmissionReview(
           question,
-          resolution,
+          strongCrossFamily ? resolution : (typedVerdicts?.get(effectiveType) ?? resolution),
           admissible,
           effectiveType,
-        ),
-      );
+        );
+      });
       const admissionReview =
         reviews.find((review) => review.offered) ?? reviews[0];
       admissionReview.offered = reviews.some((review) => review.offered);
@@ -1015,6 +1029,7 @@ export class BasicPriceRowResolutionProposalService {
     >,
     row: BasicPriceRowProposalInput,
     resolutionByRow: Map<string, ResourceIdentityResolution>,
+    typedResolutionByRow: Map<string, Map<ResourceType, ResourceIdentityResolution>>,
   ): Promise<BasicPriceRowResourceProposal> {
     if (row.sourceSection === null) {
       return {
@@ -1047,6 +1062,10 @@ export class BasicPriceRowResolutionProposalService {
       resourceType: row.sourceSection,
     });
     let verdict = firstVerdict;
+    const typedVerdicts = new Map<ResourceType, ResourceIdentityResolution>([
+      [row.sourceSection, firstVerdict],
+    ]);
+    typedResolutionByRow.set(row.id, typedVerdicts);
 
     // A workbook-wide declaration is a weak hint, NOT proof that each item is
     // labor/material/equipment. Ask the SAME identity authority in the other
@@ -1069,6 +1088,7 @@ export class BasicPriceRowResolutionProposalService {
           resourceType,
         });
         otherFamilyVerdicts.push(alternative);
+        typedVerdicts.set(resourceType, alternative);
         if (
           alternative.status === 'RESOLVED' &&
           exactAuthority(alternative.authority)
