@@ -1908,7 +1908,7 @@ export function AhspImportPage() {
 
   const importJobIntro = (
     <>
-      <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-2)' }}>Import yang masih dilengkapi</h2>
+      <h2 style={{ fontSize: 'var(--text-lg)', color: NAVY, margin: '0 0 var(--space-2)' }}>Riwayat dokumen AHSP</h2>
       <p style={{ fontSize: 'var(--text-sm)', color: MUTED, margin: '0 0 var(--space-3)' }}>
         Ini adalah riwayat dokumen yang telah dicatat oleh SIMPROK, bukan berkas yang baru saja Anda pilih. Pencatatan dokumen, penyimpanan AHSP, dan kesiapan AHSP adalah status berbeda. Pilih satu pekerjaan untuk memeriksanya tanpa mengunggah ulang.
       </p>
@@ -2500,7 +2500,7 @@ export function AhspImportPage() {
                 label="Muat ulang daftar import"
               />
               {importPhase === 'READY' && waitingImports.length === 0 ? (
-                <p role="status" className="ahsp-pending-empty">Tidak ada import yang menunggu dilengkapi.</p>
+                <p role="status" className="ahsp-pending-empty">Tidak ada dokumen terdahulu yang memerlukan perhatian.</p>
               ) : null}
               {draftDeleteReceipt ? (
                 <p className="ahsp-line" role="status" aria-live="polite">{draftDeleteReceipt}</p>
@@ -2510,6 +2510,9 @@ export function AhspImportPage() {
                   <li key={job.key} style={{ padding: 'var(--space-2)', borderBottom: HAIRLINE }}>
                     <div className="ahsp-import-history__heading">
                       <strong style={{ color: NAVY }}>{job.title}</strong>
+                      {job.historyOnlyDeleted ? (
+                        <span className="ahsp-line ahsp-line--abu">AHSP telah dihapus</span>
+                      ) : null}
                       {job.recordedAtLine ? (
                         <span className="ahsp-import-history__recorded-at" title={`ID jurnal: ${job.key}`}>
                           Dicatat {job.recordedAtLine}
@@ -2525,7 +2528,9 @@ export function AhspImportPage() {
                         disabled={jobBusy !== null}
                         onClick={() => openSavedImport(job.key)}
                       >
-                        {selectedSavedImport === job.key ? 'Sedang ditinjau' : 'Lanjutkan pemeriksaan'}
+                        {job.historyOnlyDeleted
+                          ? (selectedSavedImport === job.key ? 'Riwayat terbuka' : 'Lihat riwayat')
+                          : (selectedSavedImport === job.key ? 'Sedang ditinjau' : 'Lanjutkan pemeriksaan')}
                       </button>
                       {job.waitingItems.length > 0 ? (
                         <button
@@ -2546,7 +2551,11 @@ export function AhspImportPage() {
               </ul>
               {selectedSavedImport ? (
                 <div style={{ marginTop: 'var(--space-3)' }}>
-                  <h3 className="ahsp-section-title">Rincian pekerjaan terpilih</h3>
+                  <h3 className="ahsp-section-title">
+                    {waitingImports.find((item) => item.key === selectedSavedImport)?.historyOnlyDeleted
+                      ? 'Riwayat AHSP yang telah dihapus'
+                      : 'Rincian pekerjaan terpilih'}
+                  </h3>
                   {importJobList}
                 </div>
               ) : null}

@@ -846,6 +846,23 @@ export class AhspDocumentCanonicalizationService {
     const completed = stored.filter(
       (line) => line.status === ImportStatus.COMPLETED,
     );
+    // A completed *journal* is not proof that the canonical AHSP is still
+    // active. Consult its existing soft-delete marker without restoring it.
+    // This is one read for the page, not one query per import line.
+    const completedParents = [...new Set(
+      completed.flatMap((line) => line.ahspId ? [line.ahspId] : []),
+    )];
+    const removedParents = completedParents.length > 0
+      ? await this.prisma.aHSP.findMany({
+          where: {
+            workspaceId,
+            id: { in: completedParents },
+            deletedAt: { not: null },
+          },
+          select: { id: true },
+        })
+      : [];
+    const removedParentIds = new Set(removedParents.map((row) => row.id));
     const recipes = await this.recipeStates(
       workspaceId,
       completed,
@@ -887,6 +904,7 @@ export class AhspDocumentCanonicalizationService {
         let complete = 0;
         let awaitingIdentity = 0;
         let recipeNotUsable = 0;
+        let deletedAhsp = 0;
         const writtenUnitQuestions: Array<{
           lineNumber: number;
           workType: string | null;
@@ -896,6 +914,10 @@ export class AhspDocumentCanonicalizationService {
         }> = [];
         for (const line of lines) {
           if (line.status !== ImportStatus.COMPLETED) continue;
+          if (line.ahspId && removedParentIds.has(line.ahspId)) {
+            deletedAhsp += 1;
+            continue;
+          }
           const recipe = recipes.get(line.id) ?? 'NOT_USABLE';
           if (recipe === 'NOT_USABLE') {
             recipeNotUsable += 1;
@@ -984,6 +1006,9 @@ export class AhspDocumentCanonicalizationService {
             complete,
             awaitingIdentity,
             recipeNotUsable,
+            // Additive field only for an actual deletion: legacy responses and
+            // existing consumers are unchanged when no AHSP was deleted.
+            ...(deletedAhsp > 0 ? { deletedAhsp } : {}),
             writtenUnitQuestions,
             identityQuestions: { questions: open.keys.size, uses: open.uses },
           },

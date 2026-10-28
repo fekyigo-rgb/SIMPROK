@@ -256,6 +256,9 @@ export function transactionalPrisma<T extends Record<string, unknown>>(
   return {
     tx,
     prisma: {
+      // Existing active AHSP by default; tests may override with soft-deleted
+      // canonical records to exercise the history read model.
+      aHSP: { findMany: jest.fn().mockResolvedValue([]) },
       ahspImportUnitDecision: {
         findMany: jest.fn().mockResolvedValue([]),
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
