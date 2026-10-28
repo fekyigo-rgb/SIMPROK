@@ -71,8 +71,10 @@ test('a resolved row with a stale reason is not counted as missing price', () =>
 test('automatic discovery uses a bounded lexical anchor, not an identity/specification claim', () => {
   assert.equal(
     ahspDiscoveryAnchor('Saluran U Pracetak Tipe DS 10A (140 cm x 140 cm dengan tutup)'),
-    'Saluran U Pracetak',
+    'DS 10A',
   );
+  assert.equal(ahspDiscoveryAnchor('Saluran U Pracetak Tipe DS 9'), 'DS 9');
+  assert.equal(ahspDiscoveryAnchor('Beton mutu K-250'), 'K-250');
   assert.equal(ahspDiscoveryAnchor(' Pekerjaan Pembersihan '), 'Pekerjaan Pembersihan');
   assert.equal(ahspDiscoveryAnchor(''), null);
   assert.equal(ahspDiscoveryAnchor('U'), null);

@@ -4,7 +4,7 @@ Baseline main: 3c5737b29e85753e27c8ed4586bc66fc3f89759d
 
 ## In-scope delivery
 - Unlinked, persisted, **clean draft** BOQ row: read-only candidate discovery starts on selection, no manual chooser prerequisite.
-- Discovery query: bounded first three BOQ tokens, up to 120 characters, with the **existing** project AHSP search route. The anchor is a partial lexical search term, NOT a declaration of identity or specification equivalence.
+- Discovery query: prefer an explicit BOQ product/type code such as **DS 10A** or **K-250** where present; otherwise use the first three BOQ tokens, bounded to 120 characters, with the **existing** project AHSP search route. The anchor is a partial lexical search term, NOT a declaration of identity or specification equivalence.
 - Same authenticated app API, projectId, persisted boqItemId, businessPricingAsOfDate, one page/25 candidates, existing backend eligibility and preference rank.
 - Key includes project/row/pricing date/BOQ description. 320ms debounce, cancellation on selected row/project/chooser/date change, stale evidence not displayed.
 - Fail closed: no eligible results from the anchored search != no AHSP exists in the full catalog; failed request != empty catalog; recommended candidate != authority to auto-select.

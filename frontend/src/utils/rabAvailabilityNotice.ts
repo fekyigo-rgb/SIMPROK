@@ -70,13 +70,19 @@ export interface RabAhspAvailabilityNotice {
 }
 
 /**
- * Read-only discovery anchor: it narrows an existing server search and never
- * claims to represent the BOQ's complete specification or an AHSP identity.
- * A long BOQ string cannot be sent as a single substring query because the
- * existing endpoint searches one field at a time with q up to 120 chars.
+ * Read-only discovery anchor: narrowing the EXISTING server search is not an
+ * AHSP identity verdict. The server matches a contiguous substring of a
+ * single AHSP code/workType/methodName field (q length <= 120), not the whole
+ * BOQ's specifications. For an explicitly stated product/type code such as
+ * "DS 10A" or "K-250", prefer that code over generic opening words. This
+ * improves candidate recall, NOT authority or equivalence; dimensions and
+ * accessory requirements remain independent hard constraints.
  */
 export const ahspDiscoveryAnchor = (boqName: string): string | null => {
-  const query = boqName.trim().split(/\s+/).slice(0, 3).join(' ').slice(0, 120).trim();
+  const normalized = boqName.trim();
+  const explicitTypeCode = normalized.match(/\b[A-Z]{1,5}[ -]?\d{1,4}[A-Z]?\b/);
+  const query = (explicitTypeCode?.[0] ??
+    normalized.split(/\s+/).slice(0, 3).join(' ')).slice(0, 120).trim();
   return query.length >= 2 ? query : null;
 };
 
