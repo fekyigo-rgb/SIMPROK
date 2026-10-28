@@ -377,6 +377,7 @@ export function AhspImportPage() {
   const [learningOpen, setLearningOpen] = useState(false);
   const [draftBusy, setDraftBusy] = useState(false);
   const [draftReceipt, setDraftReceipt] = useState<string | null>(null);
+  const [draftDeleteReceipt, setDraftDeleteReceipt] = useState<string | null>(null);
   const [draftSaved, setDraftSaved] = useState(false);
   const hasUnsavedUpload = file !== null && !settled && !draftSaved;
   // The intake journal persists source bytes/classification, NOT duplicate choices.
@@ -1129,7 +1130,7 @@ export function AhspImportPage() {
     if (!canManage || jobLock.current !== null || importPhase === 'UNAUTHORIZED') return;
     // The historical 'Periksa ulang' calls /continue, which CAN materialize AHSP.
     // A journal-only draft must never become canonical by an ambiguous click.
-    if (!window.confirm('Periksa ulang akan mencoba MENYIMPAN AHSP yang sudah memenuhi syarat. Pekerjaan yang belum siap tetap menunggu. Lanjutkan?')) return;
+    if (!window.confirm('Periksa dan simpan AHSP yang sudah memenuhi syarat? Pekerjaan yang belum siap tetap menunggu. Ini bukan pemeriksaan tanpa penyimpanan.')) return;
     const ticket = reads.captureAction('imports');
     jobLock.current = ticket;
     setJobBusy(job.key);
@@ -1176,6 +1177,57 @@ export function AhspImportPage() {
         readAgainFor(reads, ticket, 'observations', () => loadObservations('REFRESH')),
         readAgainFor(reads, ticket, 'questions', () => loadQuestions('REFRESH')),
       ]);
+    } finally {
+      if (jobLock.current === ticket) {
+        jobLock.current = null;
+        setJobBusy(null);
+      }
+    }
+  };
+
+  /** One explicit, scoped delete. The server checks EACH line again and
+   * preserves every completed AHSP/resource; only the unfinished journal data
+   * may be removed. No optimistic disappearance before server confirmation. */
+  const deleteUnfinishedDraft = async (job: ImportJobView) => {
+    if (!canManage || jobLock.current !== null || job.waitingItems.length === 0) return;
+    const count = job.waitingItems.length;
+    if (!window.confirm(
+      'Hapus ' + count + ' pekerjaan draft dari "' + job.title + '"? ' +
+      'Keputusan dan resource sementara dari pekerjaan tersebut akan dibuang. ' +
+      'AHSP dan resource yang sudah tersimpan tidak akan dihapus. Lanjutkan?',
+    )) return;
+    const ticket = reads.captureAction('imports');
+    jobLock.current = ticket;
+    setJobBusy(job.key);
+    if (reads.mayApply(ticket)) setDraftDeleteReceipt(null);
+    try {
+      const response = await apiFetch('/ahsp/document/jobs/' + job.key + '/draft', {
+        method: 'DELETE',
+      });
+      if (!response.ok) {
+        if (reads.mayApply(ticket)) {
+          setDraftDeleteReceipt('Draft belum dihapus. Data telah berubah atau akses ditolak; muat ulang riwayat sebelum mencoba lagi.');
+        }
+        return;
+      }
+      const receipt = await response.json() as {
+        deletedDraftItems?: number; preservedCompletedItems?: number;
+      };
+      if (reads.mayApply(ticket)) {
+        setJobDecisions((prev) => Object.fromEntries(
+          Object.entries(prev).filter(([key]) => !key.startsWith(job.key + ':')),
+        ));
+        setSelectedSavedImport((prev) => prev === job.key ? null : prev);
+        setDraftDeleteReceipt(
+          String(receipt.deletedDraftItems ?? count) + ' pekerjaan draft dihapus. ' +
+          String(receipt.preservedCompletedItems ?? 0) + ' pekerjaan yang sudah tersimpan tetap aman.',
+        );
+      }
+      await readAgainFor(reads, ticket, 'imports', () => loadImportJobs('REFRESH'));
+    } catch {
+      if (reads.mayApply(ticket)) {
+        setDraftDeleteReceipt('Belum dapat dipastikan apakah draft dihapus. Muat ulang riwayat untuk memeriksa status sebenarnya.');
+      }
     } finally {
       if (jobLock.current === ticket) {
         jobLock.current = null;
@@ -1717,7 +1769,7 @@ export function AhspImportPage() {
     const waitingDetail = job.waitingItems.filter((item) => item.sameness === null);
     const detailId = 'ahsp-import-detail-' + at;
     const decisionItems = job.waitingItems.filter((item) => item.sameness !== null);
-    const recheckLabel = busy ? 'Memeriksa…' : 'Periksa ulang';
+    const recheckLabel = busy ? 'Memproses…' : 'Periksa & simpan yang siap';
     const recheck = () => void recheckImport(job, at);
     // The blue action is emphasized only where something is worth checking again — a
     // change the server reported, a write to retry, or a decision the reader chose
@@ -2451,6 +2503,9 @@ export function AhspImportPage() {
               {importPhase === 'READY' && waitingImports.length === 0 ? (
                 <p role="status" className="ahsp-pending-empty">Tidak ada import yang menunggu dilengkapi.</p>
               ) : null}
+              {draftDeleteReceipt ? (
+                <p className="ahsp-line" role="status" aria-live="polite">{draftDeleteReceipt}</p>
+              ) : null}
               <ul className="ahsp-curation-list" aria-label="Daftar pekerjaan tersimpan">
                 {waitingImports.map((job) => (
                   <li key={job.key} style={{ padding: 'var(--space-2)', borderBottom: HAIRLINE }}>
@@ -2463,14 +2518,28 @@ export function AhspImportPage() {
                       ) : null}
                     </div>
                     <span className="ahsp-line" style={{ color: MUTED }}>{job.summaryLine}</span>
-                    <button
-                      type="button"
-                      className="ahsp-action ahsp-action--outline ahsp-action--compact"
-                      aria-pressed={selectedSavedImport === job.key}
-                      onClick={() => openSavedImport(job.key)}
-                    >
-                      {selectedSavedImport === job.key ? 'Sedang ditinjau' : 'Lanjutkan pemeriksaan'}
-                    </button>
+                    <div className="ahsp-action-row">
+                      <button
+                        type="button"
+                        className="ahsp-action ahsp-action--outline ahsp-action--compact"
+                        aria-pressed={selectedSavedImport === job.key}
+                        disabled={jobBusy !== null}
+                        onClick={() => openSavedImport(job.key)}
+                      >
+                        {selectedSavedImport === job.key ? 'Sedang ditinjau' : 'Lanjutkan pemeriksaan'}
+                      </button>
+                      {job.waitingItems.length > 0 ? (
+                        <button
+                          type="button"
+                          className="ahsp-action ahsp-action--quiet ahsp-action--compact"
+                          disabled={jobBusy !== null || hasUnsavedWork}
+                          aria-label={'Hapus sisa draft dari ' + job.title + (job.recordedAtLine ? ', ' + job.recordedAtLine : '')}
+                          onClick={() => void deleteUnfinishedDraft(job)}
+                        >
+                          {jobBusy === job.key ? 'Memproses…' : 'Hapus draft'}
+                        </button>
+                      ) : null}
+                    </div>
                   </li>
                 ))}
               </ul>

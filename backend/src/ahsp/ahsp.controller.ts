@@ -365,9 +365,23 @@ export class AhspController {
   }
 
   /**
-   * IMPORT-SEAM-05 — continue an import from its durable journal, WITHOUT the
-   * file: every held line is re-evaluated once, and whatever is now lawful is
-   * written. Decisions travel as they do on commit, and are re-validated there.
+   * Remove only unfinished journal lines and their draft resource readings.
+   * Completed AHSP and shared catalog entries are never deleted.
+   */
+  @Delete('document/jobs/:importJobId/draft')
+  @Permissions('AHSP_MANAGE')
+  async deleteUnfinishedImportDraft(
+    @Req() request: WorkspaceScopedRequest,
+    @Param('importJobId') importJobId: string,
+  ) {
+    const workspaceId = request.workspaceContext?.workspaceId;
+    if (!workspaceId) throw new BadRequestException('AHSP_WORKSPACE_CONTEXT_REQUIRED');
+    return this.documents.deleteUnfinishedImportDraft({ workspaceId, importJobId });
+  }
+
+  /**
+   * Re-evaluate held items and materialize every eligible AHSP. This is a
+   * confirmed SAVE action, not the read-only /recheck endpoint below.
    */
   @Post('document/jobs/:importJobId/continue')
   @Permissions('AHSP_MANAGE')

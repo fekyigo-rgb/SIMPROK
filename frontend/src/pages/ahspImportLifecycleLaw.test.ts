@@ -56,10 +56,13 @@ test('Owner-approved leave dialog keeps its explanations in the save tooltip, no
   assert.match(styles, /visibility: hidden/);
 });
 
-test('unsaved local decisions are explicitly disclosed and no job data is deleted', () => {
+test('unsaved local decisions are disclosed and draft deletion is separate from canonical AHSP', () => {
   assert.match(page, /Pilihan kesamaan sementara yang belum dikomit tidak ikut tersimpan/);
   assert.match(page, /tanpa menjadikannya AHSP siap digunakan/);
-  assert.doesNotMatch(page, /method: 'DELETE'[\s\S]*\/ahsp\/document\/jobs/);
+  assert.match(page, /apiFetch\('\/ahsp\/document\/jobs\/' \+ job\.key \+ '\/draft', \{\s*method: 'DELETE'/);
+  assert.match(page, /AHSP dan resource yang sudah tersimpan tidak akan dihapus/);
+  assert.match(page, /job\.waitingItems\.length > 0/);
+  assert.match(page, /Periksa & simpan yang siap/);
   assert.match(page, /setFile\(null\)/);
   assert.match(page, /setPreviewIntakeJobId\(null\)/);
   assert.match(page, /Keputusan satuan sebelumnya sudah dicatat dalam jurnal SIMPROK/);
@@ -68,7 +71,7 @@ test('unsaved local decisions are explicitly disclosed and no job data is delete
   assert.match(page, /Catatan yang sudah tersimpan di SIMPROK tetap ada/);
   assert.match(page, /disabled=\{!file \|\| draftBusy \|\| importing \|\| draftSaved\}/);
   assert.match(page, /if \(preview && \(hasUnsavedUpload \|\| hasUnsavedPreviewChoices\)\)/);
-  assert.match(page, /window\.confirm\('Periksa ulang akan mencoba MENYIMPAN AHSP/);
+  assert.match(page, /window\.confirm\('Periksa dan simpan AHSP yang sudah memenuhi syarat/);
   const savedJobContinuation = page.slice(page.indexOf('const recheckImport = async'), page.indexOf('const shownQuestions ='));
   assert.match(savedJobContinuation, /const assistedClassification = null/);
   assert.match(savedJobContinuation, /body: JSON.stringify\(\{ decisions, assistedClassification \}\)/);

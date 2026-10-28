@@ -115,7 +115,7 @@ test("C1: every curation and learning action shows it is working and refuses a s
   assert.ok(/importAction === 'PREVIEW' \? 'Membaca…' : 'Pahami dokumen'/.test(importPage) || importPage.includes("importAction === 'PREVIEW' ? 'Membaca...' : 'Pahami dokumen'"));
   assert.ok(importPage.includes("'Simpan Hasil Import'"));
   assert.ok(importPage.includes("importAction === 'COMMIT'"));
-  assert.ok(importPage.includes("busy ? 'Memeriksa…' : 'Periksa ulang'") || importPage.includes("busy ? 'Memeriksa...' : 'Periksa ulang'"));
+  assert.ok(importPage.includes("busy ? 'Memproses…' : 'Periksa & simpan yang siap'"));
 });
 
 test("C2: results are READ from the server and shown where the action was pressed", () => {
