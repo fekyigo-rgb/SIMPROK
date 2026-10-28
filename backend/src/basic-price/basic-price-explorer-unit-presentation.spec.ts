@@ -94,6 +94,7 @@ describe('BP-UNIT-DISPLAY - independent audit regressions', () => {
       ['inactive-hour', { id: 'inactive-hour', code: 'PERSON_HOUR', symbol: 'jam-orang', dimension: 'PERSON_TIME', isActive: false }],
       ['mass', { id: 'mass', code: 'KILOGRAM', symbol: 'kg', dimension: 'MASS', isActive: true }],
       ['equipment-hour', { id: 'equipment-hour', code: 'EQUIPMENT_HOUR', symbol: 'jam-alat', dimension: 'EQUIPMENT_TIME', isActive: true }],
+      ['unit-count', { id: 'unit-count', code: 'UNIT', symbol: 'unit', dimension: 'COUNT', isActive: true }],
     ]);
     const prisma = {
       unitDefinition: {
@@ -108,6 +109,8 @@ describe('BP-UNIT-DISPLAY - independent audit regressions', () => {
       { id: 'mass-on-labor', resource: labor, sourceImportRow: { unitDefinitionId: 'mass' } },
       { id: 'equipment-hour', resource: equipment, sourceImportRow: { unitDefinitionId: 'equipment-hour' } },
       { id: 'labor-on-equipment', resource: equipment, sourceImportRow: { unitDefinitionId: 'inactive-hour' } },
+      { id: 'mass-on-equipment', resource: equipment, sourceImportRow: { unitDefinitionId: 'mass' } },
+      { id: 'count-on-equipment', resource: equipment, sourceImportRow: { unitDefinitionId: 'unit-count' } },
       { id: 'new-observation-without-evidence', resource: labor, sourceImportRow: null },
       { id: 'legacy-price-no-unit-evidence', resource: labor },
     ];
@@ -120,12 +123,14 @@ describe('BP-UNIT-DISPLAY - independent audit regressions', () => {
       ['mass-on-labor', null],
       ['equipment-hour', 'jam-alat'],
       ['labor-on-equipment', null],
+      ['mass-on-equipment', null],
+      ['count-on-equipment', 'unit'],
       ['new-observation-without-evidence', null],
       ['legacy-price-no-unit-evidence', null],
     ]);
     expect(prisma.unitDefinition.findMany).toHaveBeenCalledTimes(1);
     expect(prisma.unitDefinition.findMany.mock.calls[0][0].where).toEqual({
-      id: { in: ['inactive-hour', 'mass', 'equipment-hour'] },
+      id: { in: ['inactive-hour', 'mass', 'equipment-hour', 'unit-count'] },
     });
   });
 });

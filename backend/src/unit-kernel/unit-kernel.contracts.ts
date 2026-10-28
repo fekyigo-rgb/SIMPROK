@@ -67,7 +67,7 @@ export function unitDimensionAllowedForPriceDisplay(
   if (!dimension || !context) return false;
   if (context === 'LABOR') return dimension === 'PERSON_TIME';
   if (context === 'MATERIAL') return dimension !== 'PERSON_TIME' && dimension !== 'EQUIPMENT_TIME';
-  return dimension !== 'PERSON_TIME';
+  return dimension === 'EQUIPMENT_TIME' || dimension === 'COUNT';
 }
 
 export const UNIT_REASON = {
