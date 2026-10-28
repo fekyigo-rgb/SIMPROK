@@ -460,9 +460,11 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction (e2e)', () => {
     expect(after?.sourceIdentityName).toBe(vendor);
     expect(after?.evidenceClass).toBe('FIELD_REPORTED');
 
+    // Use the CURRENT request instant. A date-only 2026-10-28 means UTC
+    // midnight, earlier than the correction that was just created today.
     const list = asListBody((await request(http())
       .get('/basic-prices')
-      .query({ resourceId: RESOURCE_ID, asOf: '2026-10-28' })
+      .query({ resourceId: RESOURCE_ID })
       .set(hdr())
       .expect(200)).body);
     const foundIds = list.data.map((row) => row.basicPriceId);
@@ -474,8 +476,7 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction (e2e)', () => {
     // remain discoverable by its exact publisher, not just display its name.
     const bySource = asListBody((await request(http())
       .get('/basic-prices')
-      .query({ resourceId: RESOURCE_ID, asOf: '2026-10-28',
-               sourceName: vendor })
+      .query({ resourceId: RESOURCE_ID, sourceName: vendor })
       .set(hdr())
       .expect(200)).body);
     expect(bySource.data.map((row) => row.basicPriceId))
