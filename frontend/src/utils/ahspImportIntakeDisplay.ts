@@ -283,6 +283,8 @@ export interface ImportJobWire {
     awaitingIdentity?: number | null;
     /** Saved lines pointing to no recipe that may be used (none, retired, or with an unproved unit). */
     recipeNotUsable?: number | null;
+    /** Already-saved AHSP with a canonical deletedAt marker: not an import draft. */
+    deletedAhsp?: number | null;
     /** Saved lines whose own document states another output unit than the one saved. */
     writtenUnitQuestions?: ReadonlyArray<{
       lineNumber?: number | null;
@@ -803,6 +805,9 @@ export interface ImportJobView {
   readonly recordedAtLine: string | null;
   readonly receivedLine: string;
   readonly waitingLine: string;
+  /** An entire saved file may be historical: its canonical AHSPs have been removed. */
+  readonly deletedAhsp: number;
+  readonly historyOnlyDeleted: boolean;
   /**
    * EVERY line still waiting, in document order — never a cut list. What is shown
    * first is a display choice (`waitingShown`); what EXISTS is all of this, and
@@ -930,6 +935,7 @@ export const describeWaitingImports = (
     const represented = whole(job?.counts?.represented);
     const awaitingIdentity = Math.min(whole(job?.completion?.awaitingIdentity), represented);
     const recipeNotUsable = Math.min(whole(job?.completion?.recipeNotUsable), represented);
+    const deletedAhsp = Math.min(whole(job?.completion?.deletedAhsp), represented);
     const unitQuestions = (job?.completion?.writtenUnitQuestions ?? []).flatMap((question) =>
       question
         ? [
@@ -941,11 +947,16 @@ export const describeWaitingImports = (
         : [],
     );
     const savedNotComplete = awaitingIdentity + recipeNotUsable + unitQuestions.length;
-    if (key === '' || (waiting.length === 0 && savedNotComplete === 0)) return [];
+    // Historical deletions must remain visible as a truthful journal record
+    // without pretending they are unsaved work or an active recipe.
+    if (key === '' || (waiting.length === 0 && savedNotComplete === 0 && deletedAhsp === 0)) return [];
+    const historyOnlyDeleted =
+      waiting.length === 0 && deletedAhsp > 0 && deletedAhsp === represented &&
+      savedNotComplete === 0;
     const complete =
       typeof job?.completion?.complete === 'number'
         ? Math.min(whole(job.completion.complete), represented)
-        : Math.max(represented - savedNotComplete, 0);
+        : Math.max(represented - savedNotComplete - deletedAhsp, 0);
     const date = importDate(job?.createdAt);
     const decisions = waiting.map((line) => waitingDecisionOf(line));
     const attentionItems = waiting.map((line, index) => storedAttentionItem(line, decisions[index].sameness !== null));
@@ -987,21 +998,28 @@ export const describeWaitingImports = (
         key,
         title: (job?.sourceFileName ?? '').trim() || 'Dokumen tanpa nama',
         recordedAtLine: importRecordedAt(job?.createdAt),
+        deletedAhsp,
+        historyOnlyDeleted,
         receivedLine:
           (date ? 'Diimpor ' + date + '. ' : '') +
-          received + ' pekerjaan diterima; ' + represented + ' sudah menjadi AHSP di SIMPROK.',
+          (historyOnlyDeleted
+            ? deletedAhsp + ' AHSP pernah disimpan, kemudian dihapus.'
+            : received + ' pekerjaan diterima; ' + represented + ' sudah menjadi AHSP di SIMPROK.'),
         waitingLine: waiting.length + ' pekerjaan masih menunggu fakta atau keputusan.',
         waitingItems: items,
         waitingShown: WAITING_SHOWN,
         moreWaitingLine:
           others.length > WAITING_SHOWN ? 'dan ' + (others.length - WAITING_SHOWN) + ' pekerjaan lainnya.' : null,
         decisionLine: items.length > others.length ? IMPORT_DECISION_LINE : null,
-        summaryLine: [
+        summaryLine: historyOnlyDeleted
+          ? count(deletedAhsp) + ' AHSP pernah disimpan, kemudian dihapus. Riwayat impor tetap tersedia; tidak ada draft yang menunggu penyelesaian.'
+          : [
           count(received) + ' pekerjaan diterima.',
           complete > 0 ? count(complete) + ' telah lengkap untuk tahap AHSP.' : 'Belum ada yang lengkap untuk tahap AHSP.',
           said(awaitingIdentity, 'masih menunggu identitas sumber daya.'),
           said(unitQuestions.length, 'tersimpan dengan satuan hasil yang dipertanyakan dokumennya.'),
           said(recipeNotUsable, 'terwakili AHSP yang belum dapat dipakai.'),
+          said(deletedAhsp, 'AHSP telah dihapus; riwayatnya dipertahankan.'),
           said(counts.UNIT, 'menunggu satuan yang belum dikenali.'),
           said(counts.SOURCE, 'menunggu fakta dari dokumen.'),
           said(counts.DECISION, 'menunggu keputusan Anda.'),

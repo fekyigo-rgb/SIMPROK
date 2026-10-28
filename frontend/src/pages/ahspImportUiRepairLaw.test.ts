@@ -107,5 +107,5 @@ test('UI-15 Door A Stage2A connection unchanged', () => {
 
 test('UI-17 empty pending-import uses compact surface', () => {
   assert.ok(importPage.includes('ahsp-pending-empty'));
-  assert.ok(importPage.includes('Tidak ada import yang menunggu dilengkapi.'));
+  assert.ok(importPage.includes('Tidak ada dokumen terdahulu yang memerlukan perhatian.'));
 });
