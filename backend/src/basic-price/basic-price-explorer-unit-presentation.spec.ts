@@ -81,9 +81,51 @@ describe('BP-UNIT-DISPLAY - per-offer unit truth, not catalog-forced conversion'
       ['weekly', 'Orang-Minggu'],
       ['monthly', 'Orang-Bulan'],
       ['unknown', null],
-      ['catalog-only', 'Orang-Hari'],
+      ['catalog-only', null],
       ['correction-without-unit-evidence', null],
     ]);
-    expect(prisma.unitDefinition.findMany).toHaveBeenCalledTimes(2);
+    expect(prisma.unitDefinition.findMany).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('BP-UNIT-DISPLAY - independent audit regressions', () => {
+  it('keeps historical inactive source identity and refuses mismatched dimensions', async () => {
+    const definitions = new Map([
+      ['inactive-hour', { id: 'inactive-hour', code: 'PERSON_HOUR', symbol: 'jam-orang', dimension: 'PERSON_TIME', isActive: false }],
+      ['mass', { id: 'mass', code: 'KILOGRAM', symbol: 'kg', dimension: 'MASS', isActive: true }],
+      ['equipment-hour', { id: 'equipment-hour', code: 'EQUIPMENT_HOUR', symbol: 'jam-alat', dimension: 'EQUIPMENT_TIME', isActive: true }],
+    ]);
+    const prisma = {
+      unitDefinition: {
+        findMany: jest.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+          where.id.in.map(id => definitions.get(id)).filter(Boolean)),
+      },
+    };
+    const labor = { id: 'worker', code: 'L.01', name: 'Pekerja', type: 'LABOR', baseUnit: 'Org/Hari' };
+    const equipment = { id: 'excavator', code: 'E.01', name: 'Excavator', type: 'EQUIPMENT', baseUnit: 'jam-alat' };
+    const rows = [
+      { id: 'historical-hour', resource: labor, sourceImportRow: { unitDefinitionId: 'inactive-hour' } },
+      { id: 'mass-on-labor', resource: labor, sourceImportRow: { unitDefinitionId: 'mass' } },
+      { id: 'equipment-hour', resource: equipment, sourceImportRow: { unitDefinitionId: 'equipment-hour' } },
+      { id: 'labor-on-equipment', resource: equipment, sourceImportRow: { unitDefinitionId: 'inactive-hour' } },
+      { id: 'new-observation-without-evidence', resource: labor, sourceImportRow: null },
+      { id: 'legacy-price-no-unit-evidence', resource: labor },
+    ];
+    const service = new BasicPriceService(prisma as never, {} as never);
+    const output = await (service as unknown as {
+      explorerVerifiedPriceUnitDisplays: (r: unknown[]) => Promise<Map<string, string | null>>
+    }).explorerVerifiedPriceUnitDisplays(rows);
+    expect([...output.entries()]).toEqual([
+      ['historical-hour', 'Orang-Jam'],
+      ['mass-on-labor', null],
+      ['equipment-hour', 'jam-alat'],
+      ['labor-on-equipment', null],
+      ['new-observation-without-evidence', null],
+      ['legacy-price-no-unit-evidence', null],
+    ]);
+    expect(prisma.unitDefinition.findMany).toHaveBeenCalledTimes(1);
+    expect(prisma.unitDefinition.findMany.mock.calls[0][0].where).toEqual({
+      id: { in: ['inactive-hour', 'mass', 'equipment-hour'] },
+    });
   });
 });

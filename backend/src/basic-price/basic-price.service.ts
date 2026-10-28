@@ -12,7 +12,7 @@ import {
   isCatalogNameCollision,
 } from '../resource-catalog/resource-catalog-name-correction.service';
 import { confirmedSpecifications } from '../resource-catalog/resource-identity-specification.contract';
-import { trustedUnitContext } from '../unit-kernel/unit-kernel.contracts';
+import { trustedUnitContext, unitDimensionAllowedForPriceDisplay } from '../unit-kernel/unit-kernel.contracts';
 import { GetBasicPricesDto } from './dto/get-basic-prices.dto';
 import { Prisma } from '@prisma/client';
 import {
@@ -1316,9 +1316,8 @@ export class BasicPriceService {
   private async explorerVerifiedPriceUnitDisplays(
     rows: ExplorerRowSource[],
   ): Promise<Map<string, string | null>> {
-    const catalogFallback = this.unitKernel
-      ? await this.explorerVerifiedUnitDisplays(rows)
-      : new Map<string, string | null>();
+    // Each price needs its own source-unit proof. ResourceCatalog.baseUnit
+    // is metadata, not evidence for a separate price observation.
     const sourceUnitIds = new Map<string, string | null>();
     for (const row of rows) {
       const importRow = row.sourceImportRow ?? row.sourceSubmission?.importRow;
@@ -1329,7 +1328,8 @@ export class BasicPriceService {
     ))];
     const definitions = ids.length
       ? await this.prisma.unitDefinition.findMany({
-          where: { id: { in: ids }, isActive: true },
+          // Historical import IDs remain truthful even if later deactivated.
+          where: { id: { in: ids } },
           select: { id: true, code: true, symbol: true, dimension: true },
         })
       : [];
@@ -1337,16 +1337,15 @@ export class BasicPriceService {
     const results = new Map<string, string | null>();
     for (const row of rows) {
       if (!sourceUnitIds.has(row.id)) {
-        results.set(row.id, row.supersedesBasicPriceId
-          ? null
-          : catalogFallback.get(row.resource.id) ?? null);
+        // Direct/private observations and legacy catalog rows without an
+        // evidenced unit cannot borrow the catalog's baseUnit as a price unit.
+        results.set(row.id, null);
         continue;
       }
       const definition = byId.get(sourceUnitIds.get(row.id) ?? '');
       const context = trustedUnitContext(row.resource.type);
-      const compatible = !!definition && !!context
-        && (definition.dimension !== 'PERSON_TIME' || context === 'LABOR')
-        && (definition.dimension !== 'EQUIPMENT_TIME' || context === 'EQUIPMENT');
+      const compatible = !!definition &&
+        unitDimensionAllowedForPriceDisplay(definition.dimension, context);
       results.set(row.id, compatible && definition
         ? this.explorerUnitSymbol(definition.code, definition.symbol)
         : null);
