@@ -1185,8 +1185,12 @@ export function BasicPriceReviewPage() {
     });
   };
 
+  const hasUncommittedChoices = touchedRowIds.size > 0 || safeNewRowIds.size > 0 ||
+    Object.values(categoryDrafts).some(Boolean) ||
+    Object.values(reasonClarificationDrafts).some((value) => value.trim().length > 0);
+
   const confirmLeaveWithUncommittedChoices = (): boolean =>
-    touchedRowIds.size === 0 || window.confirm(
+    !hasUncommittedChoices || window.confirm(
       'Pilihan sementara pada baris yang belum dikonfirmasi tidak disimpan dalam Riwayat. ' +
       'Baris yang masih Perlu Tinjauan dan keputusan yang sudah disimpan tetap tersedia. Tetap keluar?',
     );

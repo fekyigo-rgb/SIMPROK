@@ -459,7 +459,10 @@ export function BasicPriceImportPage() {
         <button
           type="button"
           className="bp-btn bp-btn--sm"
-          onClick={() => navigate('/basic-price')}
+          onClick={() => {
+            if (isMetadataDirty && !window.confirm('Konteks Sumber yang belum ditekan Simpan tidak tercatat dalam Riwayat. Keluar tanpa menyimpan perubahan ini?')) return;
+            navigate('/basic-price');
+          }}
           title="Kembali ke daftar Basic Price"
           aria-label="Kembali ke daftar Basic Price"
         >

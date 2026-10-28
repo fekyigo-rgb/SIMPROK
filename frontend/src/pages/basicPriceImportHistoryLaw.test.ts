@@ -34,7 +34,11 @@ test('Partial completion keeps pre-existing row-private-save behaviour', () => {
 
 test('Leaving review verifies the server batch and warns that unconfirmed picker drafts are not persisted', () => {
   assert.match(review, /confirmLeaveWithUncommittedChoices/);
-  assert.match(review, /touchedRowIds\.size === 0 \|\| window\.confirm/);
+  assert.match(review, /touchedRowIds\.size > 0/);
+  assert.match(review, /safeNewRowIds\.size > 0/);
+  assert.match(review, /Object\.values\(categoryDrafts\)/);
+  assert.match(review, /!hasUncommittedChoices \|\| window\.confirm/);
+  assert.match(page, /isMetadataDirty && !window\.confirm/);
   assert.match(review, /getBasicPriceImportBatch\(batch\.batchId\)/);
   assert.match(review, /BATCH_READBACK_MISMATCH/);
   assert.match(review, /Selesai untuk Sekarang · Riwayat Impor/);
