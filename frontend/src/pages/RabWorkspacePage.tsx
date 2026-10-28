@@ -49,6 +49,11 @@ import {
   type AhspResolutionWire,
 } from '../utils/ahspCompositionDisplay';
 import {
+  describeAhspAvailability,
+  describeAhspBasicPriceGaps,
+  type AhspSearchEvidence,
+} from '../utils/rabAvailabilityNotice';
+import {
   availableInsertPositions,
   descendantIdsOf,
   insertRowRelativeTo,
@@ -1214,6 +1219,33 @@ export function RabWorkspacePage() {
   const ahspTrustSummary = useMemo(
     () => summariseAhspComposition(ahspComponentGroups),
     [ahspComponentGroups],
+  );
+  // RAB-AUTO-01 — read only. The stored occurrence's own reason codes are the
+  // sole authority for saying a specific AHSP component lacks a lawful price.
+  const basicPriceGapNotice = describeAhspBasicPriceGaps(
+    Boolean(selectedItem?.ahspVersionId),
+    ahspComposition,
+  );
+  // The picker is a bounded, lexical SEARCH, not a catalogue-wide matcher.
+  // Never turn its '0 results' or top recommendation into a false identity proof.
+  const ahspSearchEvidence: AhspSearchEvidence =
+    !showAhspSelection || ahspListLoad.kind === 'idle' ||
+    ahspQuery.trim() !== debouncedAhspQuery
+      ? { kind: 'idle' }
+      : ahspListLoad.kind === 'loading'
+        ? { kind: 'loading' }
+        : ahspListLoad.kind === 'error'
+          ? { kind: 'error' }
+          : {
+              kind: 'ready',
+              query: debouncedAhspQuery,
+              fetchedCount: eligibleAhspVersions.length,
+              hasNext: ahspHasNext,
+              recommendedCount: eligibleAhspVersions.filter((v) => v.preference?.recommended).length,
+            };
+  const ahspAvailabilityNotice = describeAhspAvailability(
+    Boolean(selectedItem?.ahspVersionId),
+    ahspSearchEvidence,
   );
 
   const persistedProofDisplay = useMemo(
@@ -3538,6 +3570,19 @@ export function RabWorkspacePage() {
                 badly. */}
             <div className="simprok-ahsp-composition" aria-label="Komponen penyusun AHSP">
               <h3>Komponen Penyusun AHSP</h3>
+              {basicPriceGapNotice ? (
+                <div className="simprok-rab-recap__incomplete-note" role="status" aria-label="Ketersediaan Basic Price">
+                  <strong>{basicPriceGapNotice.title}</strong>
+                  <p>{basicPriceGapNotice.message}</p>
+                  <ul>
+                    {basicPriceGapNotice.missing.map((resource, index) => (
+                      <li key={`${resource.component}-${index}`}>
+                        <strong>{resource.component}</strong> — {resource.explanation}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               {ahspComposition === undefined ? (
                 <p className="simprok-ahsp-composition__empty">Memuat komponen AHSP...</p>
               ) : ahspComposition === null ? (
@@ -3633,7 +3678,9 @@ export function RabWorkspacePage() {
             </div>
             <div className="simprok-ahsp-drawer__frame">
               <span className="simprok-honest-frame__badge">{costEngineStatus.frameBadge}</span>
-              <p>{costEngineStatus.frameMessage}</p>
+              <p>{(selectedItem.manualUnitPrice || selectedItem.priceOrigin === 'MANUAL_CLIENT')
+                ? costEngineStatus.frameMessage
+                : ahspAvailabilityNotice?.message ?? costEngineStatus.frameMessage}</p>
             </div>
             <button className="simprok-execution-factor" onClick={() => openPlaceholder('Atur Execution Factor')} title="Atur Execution Factor - engine belum aktif" aria-label="Atur Execution Factor - engine belum aktif" data-route="/?ruang=execution-factor">
               <Sparkles size={18} />
@@ -3849,7 +3896,7 @@ export function RabWorkspacePage() {
                       ))}
                       {ahspListLoad.kind === 'loading' ? <p className="simprok-ahsp-combobox__message">Mencari AHSP…</p> : null}
                       {ahspListLoad.kind === 'ready' && eligibleAhspVersions.length === 0
-                        ? <p className="simprok-ahsp-combobox__message">AHSP tidak ditemukan. Coba kode atau nama lain.</p>
+                        ? <p className="simprok-ahsp-combobox__message">Tidak ada hasil untuk pencarian ini. Coba kode atau nama lain; katalog belum terbukti kosong.</p>
                         : null}
                       {ahspListLoad.kind === 'idle' && ahspQuery.trim().length === 1
                         ? <p className="simprok-ahsp-combobox__message">Ketik minimal 2 karakter.</p>
@@ -3872,11 +3919,8 @@ export function RabWorkspacePage() {
               <div id="simprok-ahsp-list-status" className="simprok-rab-recap__incomplete-note" role={ahspListLoad.kind === 'error' ? 'alert' : 'status'}>
                 {ahspListLoad.kind === 'idle' ? 'Ketik kode/nama (min. 2 karakter) atau buka daftar AHSP.' : null}
                 {ahspListLoad.kind === 'loading' ? 'Mencari AHSP pada katalog…' : null}
-                {ahspListLoad.kind === 'ready' && eligibleAhspVersions.length > 0
-                  ? `${eligibleAhspVersions.length} AHSP tersedia${ahspHasNext ? ' · Ada hasil berikutnya' : ''}.`
-                  : null}
-                {ahspListLoad.kind === 'ready' && eligibleAhspVersions.length === 0
-                  ? 'Tidak ada AHSP yang cocok.'
+                {ahspListLoad.kind === 'ready'
+                  ? ahspAvailabilityNotice?.message ?? `${eligibleAhspVersions.length} AHSP tersedia${ahspHasNext ? ' · Ada hasil berikutnya' : ''}.`
                   : null}
                 {ahspListLoad.kind === 'error' ? (
                   <>
