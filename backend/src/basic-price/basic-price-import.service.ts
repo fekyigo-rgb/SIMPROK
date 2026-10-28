@@ -2634,6 +2634,85 @@ export class BasicPriceImportService {
     }
   }
 
+  /**
+   * Read-only history over the EXISTING canonical batch and row tables.
+   * A partially saved batch remains one batch: prices already persisted are
+   * counted by their real BasicPrice sourceImportRowId; unresolved rows remain
+   * in the batch, never copied into a second draft or import engine.
+   *
+   * The uploading account is part of the FIRST batch selection (not a filter
+   * applied after fetching), and pagination is bounded. No permission to
+   * enumerate another member's upload in the same workspace.
+   */
+  async listOwnedImportHistory(
+    workspaceId: string,
+    currentAccountId: string,
+    pageText?: string,
+  ) {
+    if (pageText && !/^[1-9][0-9]{0,3}$/.test(pageText)) {
+      throw new BadRequestException('INVALID_HISTORY_PAGE');
+    }
+    const page = pageText ? Number(pageText) : 1;
+    if (page > 1000) throw new BadRequestException('INVALID_HISTORY_PAGE');
+    const limit = 20;
+    const found = await this.prisma.basicPriceImportBatch.findMany({
+      where: { workspaceId, uploadedByAccountId: currentAccountId },
+      select: {
+        id: true, sourceFileName: true, selectedSheetName: true,
+        status: true, createdAt: true, updatedAt: true,
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      skip: (page - 1) * limit,
+      take: limit + 1,
+    });
+    const hasNext = found.length > limit;
+    const batches = found.slice(0, limit);
+    if (batches.length === 0) {
+      return { items: [], page, hasNext: false };
+    }
+    const ids = batches.map((batch) => batch.id);
+    const counts = await this.prisma.$queryRaw<Array<{
+      batchId: string; total: number; pending: number; readyToSave: number;
+      savedPrivate: number; rejected: number; submitted: number;
+    }>>(Prisma.sql`
+      SELECT r."batchId" AS "batchId",
+        COUNT(*)::int AS "total",
+        COUNT(*) FILTER (WHERE r."status" IN ('PARSED', 'NEEDS_REVIEW'))::int AS "pending",
+        COUNT(*) FILTER (WHERE r."status" = 'READY_FOR_SUBMISSION' AND p."id" IS NULL)::int AS "readyToSave",
+        COUNT(p."id")::int AS "savedPrivate",
+        COUNT(*) FILTER (WHERE r."status" = 'REJECTED')::int AS "rejected",
+        COUNT(*) FILTER (WHERE r."status" = 'SUBMISSION_CREATED' AND p."id" IS NULL)::int AS "submitted"
+      FROM "basic_price_import_rows" r
+      LEFT JOIN "basic_prices" p
+        ON p."sourceImportRowId" = r."id"
+        AND p."workspaceId" = ${workspaceId}::uuid
+      WHERE r."batchId" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
+      GROUP BY r."batchId"
+    `);
+    const byId = new Map(counts.map((row) => [row.batchId, row]));
+    return {
+      items: batches.map((batch) => {
+        const tally = byId.get(batch.id);
+        return {
+          batchId: batch.id,
+          sourceFileName: batch.sourceFileName,
+          selectedSheetName: batch.selectedSheetName,
+          status: batch.status,
+          createdAt: batch.createdAt,
+          updatedAt: batch.updatedAt,
+          totalRows: tally?.total ?? 0,
+          pendingRows: tally?.pending ?? 0,
+          readyToSaveRows: tally?.readyToSave ?? 0,
+          savedPrivateRows: tally?.savedPrivate ?? 0,
+          rejectedRows: tally?.rejected ?? 0,
+          submittedRows: tally?.submitted ?? 0,
+        };
+      }),
+      page,
+      hasNext,
+    };
+  }
+
   async getBatch(
     workspaceId: string,
     batchId: string,

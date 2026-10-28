@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Param,
+  Query,
   Patch,
   Post,
   Req,
@@ -116,6 +117,20 @@ export class BasicPriceImportController {
       uploadedByAccountId,
       file,
       dto,
+    );
+  }
+
+  /**
+   * Same persisted BasicPriceImportBatch journal, newly discoverable.
+   * Must be registered before :batchId; never enumerate teammate batches.
+   */
+  @Get('history')
+  @Permissions(PERMISSIONS.BASIC_PRICE_IMPORT)
+  async ownedHistory(@Req() request: RequestIdentity, @Query('page') page?: string) {
+    return this.importService.listOwnedImportHistory(
+      request.workspaceContext.workspaceId,
+      request.user.id,
+      page,
     );
   }
 

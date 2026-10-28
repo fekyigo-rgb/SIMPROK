@@ -1185,6 +1185,29 @@ export function BasicPriceReviewPage() {
     });
   };
 
+  const confirmLeaveWithUncommittedChoices = (): boolean =>
+    touchedRowIds.size === 0 || window.confirm(
+      'Pilihan sementara pada baris yang belum dikonfirmasi tidak disimpan dalam Riwayat. ' +
+      'Baris yang masih Perlu Tinjauan dan keputusan yang sudah disimpan tetap tersedia. Tetap keluar?',
+    );
+
+  const leaveToImportHistory = async () => {
+    if (isBusy || !confirmLeaveWithUncommittedChoices()) return;
+    setIsBusy(true);
+    try {
+      // Read the original canonical batch back BEFORE announcing resumability.
+      const live = await getBasicPriceImportBatch(batch.batchId);
+      if (live.batchId !== batch.batchId) throw new Error('BATCH_READBACK_MISMATCH');
+      navigate('/basic-price/import', { state: { showImportHistory: true } });
+    } catch (error) {
+      setStatusMessage(error instanceof ImportRequestError
+        ? importRequestMessage(error.httpStatus)
+        : 'Belum dapat memverifikasi batch tersimpan. Tetap di halaman dan coba lagi.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   return (
     <div className="bp-room">
       {/*
@@ -1197,7 +1220,7 @@ export function BasicPriceReviewPage() {
         <button
           type="button"
           className="bp-btn bp-btn--sm"
-          onClick={() => navigate(`/basic-price/import/${batch.batchId}`)}
+          onClick={() => { if (confirmLeaveWithUncommittedChoices()) navigate(`/basic-price/import/${batch.batchId}`); }}
           title="Kembali ke data batch"
           aria-label="Kembali ke data batch"
         >
@@ -1206,10 +1229,19 @@ export function BasicPriceReviewPage() {
         <button
           type="button"
           className="bp-btn bp-btn--link"
-          onClick={() => navigate('/basic-price')}
+          onClick={() => { if (confirmLeaveWithUncommittedChoices()) navigate('/basic-price'); }}
           title="Kembali ke daftar Basic Price"
         >
           Basic Price →
+        </button>
+        <button
+          type="button"
+          className="bp-btn bp-btn--sm"
+          disabled={isBusy}
+          onClick={() => void leaveToImportHistory()}
+          title="Verifikasi status tersimpan, lalu buka Riwayat Impor"
+        >
+          Selesai untuk Sekarang · Riwayat Impor
         </button>
       </div>
 
