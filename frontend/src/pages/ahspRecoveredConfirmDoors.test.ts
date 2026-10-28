@@ -15,7 +15,7 @@ test('four summary doors use the existing admission truth and do not invent AHSP
     { admission: 'HELD', identityVerdict: 'IDENTICAL' },
   ];
   assert.deepEqual(confirmImportFigures(cases), {
-    understood: 5, already: 1, willSave: 2, needsReview: 3, cannotSave: 2,
+    understood: 5, already: 1, willSave: 2, needsReview: 3, cannotSave: 2, deleted: 0,
   });
   assert.deepEqual(confirmImportDoorRows(cases, 'understood').map((row) => row.index), [0,1,2,3,4]);
   assert.deepEqual(confirmImportDoorRows(cases, 'existing').map((row) => row.index), [3]);

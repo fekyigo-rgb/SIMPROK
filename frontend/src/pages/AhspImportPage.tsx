@@ -19,6 +19,7 @@ import {
   workItemHasGenuineNewOnly,
   confirmImportFigures,
   confirmImportDoorRows,
+  isDeletedIdentical,
   previewIdentityQuestions,
   type ConfirmImportDoor,
   describeImportIntake,
@@ -1274,6 +1275,7 @@ export function AhspImportPage() {
     : [];
   const previewIdentityRows = previewIdentityQuestions(preview?.workItems);
   const previewIdentityUses = previewIdentityRows.reduce((sum, question) => sum + question.uses, 0);
+  const deletedReviewRows = preview?.workItems.filter(isDeletedIdentical) ?? [];
   const openConfirmDoor = (door: ConfirmImportDoor) => {
     setPreviewDetailDoor(door);
     setPreviewDetailOpen(true);
@@ -2235,9 +2237,15 @@ export function AhspImportPage() {
                 </p>
               ) : null}
               {deletedIdentical.length > 0 ? (
-                <p style={{ margin: '0 0 var(--space-2)', paddingLeft: 'var(--space-2)', borderLeft: `2px solid ${MUTED}`, color: MUTED }}>
-                  {identicalDeletedAggregateLine(distinctIdentities(deletedIdentical))}
-                </p>
+                <div className="ahsp-deleted-review-notice" role="status">
+                  <p>{identicalDeletedAggregateLine(distinctIdentities(deletedIdentical))} Pekerjaan ini memerlukan pemeriksaan riwayat; tidak boleh dianggap aktif atau dipulihkan otomatis.</p>
+                  <button type="button" className="ahsp-action ahsp-action--outline ahsp-action--compact" onClick={() => {
+                    setJourneyStep('confirm');
+                    openConfirmDoor('review');
+                  }}>
+                    Periksa {distinctIdentities(deletedIdentical)} AHSP yang dihapus
+                  </button>
+                </div>
               ) : null}
               {possibleTwins.length > 0 ? (
                 <div className="ahsp-decisions" aria-label="Kemungkinan sama dengan AHSP yang sudah ada">
@@ -2340,8 +2348,8 @@ export function AhspImportPage() {
                         <Database size={22} />
                       </span>
                       <span className="ahsp-confirm-summary__body">
-                        <span className="ahsp-confirm-summary__value">{confirmFigures.already} sudah ada di SIMPROK</span>
-                        <span className="ahsp-confirm-summary__hint">Tidak disimpan dua kali.</span>
+                        <span className="ahsp-confirm-summary__value">{confirmFigures.already} AHSP masih ada</span>
+                        <span className="ahsp-confirm-summary__hint">Tersimpan dan belum tentu siap digunakan. Tidak dibuat duplikat.</span>
                         <span className="ahsp-confirm-summary__action">Buka rincian</span>
                       </span>
                     </button>
@@ -2355,7 +2363,7 @@ export function AhspImportPage() {
                         <FileText size={22} />
                       </span>
                       <span className="ahsp-confirm-summary__body">
-                        <span className="ahsp-confirm-summary__value">{confirmFigures.willSave} akan disimpan</span>
+                        <span className="ahsp-confirm-summary__value">{confirmFigures.willSave} AHSP baru</span>
                         <span className="ahsp-confirm-summary__hint">Disimpan dari dokumen; siap digunakan hanya bila seluruh faktanya terbukti.</span>
                         <span className="ahsp-confirm-summary__action">Buka rincian</span>
                       </span>
@@ -2370,8 +2378,8 @@ export function AhspImportPage() {
                         <AlertTriangle size={22} />
                       </span>
                       <span className="ahsp-confirm-summary__body">
-                        <span className="ahsp-confirm-summary__value">{confirmFigures.needsReview} masih perlu ditinjau</span>
-                        <span className="ahsp-confirm-summary__hint">Jumlah AHSP tertahan, bukan jumlah pertanyaan identitas sumber daya.</span>
+                        <span className="ahsp-confirm-summary__value">{confirmFigures.needsReview} perlu penanganan</span>
+                        <span className="ahsp-confirm-summary__hint">Termasuk {confirmFigures.deleted} AHSP terhapus. Pertanyaan identitas dihitung terpisah.</span>
                         <span className="ahsp-confirm-summary__action">Buka rincian</span>
                       </span>
                     </button>
@@ -2385,8 +2393,8 @@ export function AhspImportPage() {
               ) : null}
               <div className="ahsp-confirm-panels">
                 <section className="ahsp-confirm-panel ahsp-confirm-panel--save">
-                  <h3 className="ahsp-section-title">{confirmFigures?.willSave === 0 ? 'Tidak ada AHSP baru untuk disimpan' : 'Apa yang akan disimpan'}</h3>
-                  {confirmFigures?.willSave === 0 ? <p className="ahsp-line ahsp-line--abu">AHSP telah dikenali sebagai data yang sudah ada. Buka kartu "Sudah ada di SIMPROK" untuk melihat daftar pekerjaan tanpa membuat duplikat.</p> : null}
+                  <h3 className="ahsp-section-title">{confirmFigures?.willSave === 0 ? 'Tidak ada induk AHSP baru' : 'Apa yang akan disimpan'}</h3>
+                  {confirmFigures?.willSave === 0 ? <p className="ahsp-line ahsp-line--abu">Tidak ada calon induk AHSP baru. {confirmFigures.deleted} identitas cocok dengan AHSP terhapus sehingga belum dapat digunakan atau dipulihkan otomatis. {confirmFigures.already} AHSP masih tersimpan, tetapi kesiapan resepnya harus dibuktikan secara terpisah.</p> : null}
                   <ul className="ahsp-confirm-checklist">
                     <li>Identitas AHSP dari dokumen</li>
                     <li>Klasifikasi &amp; konteks yang Anda pilih</li>
@@ -2419,7 +2427,9 @@ export function AhspImportPage() {
                   <p className="ahsp-confirm-info-strip" role="note">
                     <Info size={16} aria-hidden />
                     <span>
-                      AHSP tetap dapat disimpan. Peninjauan dapat dilanjutkan setelah penyimpanan tanpa mengunggah ulang berkas.
+                      {confirmFigures?.deleted > 0 && confirmFigures.willSave === 0
+                        ? 'Dokumen dapat disimpan sebagai catatan impor, tetapi AHSP yang sudah dihapus tidak otomatis dipulihkan atau siap digunakan. Pertanyaan identitas tetap perlu diselesaikan.'
+                        : 'Dokumen dapat disimpan tanpa menduplikasi induk AHSP. Peninjauan dapat dilanjutkan setelah penyimpanan tanpa mengunggah ulang berkas.'}
                     </span>
                   </p>
                 </section>
@@ -2429,12 +2439,13 @@ export function AhspImportPage() {
                   <div className="ahsp-confirm-focus__header">
                     <h3 className="ahsp-section-title">
                       {previewDetailDoor === 'understood' ? 'AHSP yang dipahami' :
-                        previewDetailDoor === 'existing' ? 'AHSP yang sudah ada di SIMPROK' :
-                        previewDetailDoor === 'willSave' ? 'AHSP yang dapat disimpan' : 'Tinjauan AHSP dan identitas sumber daya'}
+                        previewDetailDoor === 'existing' ? 'AHSP yang masih tersimpan' :
+                        previewDetailDoor === 'willSave' ? 'Calon AHSP baru' : 'AHSP terhapus dan pertanyaan identitas'}
                     </h3>
                     <button type="button" className="ahsp-action ahsp-action--quiet ahsp-action--compact" onClick={() => setPreviewDetailOpen(false)}>Tutup rincian</button>
                   </div>
                   <p className="ahsp-line ahsp-line--abu">{focusedDoorRows.length} pekerjaan sesuai kartu yang dipilih. Rincian pekerjaan ada pada tabel di bawah.</p>
+                  {previewDetailDoor === 'review' && deletedReviewRows.length > 0 ? <p className="ahsp-line" role="status">{deletedReviewRows.length} pekerjaan identik dengan AHSP yang sudah dihapus. Tidak dapat digunakan, disimpan sebagai induk duplikat, atau dipulihkan otomatis. Lihat rinciannya pada tabel di bawah; pemulihan membutuhkan tindakan sah terpisah.</p> : null}
                   {previewDetailDoor === 'review' ? (
                     <section aria-label="Pertanyaan identitas dari dokumen" className="ahsp-preview-identity">
                       <h4>Pertanyaan identitas sumber daya yang belum terbukti</h4>
@@ -2501,8 +2512,10 @@ export function AhspImportPage() {
                         const condition =
                           admission === 'HELD'
                             ? { label: 'Perlu tinjauan', tone: 'review' as const }
+                            : isDeletedIdentical(item)
+                              ? { label: 'Terhapus — perlu pemeriksaan', tone: 'review' as const }
                             : item.identityVerdict === 'IDENTICAL'
-                              ? { label: 'Sudah ada', tone: 'existing' as const }
+                              ? { label: 'Masih tersimpan', tone: 'existing' as const }
                               : genuineNew
                                 ? { label: 'Resource baru — akan ditambahkan', tone: 'new' as const }
                                 : admission === 'PROVEN'
