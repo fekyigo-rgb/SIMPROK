@@ -34,6 +34,18 @@ const body = page.slice(page.indexOf("export function BasicPriceReviewPage"));
  *  keeps a guard from failing on the very sentence that explains it. */
 const renderable = body.replace(/\{\/\*[\s\S]*?\*\/\}/g, "");
 
+test("BP-C1: review correction reuses existing compensation and audited rejection reopening", () => {
+  assert.match(page, /reopenRejectedBasicPriceImportRow,/);
+  assert.match(page, /compensateOwnBasicPriceImportDecision,/);
+  assert.match(body, /row\.status === 'REJECTED'/);
+  assert.match(body, /row\.status === 'READY_FOR_SUBMISSION'/);
+  assert.match(renderable, /Tinjau Ulang Keputusan/);
+  assert.match(renderable, /Alasan meninjau ulang \(wajib\)/);
+  assert.match(body, /await loadBatch\(false\)/);
+  assert.match(body, /setRowNotice\(\{ rowId: row\.id, text: message \}\)/);
+  assert.doesNotMatch(body, /deleteResourceCatalog|resetIdentityKernel|deleteImportRow/);
+});
+
 test("HS-1. the page never reads an authority's internal explanation", () => {
   assert.doesNotMatch(
     renderable,
@@ -215,10 +227,16 @@ test("HS-13b. the browser never sequences the two halves of one intent", () => {
     /acceptMachineProvenRows\(/,
     "the page must not call the binding half itself",
   );
+  // The whole-batch Smart Save must never be implemented as client-side
+  // accept + keep. The separately authorized single READY row is one writer
+  // request, with no accept-machine-proven step, so it is not this prohibited
+  // two-request orchestration.
+  const bulkHandler = page.match(/const handleKeepPrivate = async \(\) => \{[\s\S]*?\n  \};/)?.[0] ?? '';
+  assert.match(bulkHandler, /smartSaveBatch\(/);
   assert.doesNotMatch(
-    page,
+    bulkHandler,
     /keepBasicPriceImportBatchPrivate\(/,
-    "the page must not call the keeping half itself",
+    "the whole-batch door must not call the keeping half itself",
   );
 });
 
@@ -713,4 +731,56 @@ test("GRADE-A: immutable mapping reason can be clarified and read back without a
   assert.match(page, /mappingReasonAudit\.clarification/u);
   assert.match(page, /Simpan Klarifikasi Audit/u);
   assert.match(page, /loadBatch\(false, \(fresh\) =>/u);
+});
+
+test("BP-C3 E11a UX: reuse a verified Unit Kernel selection without inventing units", () => {
+  assert.equal(
+    (body.match(/unit: draft\.unit \?\? machinePickedUnit\(row\)/g) ?? []).length,
+    2,
+    "both admission entry points must prefill only the existing proven unit, while preserving a manual selection",
+  );
+  assert.match(body, /draft\.unitCorrectionReason\.trim\(\)\.length < 10/);
+  assert.match(body, /review\.typeConfirmations\.length === 1/);
+});
+
+test("BP-C3 E11a UX: bulk refusal remains one EXPLICIT reviewer decision scoped to current server candidates", () => {
+  assert.match(renderable, /aria-label="Konfirmasi semua kandidat berbeda"/);
+  assert.match(renderable, /refusalChoices\.length > 1/);
+  assert.match(body, /refusedCandidateIds: event\.target\.checked[\s\S]*?\.\.\.admissionReview\.humanRefusableCandidateIds/);
+  assert.match(renderable, /Saya sudah memeriksa seluruh \{refusalChoices\.length\} kandidat/);
+  assert.match(renderable, /refusalChoices\.map\(\(choice\) =>/);
+  assert.match(body, /reviewBindingFingerprint/);
+  assert.match(body, /await admitResourceForImportRow\(/);
+  assert.doesNotMatch(body, /useEffect\([^)]*admitResourceForImportRow/);
+});
+
+
+test("BP-C3 isolated save door is explicit, READY-only and delegates to the existing canonical price writer", () => {
+  assert.match(page, /keepSingleBasicPriceImportRowPrivate,/);
+  assert.match(page, /const handleKeepSinglePrivate = async \(row: BasicPriceImportRowSummary\)/);
+  assert.match(page, /row\.status !== 'READY_FOR_SUBMISSION'/);
+  assert.match(page, /window\.confirm\(/);
+  assert.match(page, /keepSingleBasicPriceImportRowPrivate\(batchId, row\.id, row\.version\)/);
+  assert.match(renderable, /Simpan Privat baris ini saja/);
+  assert.match(renderable, /handleKeepSinglePrivate\(row\)/);
+  assert.match(renderable, /row\.status === 'READY_FOR_SUBMISSION' && !row\.savedAsPrivatePrice/);
+});
+
+test("BP-C3 E11a: old stored 4-Ton mapping is displayed as unproven history", () => {
+  assert.match(page, /collisionReviewQuestion,/);
+  assert.match(body, /const collisionLabel = collisionReviewQuestion\(row\);/);
+  assert.match(renderable, /row\.status === 'NEEDS_REVIEW' \? 'Padanan katalog yang pernah dicatat \(belum terbukti cocok\): '/);
+  assert.match(renderable, /: 'Nama katalog tersimpan: '/);
+  assert.match(renderable, /\{row\.canonicalResourceName\}/);
+  assert.doesNotMatch(renderable, /useEffect\([^)]*handleAdmit/);
+});
+
+test("BP-C3 selective save has a distinct fail-closed route; never send selection to old batch writer", () => {
+  const api = readFileSync("src/api/basicPriceImport.ts", "utf8");
+  assert.match(api, /export async function keepSingleBasicPriceImportRowPrivate\(/);
+  assert.match(api, /\/rows\/\$\{rowId\}\/keep-private/);
+  assert.match(api, /JSON\.stringify\(\{ expectedRowVersion \}\)/);
+  const legacy = api.match(/export async function keepBasicPriceImportBatchPrivate\([\s\S]*?\n\}/)?.[0] ?? "";
+  assert.match(legacy, /\/keep-private/);
+  assert.doesNotMatch(legacy, /onlyRowId|expectedRowVersion/);
 });

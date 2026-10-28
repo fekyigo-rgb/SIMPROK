@@ -4,6 +4,7 @@ import { UnitKernelModule } from '../unit-kernel/unit-kernel.module';
 import { ResourceIdentityResolutionService } from './resource-identity-resolution.service';
 import { ResourceAdmissionService } from './resource-admission.service';
 import { ResourceObservationService } from './resource-observation.service';
+import { ResourceCatalogNameCorrectionService } from './resource-catalog-name-correction.service';
 import { ResourceObservationController } from './resource-observation.controller';
 import { GhxDecisionContextTokenService } from './ghx-decision-context-token.service';
 import { AhspImportService } from '../ahsp/services/ahsp-import.service';
@@ -25,6 +26,7 @@ import { ObservedResourceNameReviewService } from './observed-resource-name-revi
     ResourceAdmissionService,
     ResourceObservationService,
     ObservedResourceNameReviewService,
+    ResourceCatalogNameCorrectionService,
     // IQL-01 — the existing stateless signed-context service, second purpose.
     GhxDecisionContextTokenService,
     // GAP C2 — the AHSP journal answers for its OWN documents; the curation

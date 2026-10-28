@@ -3,9 +3,12 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import {
   smartSaveBatch,
+  keepSingleBasicPriceImportRowPrivate,
   getBasicPriceImportBatch,
   updateBasicPriceImportBatch,
   rejectBasicPriceImportRow,
+  reopenRejectedBasicPriceImportRow,
+  compensateOwnBasicPriceImportDecision,
   resolveBasicPriceImportRow,
   clarifyBasicPriceRowUnitReason,
   confirmBasicPriceImportRowCategory,
@@ -30,7 +33,7 @@ import { BasicPriceJourneyStepper } from '../components/basic-price/BasicPriceJo
 import { ROW_TONE_CLASS, reviewCounters, rowTone } from '../utils/basicPriceJourney';
 import {
   batchStatusLabel,
-  collisionWarningLabel,
+  collisionReviewQuestion,
   completionBlockReason,
   formatBatchProgress,
   formatMachineFirstSummary,
@@ -94,6 +97,9 @@ interface RowDraft {
   unitCorrectionReason: string;
   /** Reason field stays hidden until the reviewer opens Tolak. */
   rejectOpen: boolean;
+  /** Audit reason for reopening a prior human decision, never a silent undo. */
+  correctionOpen: boolean;
+  correctionReason: string;
   /** Reason field stays hidden until the reviewer opens admission. */
   admitOpen: boolean;
   admitReason: string;
@@ -122,6 +128,8 @@ const emptyDraft: RowDraft = {
   reason: '',
   unitCorrectionReason: '',
   rejectOpen: false,
+  correctionOpen: false,
+  correctionReason: '',
   admitOpen: false,
   admitReason: '',
   correctedCanonicalName: null,
@@ -745,6 +753,51 @@ export function BasicPriceReviewPage() {
     }
   };
 
+  /** Existing backend compensation + narrow rejected-row reopening.
+   * No catalog rename, price mutation, or source rewrite takes place here.
+   */
+  const handleCorrectDecision = async (row: BasicPriceImportRowSummary) => {
+    if (!batchId) return;
+    const draft = draftFor(row.id);
+    if (!draft.correctionOpen) {
+      updateDraft(row.id, { correctionOpen: true });
+      return;
+    }
+    const reason = draft.correctionReason.trim();
+    if (reason.length < 10) {
+      setRowNotice({ rowId: row.id, text: 'Tuliskan alasan koreksi minimal 10 karakter.' });
+      return;
+    }
+    setIsBusy(true);
+    try {
+      if (row.status === 'REJECTED') {
+        await reopenRejectedBasicPriceImportRow(batchId, row.id, row.version, reason);
+      } else if (row.status === 'READY_FOR_SUBMISSION') {
+        await compensateOwnBasicPriceImportDecision(batchId, row.id, row.version, reason);
+      } else {
+        setRowNotice({ rowId: row.id, text: 'Keputusan ini tidak dapat dibuka ulang pada tahap sekarang.' });
+        return;
+      }
+      const readback = await loadBatch(false);
+      const message = readback
+        ? `Keputusan baris ${row.sourceRowNumber} berhasil dibuka kembali untuk ditinjau. Riwayat lama tetap tersimpan.`
+        : `Koreksi diterima server untuk baris ${row.sourceRowNumber}, tetapi pembacaan ulang belum berhasil. Muat ulang untuk memverifikasi.`;
+      updateDraft(row.id, { correctionOpen: false, correctionReason: '' });
+      setRowNotice({ rowId: row.id, text: message });
+      setStatusMessage(message);
+    } catch (error) {
+      const message = error instanceof ImportRequestError
+        ? error.httpStatus === 409
+          ? 'Keputusan belum bisa dibuka ulang: baris telah berubah, sudah digunakan, atau tidak memenuhi syarat kompensasi. Muat ulang; tidak ada data yang dibatalkan.'
+          : `Koreksi ditolak server (HTTP ${error.httpStatus}); keputusan lama tetap berlaku.`
+        : 'Status koreksi belum dapat dipastikan karena sambungan terputus. Muat ulang sebelum bertindak lagi.';
+      setRowNotice({ rowId: row.id, text: message });
+      setStatusMessage(message);
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const handleReject = async (row: BasicPriceImportRowSummary) => {
     if (!batchId) return;
     const draft = draftFor(row.id);
@@ -808,6 +861,9 @@ export function BasicPriceReviewPage() {
       }
       updateDraft(row.id, {
         admitOpen: true,
+        // Reuse the Unit Kernel verdict already proven for this exact source row.
+        // A manual user selection always wins; unknown units still need review.
+        unit: draft.unit ?? machinePickedUnit(row),
         admitResourceType:
           review.typeConfirmations.length === 1
             ? review.typeConfirmations[0].resourceType
@@ -981,6 +1037,36 @@ export function BasicPriceReviewPage() {
    * why presenting it as the only way out of this room was the defect, not the
    * gate itself.
    */
+  /** Exact single-row intent, never a hidden batch-wide Smart Save.
+   * The existing server writer rechecks ownership, READY, provenance and price context.
+   * No identity or monetary decision is delegated to the browser. */
+  const handleKeepSinglePrivate = async (row: BasicPriceImportRowSummary) => {
+    if (!batchId || row.status !== 'READY_FOR_SUBMISSION' ||
+        row.savedAsPrivatePrice || row.privateBasicPriceId) return;
+    if (!window.confirm(
+      `Simpan HANYA harga privat baris #${row.sourceRowNumber} — ${row.name} (Rp${row.proposedCanonicalPrice ?? 'sesuai sumber'})? Baris lain, termasuk M60, tidak akan disimpan oleh tindakan ini.`,
+    )) return;
+    setIsBusy(true);
+    setStatusMessage(`Memeriksa dan menyimpan hanya baris #${row.sourceRowNumber}...`);
+    try {
+      const saved = await keepSingleBasicPriceImportRowPrivate(batchId, row.id, row.version);
+      const message = saved.createdCount === 1
+        ? `Berhasil: satu harga privat baris #${row.sourceRowNumber} tersimpan. Baris lain tidak diproses.`
+        : saved.alreadyPrivateCount === 1
+          ? `Harga privat baris #${row.sourceRowNumber} sudah ada; tidak dibuat duplikat.`
+          : saved.heldRows.length
+            ? `Harga baris #${row.sourceRowNumber} ditahan karena ada harga sumber yang harus ditinjau. Tidak ada harga baru.`
+            : `Baris #${row.sourceRowNumber} belum menghasilkan harga baru. Periksa status dan bukti sumber.`;
+      setRowNotice({ rowId: row.id, text: message });
+      setStatusMessage(message);
+      await loadBatch(false);
+    } catch (error) {
+      setStatusMessage(smartSaveFailure(error));
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   const handleSubmitBatch = async () => {
     if (!batchId) return;
     setIsBusy(true);
@@ -1379,7 +1465,7 @@ export function BasicPriceReviewPage() {
         {visibleRows.map((row) => {
           const draft = draftFor(row.id);
           const mutable = isRowMutable(row);
-          const proven = row.machineProposal?.identityPairProven === true;
+          const proven = row.machineProposal?.identityPairProven === true && row.hasCompensatedDecision !== true;
           const reviewCompass = basicPriceReviewCompass(row);
           const guidedCandidates = guidedIdentityCandidates(row);
           const guidedCount = guidedCandidates.prior.length + guidedCandidates.other.length;
@@ -1428,7 +1514,7 @@ export function BasicPriceReviewPage() {
           );
           const resourceProven = machinePickedResource(row) !== null;
           const unitProven = machinePickedUnit(row) !== null;
-          const collisionLabel = collisionWarningLabel(row.collisionType);
+          const collisionLabel = collisionReviewQuestion(row);
           // EVERY human-visible sentence of the machine block, derived once from
           // structured facts. The page prints these and composes none of its
           // own, so what the pure test asserts is what the reviewer reads.
@@ -1524,11 +1610,13 @@ export function BasicPriceReviewPage() {
                         : undefined
                     }
                   >
-                    {reviewRowBucket(row) === 'DECIDED'
+                    {row.hasCompensatedDecision && row.status === 'NEEDS_REVIEW'
                       ? rowStateLabel(row)
-                      : proven
-                        ? 'Dikenali otomatis'
-                        : 'Perlu Tinjauan'}
+                      : reviewRowBucket(row) === 'DECIDED'
+                        ? rowStateLabel(row)
+                        : proven
+                          ? 'Dikenali otomatis'
+                          : 'Perlu Tinjauan'}
                   </span>
                 </div>
                 <div className="bp-rowcard__summary-actions">
@@ -1547,6 +1635,11 @@ export function BasicPriceReviewPage() {
                     {rowNotice.text}
                   </p>
                 ) : null}
+                {row.status === 'NEEDS_REVIEW' && row.hasCompensatedDecision === true ? (
+                  <p className="bp-note bp-note--info bp-rowcard__notice" role="note">
+                    Keputusan Terima sebelumnya sudah dibatalkan. SIMPROK mungkin masih menemukan kandidat yang sama, tetapi baris ini tidak akan otomatis disimpan lagi. Periksa item dan spesifikasinya, lalu pilih secara sadar.
+                  </p>
+                ) : null}
               </div>
               {expanded ? (
                 <>
@@ -1561,7 +1654,7 @@ export function BasicPriceReviewPage() {
                     <div className="bp-rowcard__editable-line">
                       <p className="bp-rowcard__source-name">{row.name}</p>
                       {row.canonicalResourceName && row.canonicalResourceName !== row.name ? (
-                        <p className="bp-rowcard__facts">Nama katalog tersimpan: <strong>{row.canonicalResourceName}</strong></p>
+                        <p className="bp-rowcard__facts">{row.status === 'NEEDS_REVIEW' ? 'Padanan katalog yang pernah dicatat (belum terbukti cocok): ' : 'Nama katalog tersimpan: '}<strong>{row.canonicalResourceName}</strong></p>
                       ) : null}
                       {row.nomenclatureCorrectionName ? (
                         <p className="bp-rowcard__facts" role="status">Koreksi nomenklatur tercatat: <strong>{row.nomenclatureCorrectionName}</strong>. Ini catatan padanan baris, bukan penggantian nama katalog.</p>
@@ -1957,10 +2050,12 @@ export function BasicPriceReviewPage() {
                                   return next;
                                 });
                                 updateDraft(row.id, {
-                                admitOpen: true,
-                                admitResourceType: admissionReview.typeConfirmations.length === 1
-                                  ? admissionReview.typeConfirmations[0].resourceType
-                                  : draft.admitResourceType,
+                                  admitOpen: true,
+                                  // Safe default from the existing Unit Kernel; not a guessed unit.
+                                  unit: draft.unit ?? machinePickedUnit(row),
+                                  admitResourceType: admissionReview.typeConfirmations.length === 1
+                                    ? admissionReview.typeConfirmations[0].resourceType
+                                    : draft.admitResourceType,
                                 });
                               }}
                               disabled={isBusy}
@@ -2010,6 +2105,24 @@ export function BasicPriceReviewPage() {
                                     <span className="bp-field__help">Excel: {row.unit ?? "tidak tercantum"}. Pilihan: {draft.unit.code}. Sumber asli tidak diubah.</span>
                                   </label>
                                 ) : null}
+                                {refusalChoices.length > 1 ? (
+                                  <label className="bp-field__help">
+                                    <input
+                                      type="checkbox"
+                                      aria-label="Konfirmasi semua kandidat berbeda"
+                                      checked={refusalsConfirmed}
+                                      disabled={isBusy}
+                                      onChange={(event) => updateDraft(row.id, {
+                                        // This is ONE explicit reviewer decision on the server-listed
+                                        // candidates, never a machine refusal or a forced admission.
+                                        refusedCandidateIds: event.target.checked
+                                          ? [...admissionReview.humanRefusableCandidateIds]
+                                          : [],
+                                      })}
+                                    />{' '}
+                                    Saya sudah memeriksa seluruh {refusalChoices.length} kandidat di bawah dan memastikan semuanya berbeda dari item pada berkas.
+                                  </label>
+                                ) : null}
                                 {refusalChoices.map((choice) => (
                                   <label className="bp-field__help" key={choice.key}>
                                     <input
@@ -2047,6 +2160,39 @@ export function BasicPriceReviewPage() {
                         <button type="button" className="bp-btn bp-btn--danger-quiet" onClick={() => void handleReject(row)} disabled={isBusy} aria-disabled={isBusy}>Tolak baris harga ini</button>
                       </>
                     ) : <p className="bp-field__help">{rowStateLabel(row)}</p>}
+                    {row.status === 'READY_FOR_SUBMISSION' && !row.savedAsPrivatePrice && !row.privateBasicPriceId ? (
+                      <div className="bp-field" aria-label={`Simpan Privat satu baris #${row.sourceRowNumber}`}>
+                        <button type="button" className="bp-btn bp-btn--primary"
+                          disabled={isBusy}
+                          onClick={() => void handleKeepSinglePrivate(row)}>
+                          Simpan Privat baris ini saja
+                        </button>
+                        <span className="bp-field__help">Hanya baris ini. Tidak menerima kandidat otomatis dan tidak menyimpan M60/baris lain.</span>
+                      </div>
+                    ) : null}
+                    {(row.status === 'REJECTED' || row.status === 'READY_FOR_SUBMISSION') &&
+                      !row.savedAsPrivatePrice && !row.privateBasicPriceId ? (
+                      <div className="bp-field" aria-label={`Koreksi keputusan baris ${row.sourceRowNumber}`}>
+                        <button type="button" className="bp-btn bp-btn--sm"
+                          disabled={isBusy}
+                          onClick={() => void handleCorrectDecision(row)}>
+                          Tinjau Ulang Keputusan
+                        </button>
+                        {draft.correctionOpen ? (
+                          <label className="bp-field">
+                            <span className="bp-field__label">Alasan meninjau ulang (wajib)</span>
+                            <textarea className="bp-input" rows={2} maxLength={1200}
+                              value={draft.correctionReason}
+                              onChange={(event) => updateDraft(row.id, { correctionReason: event.target.value })}
+                              placeholder="Mengapa keputusan sebelumnya perlu dikoreksi?" />
+                            <span className="bp-field__help">
+                              Hanya untuk keputusan yang belum menghasilkan harga atau dipakai modul lain.
+                              Catatan lama tetap tersimpan.
+                            </span>
+                          </label>
+                        ) : null}
+                      </div>
+                    ) : null}
                     {row.mappingReasonAudit ? (
                       <details className="bp-details" aria-label={`Audit koreksi satuan baris ${row.sourceRowNumber}`}>
                         <summary>Audit koreksi satuan</summary>

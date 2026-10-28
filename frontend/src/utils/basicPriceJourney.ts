@@ -174,6 +174,13 @@ export function journeyView(batch: BasicPriceImportBatchSummary | null): Journey
   // door exists but cannot be pressed yet. `NOT_OFFERED` / "tidak dirutekan"
   // is reserved for families the server marks as never community-curated.
   const curationApplies = communityCurationPathApplies(proposal, proposed);
+  // An incomplete source cannot prove that curation will NEVER apply.
+  // Only the server's explicit not-routed verdict can close that door.
+  const curationUndetermined =
+    !curationApplies &&
+    !closed &&
+    !gate.metadataComplete &&
+    proposal.reasonCode !== 'SOURCE_FAMILY_NOT_ROUTED_TO_COMMUNITY_CURATION';
 
   const propose: JourneyStage = proposal.offered
     ? stage(
@@ -206,7 +213,9 @@ export function journeyView(batch: BasicPriceImportBatchSummary | null): Journey
                 'Opsional: usulkan baris yang sudah siap ke kurasi SIMPROK.',
               true,
             )
-          : stage('PROPOSE', 'NOT_OFFERED', 'Batch ini tidak dirutekan ke kurasi SIMPROK.', true);
+          : curationUndetermined
+            ? stage('PROPOSE', 'UPCOMING', 'Kelayakan usulan ditentukan setelah konteks sumber lengkap.', true)
+            : stage('PROPOSE', 'NOT_OFFERED', 'Batch ini tidak dirutekan ke kurasi SIMPROK.', true);
 
   /*
    * BP-UX-FINAL-01C GAP-F — "LATER" AND "NOT AT ALL" ARE DIFFERENT TRUTHS.
@@ -234,7 +243,9 @@ export function journeyView(batch: BasicPriceImportBatchSummary | null): Journey
     ? stage('VERIFY', 'CURRENT', 'Menunggu peninjauan kurator SIMPROK.')
     : curationApplies
       ? stage('VERIFY', 'UPCOMING', 'Berlaku hanya untuk harga yang diusulkan ke SIMPROK.')
-      : stage('VERIFY', 'NOT_OFFERED', 'Tidak berlaku: batch ini tidak dirutekan ke kurasi SIMPROK.');
+      : curationUndetermined
+        ? stage('VERIFY', 'UPCOMING', 'Hanya jika sumber memenuhi jalur usulan dan harga benar-benar diusulkan.')
+        : stage('VERIFY', 'NOT_OFFERED', 'Tidak berlaku: batch ini tidak dirutekan ke kurasi SIMPROK.');
 
   /*
    * 6. PUBLISH — NEVER MARKED DONE FROM HERE, AND THAT IS NOT A LIMITATION
@@ -249,7 +260,9 @@ export function journeyView(batch: BasicPriceImportBatchSummary | null): Journey
    */
   const publish: JourneyStage = curationApplies
     ? stage('PUBLISH', 'UPCOMING', 'Keputusan penerbitan diambil di ruang kurasi SIMPROK.')
-    : stage('PUBLISH', 'NOT_OFFERED', 'Tidak berlaku: batch ini tidak dirutekan ke kurasi SIMPROK.');
+    : curationUndetermined
+      ? stage('PUBLISH', 'UPCOMING', 'Hanya jika harga sudah diusulkan, diverifikasi, dan diterbitkan oleh pihak berwenang.')
+      : stage('PUBLISH', 'NOT_OFFERED', 'Tidak berlaku: batch ini tidak dirutekan ke kurasi SIMPROK.');
 
   return {
     stages: [file, source, rows, propose, verify, publish],
@@ -259,6 +272,7 @@ export function journeyView(batch: BasicPriceImportBatchSummary | null): Journey
       closed,
       proposalOffered: proposal.offered,
       curationApplies,
+      curationUndetermined,
     }),
   };
 }
@@ -278,6 +292,7 @@ function journeyNote(facts: {
   closed: boolean;
   proposalOffered: boolean;
   curationApplies: boolean;
+  curationUndetermined: boolean;
 }): string | null {
   if (facts.kept > 0 && facts.proposed) {
     return `${facts.kept} harga sudah tersimpan dan bisa dipakai sekarang di ruang kerja ini. Usulan ke SIMPROK berjalan terpisah.`;
@@ -287,6 +302,9 @@ function journeyNote(facts: {
   }
   if (facts.closed) {
     return 'Batch ini sudah ditutup. Tidak ada baris baru yang bisa diputuskan di sini.';
+  }
+  if (facts.curationUndetermined) {
+    return 'Jalur usulan ke SIMPROK baru dapat ditentukan setelah konteks sumber dilengkapi. Menyimpan privat adalah jalur terpisah.';
   }
   // "Tidak berlaku untuk sumber ini" only when the family is never curated —
   // not when the write is merely blocked (FIELD_PRICE + BATCH_NOT_READY).

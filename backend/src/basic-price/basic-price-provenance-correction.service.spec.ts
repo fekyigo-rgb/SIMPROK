@@ -64,6 +64,8 @@ describe('BasicPricePrivateAssetService — provenance correction (RM-03D1)', ()
     effectiveDateProvenance: null,
     effectiveDateDerivationRule: null,
     sourceImportRowId: 'row-01',
+    supersedesBasicPriceId: null,
+    supersededBy: null,
     createdAt: new Date('2026-08-08T00:00:00.000Z'),
     ...over,
   });
@@ -76,7 +78,11 @@ describe('BasicPricePrivateAssetService — provenance correction (RM-03D1)', ()
     prices = [priceRow()];
 
     tx = {
-      $queryRaw: jest.fn(async () => [batch]),
+      $queryRaw: jest.fn(async (query: { strings?: readonly string[] }) =>
+        query.strings?.join('').includes('basic_price_import_batches')
+          ? [batch]
+          : prices.map((price) => ({ id: price.id })),
+      ),
       workspace: { findUnique: jest.fn(async () => ({ organizationId: ORG })) },
       basicPrice: {
         findMany: jest.fn(async () => prices),
@@ -281,6 +287,41 @@ describe('BasicPricePrivateAssetService — provenance correction (RM-03D1)', ()
     prices = [];
 
     await expect(correct()).rejects.toThrow('NO_PRIVATE_PRICE_TO_CORRECT');
+  });
+
+  it('14. refuses provenance drift on either side of a linked correction chain', async () => {
+    prices = [priceRow({ supersededBy: { id: 'price-02' } })];
+
+    await expect(correct()).rejects.toThrow(
+      'CORRECTION_LINK_CONTEXT_IMMUTABLE',
+    );
+    expect(tx.basicPrice.update).not.toHaveBeenCalled();
+    expect(tx.basicPriceProvenanceCorrection.create).not.toHaveBeenCalled();
+
+    prices = [priceRow({ supersedesBasicPriceId: 'price-00' })];
+    await expect(correct()).rejects.toThrow(
+      'CORRECTION_LINK_CONTEXT_IMMUTABLE',
+    );
+    expect(tx.basicPrice.update).not.toHaveBeenCalled();
+  });
+
+  it('15. allows a linked price only when the requested provenance is an exact no-op', async () => {
+    prices = [
+      priceRow({
+        supersedesBasicPriceId: 'price-00',
+        sourceType: 'REGULATION',
+        sourcePeriodLabel: 'TA 2024',
+        sourcePeriodGranularity: 'YEAR',
+        effectiveDateProvenance: 'DERIVED_FROM_SOURCE_PERIOD',
+        effectiveDateDerivationRule: 'PERIOD_START',
+      }),
+    ];
+
+    await expect(correct()).resolves.toMatchObject({
+      correctedCount: 0,
+      unchangedCount: 1,
+    });
+    expect(tx.basicPrice.update).not.toHaveBeenCalled();
   });
 });
 

@@ -82,6 +82,11 @@ describe('BP category memory: exact source + append-only human confirmation only
     expect(prove(source, [prior, { ...prior, mappingId: 'conflicting', resourceCatalogId: 'other-resource' }])).toBe(false);
   });
 
+  it('does not turn a compensated mapping into positive category memory', () => {
+    expect(prove(source, [{ ...prior, isCompensated: true }])).toBe(false);
+    expect(prove(source, [prior, { ...prior, mappingId: 'revoked', isCompensated: true }])).toBe(false);
+  });
+
   it('does not reuse rejected or unattributed prior decisions', () => {
     expect(prove(source, [{ ...prior, originatingRowStatus: 'REJECTED' }])).toBe(false);
     expect(prove(source, [{ ...prior, reviewerAccountId: '' }])).toBe(false);

@@ -365,6 +365,30 @@ export async function clarifyBasicPriceRowUnitReason(
   if (!response.ok) throw new ImportRequestError(response.status, await response.text());
 }
 
+/** BP-C1: audited reopening of a rejected, unsubmitted row. */
+export async function reopenRejectedBasicPriceImportRow(
+  batchId: string, rowId: string, version: number, reason: string,
+): Promise<void> {
+  const response = await apiFetch(`/basic-price-imports/${batchId}/rows/${rowId}/reopen-rejected`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version, reason }),
+  });
+  if (!response.ok) throw new ImportRequestError(response.status, await response.text());
+}
+
+/** Reuse the existing narrow, append-only compensation authority. */
+export async function compensateOwnBasicPriceImportDecision(
+  batchId: string, rowId: string, version: number, reason: string,
+): Promise<void> {
+  const response = await apiFetch(`/basic-price-imports/${batchId}/rows/${rowId}/compensate-own-decision`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ version, reason }),
+  });
+  if (!response.ok) throw new ImportRequestError(response.status, await response.text());
+}
+
 export async function rejectBasicPriceImportRow(
   batchId: string,
   rowId: string,
@@ -508,6 +532,7 @@ export interface KeepBatchPrivateResult {
   batchId: string;
   createdCount: number;
   alreadyPrivateCount: number;
+  heldRows: Array<{ rowId: string; reasonCode: string }>;
   prices: PrivateBasicPriceItem[];
 }
 
@@ -625,7 +650,11 @@ export async function observePrivateBasicPrice(
   proposedValue: string,
   effectiveDate: string,
   reason: string,
-  evidence?: { sameSource?: boolean; sourceIdentityName?: string },
+  evidence?: {
+    sameSource?: boolean;
+    sourceIdentityName?: string;
+    sourceOrigin?: PriceSourceOrigin;
+  },
 ): Promise<CorrectPrivateBasicPriceResult> {
   const response = await apiFetch(
     `/basic-price-imports/prices/${priceId}/observations`,
@@ -642,6 +671,9 @@ export async function observePrivateBasicPrice(
           : { sameSource: evidence.sameSource }),
         ...(evidence?.sourceIdentityName
           ? { sourceIdentityName: evidence.sourceIdentityName }
+          : {}),
+        ...(evidence?.sourceOrigin
+          ? { sourceOrigin: evidence.sourceOrigin }
           : {}),
       }),
     },
@@ -733,6 +765,26 @@ export async function keepBasicPriceImportBatchPrivate(
   return response.json() as Promise<KeepBatchPrivateResult>;
 }
 
+/** Separate fail-closed URL: an older backend cannot ignore a scope header/body
+ * and accidentally save every READY row. Calls the existing writer, never a new engine.
+ */
+export async function keepSingleBasicPriceImportRowPrivate(
+  batchId: string,
+  rowId: string,
+  expectedRowVersion: number,
+): Promise<KeepBatchPrivateResult> {
+  const response = await apiFetch(
+    `/basic-price-imports/${batchId}/rows/${rowId}/keep-private`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedRowVersion }),
+    },
+  );
+  if (!response.ok) throw new ImportRequestError(response.status, await response.text());
+  return response.json() as Promise<KeepBatchPrivateResult>;
+}
+
 /**
  * "Simpan & Gunakan" — ONE user intent, ONE request, ONE backend command.
  *
@@ -773,4 +825,31 @@ export async function smartSaveBatch(
   });
   if (!response.ok) throw new ImportRequestError(response.status, await response.text());
   return (await response.json()) as SmartSaveResult;
+}
+
+/** BP-C2: link two ALREADY persisted imported prices as a governed correction.
+ * No third price is created. The server validates source/identity/authority.
+ */
+export async function reconcileImportedPrivateCorrection(
+  previousPriceId: string,
+  correctedPriceId: string,
+  expectedPreviousValue: string,
+  expectedCorrectedValue: string,
+  reason: string,
+): Promise<{ basicPriceId: string; previousBasicPriceId: string; value: string; unchanged: boolean }> {
+  const response = await apiFetch(
+    `/basic-price-imports/prices/${previousPriceId}/reconcile-imported-correction`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        correctedPriceId,
+        expectedPreviousValue,
+        expectedCorrectedValue,
+        reason,
+      }),
+    },
+  );
+  if (!response.ok) throw new ImportRequestError(response.status, await response.text());
+  return response.json();
 }

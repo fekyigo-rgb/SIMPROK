@@ -1,4 +1,6 @@
 import { ConflictException, NotFoundException } from '@nestjs/common';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { Prisma } from '@prisma/client';
 import { BasicPricePrivateAssetService } from './basic-price-private-asset.service';
 
@@ -41,11 +43,12 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction', () => {
     $queryRaw: jest.Mock;
     basicPrice: {
       findFirst: jest.Mock;
+      findMany: jest.Mock;
       create: jest.Mock;
       update: jest.Mock;
       updateMany: jest.Mock;
     };
-    basicPriceProvenanceCorrection: { create: jest.Mock };
+    basicPriceProvenanceCorrection: { create: jest.Mock; findFirst: jest.Mock };
   };
 
   beforeEach(() => {
@@ -53,6 +56,7 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction', () => {
       $queryRaw: jest.fn().mockResolvedValue([{ id: PREDECESSOR.id }]),
       basicPrice: {
         findFirst: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn().mockResolvedValue({
           id: 'bp-aug',
           value: new Prisma.Decimal('65000.00'),
@@ -64,6 +68,7 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction', () => {
       },
       basicPriceProvenanceCorrection: {
         create: jest.fn().mockResolvedValue({}),
+        findFirst: jest.fn().mockResolvedValue(null),
       },
     };
     const prisma = {
@@ -146,13 +151,13 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction', () => {
   });
 
   it('PRICE-IDEMP-01 — duplicate new observation returns the existing row', async () => {
-    tx.basicPrice.findFirst
-      .mockResolvedValueOnce(PREDECESSOR)
-      .mockResolvedValueOnce({
-        id: 'bp-aug',
-        value: '65000.00',
-        kdnPercent: '72.50',
-      });
+    tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR);
+    tx.basicPrice.findMany.mockResolvedValueOnce([{
+      id: 'bp-aug',
+      value: '65000.00',
+      kdnPercent: '72.50',
+      provenanceCorrections: [{ after: { sourceIdentityName: null } }],
+    }]);
     const result = await observePrice();
     expect(result).toEqual({
       basicPriceId: 'bp-aug',
@@ -161,6 +166,125 @@ describe('BP-CHANGE-SEM-03 new observation ≠ correction', () => {
       unchanged: true,
     });
     expect(tx.basicPrice.create).not.toHaveBeenCalled();
+  });
+
+  it('BP-C2 IDENTITY — idempotent read proves exact birth audit and source identity', async () => {
+    tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR).mockResolvedValueOnce(null);
+    await service.observePrivatePrice({
+      basicPriceId: PREDECESSOR.id,
+      actor: ACTOR,
+      expectedValue: '62500.00',
+      proposedValue: '65000.00',
+      effectiveDate: '2026-08-28',
+      reason: 'different publisher with coincidentally same money',
+      sameSource: false,
+      sourceIdentityName: 'Toko Berbeda',
+      sourceOrigin: 'SUPPLIER',
+    });
+    const lookup = tx.basicPrice.findMany.mock.calls[0][0] as {
+      where: {
+        sourceType: string;
+        sourceOrigin: string;
+        provenanceCorrections: { some: { AND: unknown[] } };
+      };
+      select: { provenanceCorrections: { where: unknown; select: { after: boolean } } };
+    };
+    expect(lookup.where.sourceType).toBe('MARKET_SURVEY');
+    expect(lookup.where.sourceOrigin).toBe('SUPPLIER');
+    expect(lookup.where.provenanceCorrections.some.AND).toEqual(expect.arrayContaining([
+      { before: { path: ['observedAfterBasicPriceId'], equals: PREDECESSOR.id } },
+      { after: { path: ['sameSourceIdentity'], equals: false } },
+    ]));
+    expect(lookup.where.provenanceCorrections.some.AND).not.toContainEqual({
+      after: { path: ['sourceIdentityName'], equals: 'Toko Berbeda' },
+    });
+    expect(lookup.select.provenanceCorrections.select.after).toBe(true);
+  });
+
+  it('BP-C2 P2002 — aborted PostgreSQL transaction is never queried again', async () => {
+    tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR).mockResolvedValueOnce(null);
+    tx.basicPrice.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('duplicate', {
+        code: 'P2002',
+        clientVersion: 'test',
+      }),
+    );
+    await expect(observePrice()).rejects.toMatchObject({
+      message: 'NEW_OBSERVATION_CONFLICT',
+    });
+    expect(tx.basicPrice.findFirst).toHaveBeenCalledTimes(1);
+    expect(tx.basicPrice.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('BP-C2 MIGRATION — removes only false money-only uniqueness, retains indexed lookup', () => {
+    const migration = readFileSync(
+      join(__dirname, '../../prisma/migrations',
+        '20261027180000_bp_c2_new_observation_exact_provenance_idempotency',
+        'migration.sql'),
+      'utf8',
+    );
+    expect(migration).toContain('DROP INDEX "basic_prices_private_new_observation_idempotency_key"');
+    expect(migration).toContain('CREATE INDEX "basic_prices_private_new_observation_lookup_idx"');
+    expect(migration).not.toContain('CREATE UNIQUE INDEX');
+    expect(migration).not.toContain('DELETE FROM');
+    expect(migration).not.toContain('UPDATE "basic_prices"');
+  });
+
+  it('BP-C2 DATE — rejects same-day contradictory same-source observation, no write', async () => {
+    tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR);
+    await expect(observePrice({ effectiveDate: '2026-05-01' })).rejects.toMatchObject({
+      message: 'SAME_SOURCE_OBSERVATION_DATE_NOT_LATER',
+    });
+    expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    expect(tx.basicPriceProvenanceCorrection.create).not.toHaveBeenCalled();
+  });
+
+  it('BP-C2 DATE — rejects an earlier same-source observation', async () => {
+    tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR);
+    await expect(observePrice({ effectiveDate: '2026-04-30' })).rejects.toMatchObject({
+      message: 'SAME_SOURCE_OBSERVATION_DATE_NOT_LATER',
+    });
+    expect(tx.basicPrice.create).not.toHaveBeenCalled();
+  });
+
+  it('BP-C2 STALE — a proven earlier same-source child blocks second branch', async () => {
+    tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR).mockResolvedValueOnce(null);
+    tx.basicPriceProvenanceCorrection.findFirst.mockResolvedValueOnce({
+      basicPriceId: 'first-child',
+    });
+    await expect(observePrice()).rejects.toMatchObject({
+      message: 'SAME_SOURCE_OBSERVATION_PREDECESSOR_STALE',
+    });
+    expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    const where = firstCallArg<{
+      where: { workspaceId: string; AND: unknown[] };
+    }>(tx.basicPriceProvenanceCorrection.findFirst).where;
+    expect(where.workspaceId).toBe(ACTOR.workspaceId);
+    expect(where.AND).toEqual(expect.arrayContaining([
+      { before: { path: ['observedAfterBasicPriceId'], equals: PREDECESSOR.id } },
+      { after: { path: ['sameSourceIdentity'], equals: true } },
+    ]));
+  });
+
+  it('BP-C2 DIFFERENT SOURCE — same-day independent source is not silently joined', async () => {
+    tx.basicPrice.findFirst.mockResolvedValueOnce(PREDECESSOR).mockResolvedValueOnce(null);
+    const result = await service.observePrivatePrice({
+      basicPriceId: PREDECESSOR.id,
+      actor: ACTOR,
+      expectedValue: '62500.00',
+      proposedValue: '65000.00',
+      effectiveDate: '2026-05-01',
+      reason: 'a different supplier on the same day',
+      sameSource: false,
+      sourceIdentityName: 'Toko Berbeda',
+      sourceOrigin: 'SUPPLIER',
+    });
+    expect(result.unchanged).toBe(false);
+    expect(tx.basicPriceProvenanceCorrection.findFirst).not.toHaveBeenCalled();
+    const data = firstCallArg<{ data: { effectiveDate: Date } }>(
+      tx.basicPrice.create,
+    ).data;
+    expect(data.effectiveDate).toEqual(MAY);
   });
 
   it('PRICE-SEM-02 — correction writer still copies the business date and supersedes', async () => {

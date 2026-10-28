@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   batchStatusLabel,
   collisionWarningLabel,
+  collisionReviewQuestion,
   formatBatchProgress,
   formatPrivateUseOutcome,
   lifecycleActionFailureMessage,
@@ -1245,6 +1246,17 @@ test("a rejected row shows its own reason as a sentence, not as a code with a co
   assert.equal(notes.technicalNotice, null);
 });
 
+test("a lawfully reopened rejection is history, not a current rejection", () => {
+  const row = baseRow({
+    status: "NEEDS_REVIEW",
+    reasonCodes: ["REJECTED:harga semula disangka salah"],
+  });
+  const notes = rowNoteLines(row);
+  assert.deepEqual(notes.human, ["Riwayat penolakan sebelumnya: harga semula disangka salah"]);
+  assert.equal(notes.untranslatedCount, 0);
+  assert.doesNotMatch(notes.human.join(" "), /^Ditolak:/);
+});
+
 test("a row with no notes produces no note lines and no technical disclosure", () => {
   const notes = rowNoteLines(baseRow({ reasonCodes: [] }));
   assert.deepEqual(notes.human, []);
@@ -2023,4 +2035,14 @@ test("BP-UX-07: optional missing code remains in history, behind Mengapa", () =>
   }, true);
   assert.equal(proven.primary, null);
   assert.equal(proven.secondary.length, 2);
+});
+
+
+test("BP-C3 E11a: unresolved identity-price conflict never asserts same technical resource", () => {
+  const pending = collisionReviewQuestion({ status: 'NEEDS_REVIEW', collisionType: 'SAME_IDENTITY_DIFFERENT_VALUE' });
+  assert.match(pending ?? '', /Kesamaan identitas belum terbukti/);
+  assert.match(pending ?? '', /kapasitas dan spesifikasi/);
+  assert.doesNotMatch(pending ?? '', /Identitas sama, nilai BERBEDA/);
+  assert.equal(collisionReviewQuestion({ status: 'READY_FOR_SUBMISSION', collisionType: 'SAME_IDENTITY_DIFFERENT_VALUE' }), collisionWarningLabel('SAME_IDENTITY_DIFFERENT_VALUE'));
+  assert.equal(collisionReviewQuestion({ status: 'NEEDS_REVIEW', collisionType: 'NONE' }), null);
 });

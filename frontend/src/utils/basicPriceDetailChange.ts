@@ -34,6 +34,37 @@ export const BASIC_PRICE_IMPORT_PATH = '/basic-price/import';
 export const DOCUMENTARY_INTAKE_NOTE =
   'Bukti dokumen masuk lewat pintu Impor. Observasi ini tidak menimpa sumber sebelumnya.';
 export const FIELD_REPORTED_SOURCE_NAME_LABEL = 'Nama sumber';
+export const FIELD_REPORTED_SOURCE_ORIGIN_LABEL = 'Asal sumber';
+export const DIFFERENT_SOURCE_IDENTITY_CONFLICT_NOTE =
+  'Nama itu sama dengan sumber yang sudah terbukti. Pilih sumber yang sama atau masukkan sumber yang benar-benar berbeda.';
+export const DIFFERENT_SOURCE_ORIGIN_REQUIRED_NOTE =
+  'Pilih asal sumber baru sesuai bukti yang Anda miliki.';
+export const OBSERVATION_SOURCE_ORIGIN_OPTIONS = [
+  'GOVERNMENT',
+  'SUPPLIER',
+  'STORE',
+  'DISTRIBUTOR',
+  'FIELD_REPORT',
+  'COMMUNITY_REPORT',
+] as const;
+
+export function normalizeObservationSourceIdentity(value: string): string {
+  return value
+    .normalize('NFKC')
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .toLocaleLowerCase('id-ID');
+}
+
+export function isGenuinelyDifferentSourceIdentity(
+  provenSourceName: string | null,
+  proposedSourceName: string,
+): boolean {
+  const proposed = normalizeObservationSourceIdentity(proposedSourceName);
+  if (!proposed) return false;
+  if (!provenSourceName) return true;
+  return proposed !== normalizeObservationSourceIdentity(provenSourceName);
+}
 export const KDN_USER_REPORTED_NOTE =
   'Nilai KDN ini tercatat sebagai pengisian/laporan, bukan otomatis sebagai sertifikat pabrik.';
 

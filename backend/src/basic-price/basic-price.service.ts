@@ -3,8 +3,16 @@ import {
   ConflictException,
   Injectable,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
+import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import {
+  classifyCatalogNameChange,
+  isCatalogNameCollision,
+} from '../resource-catalog/resource-catalog-name-correction.service';
+import { confirmedSpecifications } from '../resource-catalog/resource-identity-specification.contract';
+import { trustedUnitContext, unitDimensionAllowedForPriceDisplay } from '../unit-kernel/unit-kernel.contracts';
 import { GetBasicPricesDto } from './dto/get-basic-prices.dto';
 import { Prisma } from '@prisma/client';
 import {
@@ -42,6 +50,9 @@ import {
 const EXPLORER_ROW_SELECT = {
   id: true,
   workspaceId: true,
+  // Exact correction lineage is needed solely when older audit names were
+  // absent; never synthesize a source from a similar title or price.
+  supersedesBasicPriceId: true,
   // RM-03C: the Explorer must say WHICH asset family a row belongs to. A
   // workspace's own private price sitting silently among curated catalog rows,
   // visually indistinguishable from them, would be exactly the kind of
@@ -86,6 +97,7 @@ const EXPLORER_ROW_SELECT = {
     select: {
       importRow: {
         select: {
+          unitDefinitionId: true,
           batch: {
             select: {
               sourceOrganizationName: true,
@@ -102,6 +114,7 @@ const EXPLORER_ROW_SELECT = {
   sourceImportRow: {
     select: {
       priceSubmissionId: true,
+      unitDefinitionId: true,
       batch: {
         select: {
           sourceOrganizationName: true,
@@ -154,11 +167,12 @@ const DETAIL_EVIDENCE_BATCH_SELECT = {
 
 const DETAIL_PROVENANCE_SELECT = {
   sourceSubmission: {
-    select: { importRow: { select: { batch: DETAIL_EVIDENCE_BATCH_SELECT } } },
+    select: { importRow: { select: { unitDefinitionId: true, batch: DETAIL_EVIDENCE_BATCH_SELECT } } },
   },
   sourceImportRow: {
     select: {
       priceSubmissionId: true,
+      unitDefinitionId: true,
       priceSubmission: { select: { status: true, workspaceId: true } },
       sourceKdnHeaderText: true,
       batch: {
@@ -246,7 +260,92 @@ export class BasicPriceService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eligibility: BasicPriceEligibilityPolicy,
+    @Optional() private readonly unitKernel?: UnitKernelService,
   ) {}
+
+  /**
+   * BP-C3 — non-mutating preflight for a proposed name correction.
+   * Before anyone can edit a live ResourceCatalog, we must show its readers,
+   * identity collision risk and provenance. This is NOT rename authority.
+   * Only the exact active workspace-owned ResourceCatalog may be inspected.
+   */
+  async previewCatalogNameCorrection(
+    workspaceId: string,
+    resourceId: string,
+    proposedName: string,
+  ) {
+    // Reject control characters BEFORE whitespace normalization can erase them.
+    if (/[\x00-\x1f]/.test(proposedName)) {
+      throw new BadRequestException('RESOURCE_CATALOG_NAME_PROPOSAL_INVALID');
+    }
+    const proposal = proposedName.trim().replace(/\s+/g, ' ');
+    if (proposal.length < 3 || proposal.length > 180 || /[\x00-\x1f]/.test(proposal)) {
+      throw new BadRequestException('RESOURCE_CATALOG_NAME_PROPOSAL_INVALID');
+    }
+    const resource = await this.prisma.resourceCatalog.findFirst({
+      where: { id: resourceId, workspaceId, status: 'ACTIVE' },
+      select: { id: true, name: true, code: true, type: true, baseUnit: true, specifications: true, updatedAt: true },
+    });
+    if (!resource) throw new NotFoundException('RESOURCE_CATALOG_NOT_FOUND');
+    const [basicPriceCount, ahspResolutionCount, importRowCount, sourceIdentityCount, conversionRuleCount, neighbors] =
+      await Promise.all([
+        this.prisma.basicPrice.count({ where: { workspaceId, resourceId } }),
+        this.prisma.projectAhspResourceResolution.count({ where: { resourceCatalogId: resourceId } }),
+        this.prisma.basicPriceImportRow.count({ where: { resourceCatalogId: resourceId } }),
+        this.prisma.resourceSourceIdentity.count({ where: { workspaceId, resourceCatalogId: resourceId } }),
+        this.prisma.unitConversionRule.count({ where: { resourceCatalogId: resourceId } }),
+        this.prisma.resourceCatalog.findMany({
+          where: {
+            OR: [{ workspaceId }, { workspaceId: null }],
+            type: resource.type,
+            status: 'ACTIVE',
+            id: { not: resourceId },
+          },
+          select: { id: true, name: true, baseUnit: true, specifications: true },
+          take: 5001,
+        }),
+      ]);
+    // Never claim a complete conflict preflight from a truncated candidate set.
+    if (neighbors.length > 5000) {
+      throw new ConflictException('CATALOG_NAME_PREVIEW_SCOPE_EXCEEDED');
+    }
+    const collisions = neighbors.filter((other) =>
+      isCatalogNameCollision(proposal, resource.specifications, other),
+    );
+    const classification = classifyCatalogNameChange(resource.name, proposal);
+    return {
+      currentName: resource.name,
+      proposedName: proposal,
+      resourceType: resource.type,
+      resourceCode: resource.code,
+      baseUnit: resource.baseUnit,
+      hasSpecifications: resource.specifications !== null,
+      specificationFacts: Object.entries(confirmedSpecifications(resource.specifications) ?? {})
+        .map(([name, value]) => ({ name, value })),
+      // A database timestamp is not an authorization to edit; it is evidence
+      // for a future stale-write guard and is deliberately read-only here.
+      observedVersion: resource.updatedAt.toISOString(),
+      impact: {
+        basicPrices: basicPriceCount,
+        projectAhspResolutions: ahspResolutionCount,
+        importRows: importRowCount,
+        sourceIdentityRecords: sourceIdentityCount,
+        conversionRules: conversionRuleCount,
+      },
+      conflictingSameTypeNames: collisions.length,
+      verdict: collisions.length > 0
+        ? 'IDENTITY_CONFLICT_REVIEW_REQUIRED'
+        : resource.name === proposal
+          ? 'NO_CHANGE'
+          : classification === 'TYPOGRAPHY_ONLY'
+            ? 'SPELLING_ONLY_PREVIEW'
+            : classification === 'NOMENCLATURE_REQUIRES_VERIFICATION'
+              ? 'NOMENCLATURE_VERIFICATION_REQUIRED'
+              : 'IDENTITY_REVIEW_REQUIRED',
+      writable: false as const,
+      message: 'Pemeriksaan dampak saja. Nama katalog belum diubah; persetujuan identitas dan jurnal koreksi masih diwajibkan.',
+    };
+  }
 
   /**
    * Existing birth-audit lineage applied to source-name SEARCH, before count
@@ -261,11 +360,49 @@ export class BasicPriceService {
     type LineageMatch = { id: string; depth: number };
     const rows = await this.prisma.$queryRaw<LineageMatch[]>(
       Prisma.sql`
-        WITH RECURSIVE source_chain AS (
+        WITH RECURSIVE source_edge AS (
+          SELECT later.id AS child_id, earlier.id AS parent_id
+          FROM "basic_price_provenance_corrections" audit
+          JOIN "basic_prices" later
+            ON later.id = audit."basicPriceId"
+           AND later."workspaceId" = audit."workspaceId"
+          JOIN "basic_prices" earlier
+            ON earlier.id::text = audit.before->>'observedAfterBasicPriceId'
+           AND earlier."workspaceId" = later."workspaceId"
+          WHERE later."workspaceId" = ${workspaceId}::uuid
+            AND later."assetScope" = 'WORKSPACE_PRIVATE'
+            AND earlier."assetScope" = 'WORKSPACE_PRIVATE'
+            AND later."recordsNewObservation" = TRUE
+            AND audit.before->>'semantic' = 'NEW_OBSERVATION'
+            AND audit.after->>'semantic' = 'NEW_OBSERVATION'
+            AND audit.after->>'sameSourceIdentity' = 'true'
+            AND later."resourceId" = earlier."resourceId"
+            AND later."regionId" IS NOT DISTINCT FROM earlier."regionId"
+            AND later."regionCoverageSetId"
+                IS NOT DISTINCT FROM earlier."regionCoverageSetId"
+          UNION ALL
+          SELECT correction.id AS child_id, predecessor.id AS parent_id
+          FROM "basic_prices" correction
+          JOIN "basic_prices" predecessor
+            ON predecessor.id = correction."supersedesBasicPriceId"
+           AND predecessor."workspaceId" = correction."workspaceId"
+          WHERE predecessor."workspaceId" = ${workspaceId}::uuid
+            AND predecessor."assetScope" = 'WORKSPACE_PRIVATE'
+            AND correction."assetScope" = 'WORKSPACE_PRIVATE'
+            AND correction."recordsNewObservation" = FALSE
+            AND correction."resourceId" = predecessor."resourceId"
+            AND correction."regionId" IS NOT DISTINCT FROM predecessor."regionId"
+            AND correction."regionCoverageSetId"
+                IS NOT DISTINCT FROM predecessor."regionCoverageSetId"
+            AND correction."sourceType" = predecessor."sourceType"
+            AND correction."sourceOrigin" = predecessor."sourceOrigin"
+            AND correction."effectiveDate" = predecessor."effectiveDate"
+        ),
+        source_chain AS (
           SELECT root.id, root."workspaceId", root."resourceId",
                  root."regionId", root."regionCoverageSetId",
                  root."sourceType", root."sourceOrigin",
-                 0::integer AS depth
+                 0::integer AS depth, ARRAY[root.id] AS visited
           FROM "basic_prices" root
           JOIN "basic_price_provenance_corrections" birth
             ON birth."basicPriceId" = root.id
@@ -280,25 +417,21 @@ export class BasicPriceService {
           SELECT next.id, next."workspaceId", next."resourceId",
                  next."regionId", next."regionCoverageSetId",
                  next."sourceType", next."sourceOrigin",
-                 chain.depth + 1
+                 chain.depth + 1, chain.visited || next.id
           FROM source_chain chain
-          JOIN "basic_price_provenance_corrections" audit
-            ON audit.before->>'observedAfterBasicPriceId' = chain.id::text
-           AND audit."workspaceId" = chain."workspaceId"
+          JOIN source_edge edge ON edge.parent_id = chain.id
           JOIN "basic_prices" next
-            ON next.id = audit."basicPriceId"
+            ON next.id = edge.child_id
            AND next."workspaceId" = chain."workspaceId"
           WHERE next."assetScope" = 'WORKSPACE_PRIVATE'
-            AND next."recordsNewObservation" = TRUE
             AND next."resourceId" = chain."resourceId"
             AND next."regionId" IS NOT DISTINCT FROM chain."regionId"
-            AND next."regionCoverageSetId" IS NOT DISTINCT FROM chain."regionCoverageSetId"
-            AND next."sourceType" = chain."sourceType"
-            AND next."sourceOrigin" = chain."sourceOrigin"
-            AND audit.before->>'semantic' = 'NEW_OBSERVATION'
-            AND audit.after->>'semantic' = 'NEW_OBSERVATION'
-            AND audit.after->>'sameSourceIdentity' = 'true'
+            AND next."regionCoverageSetId"
+                IS NOT DISTINCT FROM chain."regionCoverageSetId"
+            -- The edge is proven by the precise same-source audit OR the
+            -- exact correction pointer; never inferred from similar text.
             AND chain.depth < ${BASIC_PRICE_HISTORY_MAX_GENERATIONS}
+            AND NOT (next.id = ANY(chain.visited))
         )
         SELECT DISTINCT id, depth
         FROM source_chain
@@ -354,9 +487,31 @@ export class BasicPriceService {
           AND child."resourceId" = parent."resourceId"
           AND child."regionId" IS NOT DISTINCT FROM parent."regionId"
           AND child."regionCoverageSetId" IS NOT DISTINCT FROM parent."regionCoverageSetId"
-          AND child."sourceType" = parent."sourceType"
+          -- A genuine later field report may be MARKET_SURVEY even when the
+          -- source's earlier documentary evidence was VENDOR_QUOTE. Exact
+          -- same-source audit, not sourceType, establishes the link.
           AND child."effectiveDate" >= parent."effectiveDate"
           AND child."effectiveDate" <= ${asOf}
+        UNION ALL
+        -- A correction is an exact-money successor, not a new quotation.
+        -- The single edge graph supports any lawful alternation of later
+        -- observations and corrections without name-based equivalence.
+        SELECT corrected.id AS child_id, previous.id AS parent_id
+        FROM "basic_prices" corrected
+        JOIN "basic_prices" previous
+          ON previous.id = corrected."supersedesBasicPriceId"
+         AND previous."workspaceId" = corrected."workspaceId"
+        WHERE previous."workspaceId" = ${workspaceId}::uuid
+          AND previous."assetScope" = 'WORKSPACE_PRIVATE'
+          AND corrected."assetScope" = 'WORKSPACE_PRIVATE'
+          AND corrected."recordsNewObservation" = FALSE
+          AND corrected."resourceId" = previous."resourceId"
+          AND corrected."regionId" IS NOT DISTINCT FROM previous."regionId"
+          AND corrected."regionCoverageSetId"
+              IS NOT DISTINCT FROM previous."regionCoverageSetId"
+          AND corrected."sourceType" = previous."sourceType"
+          AND corrected."sourceOrigin" = previous."sourceOrigin"
+          AND corrected."effectiveDate" = previous."effectiveDate"
       ),
       lineage AS (
         SELECT child_id AS descendant_id, parent_id AS predecessor_id,
@@ -611,9 +766,12 @@ export class BasicPriceService {
       )
         return [];
       if (deriveExplorerSourceName(root)) return [];
-      const id = sameSourceObservationPredecessorId(
-        root.provenanceCorrections?.[0],
-      );
+      // A price correction is the SAME observation with corrected money.
+      // Follow only its exact supersession pointer; for real later quotes
+      // the separate same-source birth audit remains the required evidence.
+      const id =
+        root.supersedesBasicPriceId ??
+        sameSourceObservationPredecessorId(root.provenanceCorrections?.[0]);
       return id ? [{ root, id, visited: new Set([root.id]) }] : [];
     });
 
@@ -657,9 +815,9 @@ export class BasicPriceService {
           names.set(cursor.root.id, name);
           continue;
         }
-        const id = sameSourceObservationPredecessorId(
-          ancestor.provenanceCorrections?.[0],
-        );
+        const id =
+          ancestor.supersedesBasicPriceId ??
+          sameSourceObservationPredecessorId(ancestor.provenanceCorrections?.[0]);
         if (id && !cursor.visited.has(id)) next.push({ ...cursor, id });
       }
       pending = next;
@@ -1087,6 +1245,7 @@ export class BasicPriceService {
       explorerRows,
       workspaceId,
     );
+    const unitDisplays = await this.explorerVerifiedPriceUnitDisplays(explorerRows);
     // Same existing provenance-reference law as removeOwnPrivatePrice.
     // One bounded read for the visible page, never a per-row search.
     const privateIds = explorerRows
@@ -1114,6 +1273,11 @@ export class BasicPriceService {
         const inherited = inheritedNames.get(row.id);
         return {
           ...item,
+          resource: {
+            ...item.resource,
+            // Each offer's own unit. No price or time conversion.
+            displayUnit: unitDisplays.get(row.id) ?? null,
+          },
           sourceName: item.sourceName ?? inherited ?? null,
           alreadyProposed:
             row.assetScope === 'WORKSPACE_PRIVATE'
@@ -1141,6 +1305,117 @@ export class BasicPriceService {
         totalPages: Math.ceil(total / limit),
       },
     };
+  }
+
+  /**
+   * Display one canonical label for the verified denominator of EACH price.
+   * A source PERSON_HOUR stays PERSON_HOUR even when its ResourceCatalog has
+   * baseUnit Org/Hari. Unit Kernel owns identity; this projects its already
+   * persisted unitDefinitionId. Never convert the price or rewrite source.
+   */
+  private async explorerVerifiedPriceUnitDisplays(
+    rows: ExplorerRowSource[],
+  ): Promise<Map<string, string | null>> {
+    // Each price needs its own source-unit proof. ResourceCatalog.baseUnit
+    // is metadata, not evidence for a separate price observation.
+    const sourceUnitIds = new Map<string, string | null>();
+    for (const row of rows) {
+      const importRow = row.sourceImportRow ?? row.sourceSubmission?.importRow;
+      if (importRow) sourceUnitIds.set(row.id, importRow.unitDefinitionId ?? null);
+    }
+    const ids = [...new Set([...sourceUnitIds.values()].filter(
+      (id): id is string => !!id,
+    ))];
+    const definitions = ids.length
+      ? await this.prisma.unitDefinition.findMany({
+          // Historical import IDs remain truthful even if later deactivated.
+          where: { id: { in: ids } },
+          select: { id: true, code: true, symbol: true, dimension: true },
+        })
+      : [];
+    const byId = new Map(definitions.map((d) => [d.id, d]));
+    const results = new Map<string, string | null>();
+    for (const row of rows) {
+      if (!sourceUnitIds.has(row.id)) {
+        // Direct/private observations and legacy catalog rows without an
+        // evidenced unit cannot borrow the catalog's baseUnit as a price unit.
+        results.set(row.id, null);
+        continue;
+      }
+      const definition = byId.get(sourceUnitIds.get(row.id) ?? '');
+      const context = trustedUnitContext(row.resource.type);
+      const compatible = !!definition &&
+        unitDimensionAllowedForPriceDisplay(definition.dimension, context);
+      results.set(row.id, compatible && definition
+        ? this.explorerUnitSymbol(definition.code, definition.symbol)
+        : null);
+    }
+    return results;
+  }
+
+  /** Only the spelling changes. Unit identity still belongs to Unit Kernel. */
+  private explorerUnitSymbol(code: string, symbol: string): string {
+    switch (code) {
+      case 'PERSON_HOUR': return 'Orang-Jam';
+      case 'PERSON_DAY': return 'Orang-Hari';
+      case 'PERSON_WEEK': return 'Orang-Minggu';
+      case 'PERSON_MONTH': return 'Orang-Bulan';
+      default: return symbol;
+    }
+  }
+
+  /**
+   * Explorer presentation only. Reuse the ONE Unit Kernel's documented
+   * alias+trusted-resource-class law; resolve once per class/page, not N+1.
+   * This DOES NOT change resource base units, price denominators, conversion
+   * factors, saved source text, or any canonical identity.
+   *
+   * Null is an honest unresolved unit, never an inferred equivalent.
+   */
+  private async explorerVerifiedUnitDisplays(
+    rows: ExplorerRowSource[],
+  ): Promise<Map<string, string | null>> {
+    const output = new Map<string, string | null>();
+    const groups = new Map<'LABOR' | 'MATERIAL' | 'EQUIPMENT', Set<string>>();
+    for (const row of rows) {
+      output.set(row.resource.id, null);
+      const context = trustedUnitContext(row.resource.type);
+      if (!context) continue;
+      const units = groups.get(context) ?? new Set<string>();
+      units.add(row.resource.baseUnit);
+      groups.set(context, units);
+    }
+
+    const verifiedIds = new Map<string, string>();
+    await Promise.all([...groups.entries()].map(async ([context, rawUnits]) => {
+      const identities = await this.unitKernel!.resolveCanonicalUnitIdentities(
+        [...rawUnits], context,
+      );
+      for (const identity of identities) {
+        if (identity.status === 'RESOLVED' && identity.unitDefinition) {
+          verifiedIds.set(context + '\u0000' + identity.rawUnit, identity.unitDefinition.id);
+        }
+      }
+    }));
+    const definitionIds = [...new Set(verifiedIds.values())];
+    if (definitionIds.length === 0) return output;
+    const definitions = await this.prisma.unitDefinition.findMany({
+      where: { id: { in: definitionIds }, isActive: true },
+      select: { id: true, code: true, symbol: true },
+    });
+    const symbols = new Map(definitions.map((d) => [
+      d.id, this.explorerUnitSymbol(d.code, d.symbol),
+    ]));
+    for (const row of rows) {
+      const context = trustedUnitContext(row.resource.type);
+      const definitionId = context
+        ? verifiedIds.get(context + '\u0000' + row.resource.baseUnit)
+        : undefined;
+      if (definitionId) {
+        output.set(row.resource.id, symbols.get(definitionId) ?? null);
+      }
+    }
+    return output;
   }
 
   /**
@@ -1228,6 +1503,11 @@ export class BasicPriceService {
     // The Detail and Explorer must project the same proven source identity.
     // Neither projection inherits the predecessor's MONEY or document bytes.
     const displayedPrice = mapExplorerItem(row, workspaceId, new Date());
+    const unitDisplays = await this.explorerVerifiedPriceUnitDisplays([row]);
+    displayedPrice.resource = {
+      ...displayedPrice.resource,
+      displayUnit: unitDisplays.get(row.id) ?? null,
+    };
     const proposedIds = await this.alreadyProposedPrivateIds(
       [row],
       workspaceId,

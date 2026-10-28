@@ -807,6 +807,29 @@ describe('BasicPriceImportService', () => {
       prisma.basicPriceImportRow.findMany.mockResolvedValue([]);
     });
 
+    it('BP-C2 COUNT: a saved SUBMISSION_CREATED row must not reduce new READY prices to save', async () => {
+      prisma.basicPriceImportRow.findMany.mockResolvedValue([
+        { id: 'ready-saved', status: 'READY_FOR_SUBMISSION', sourceRowNumber: 1, rawResourceNameText: 'Already kept', reasonCodes: [] },
+        { id: 'ready-new-1', status: 'READY_FOR_SUBMISSION', sourceRowNumber: 2, rawResourceNameText: 'E11a', reasonCodes: [] },
+        { id: 'ready-new-2', status: 'READY_FOR_SUBMISSION', sourceRowNumber: 3, rawResourceNameText: 'M60', reasonCodes: [] },
+        { id: 'submitted-saved', status: 'SUBMISSION_CREATED', sourceRowNumber: 4, rawResourceNameText: 'Already submitted', reasonCodes: [] },
+      ]);
+      prisma.basicPrice.findMany.mockResolvedValue([
+        { id: 'price-a', sourceImportRowId: 'ready-saved' },
+        { id: 'price-b', sourceImportRowId: 'submitted-saved' },
+      ]);
+
+      const result = await service.getBatch(WORKSPACE_ID, 'batch-01', ACCOUNT_ID);
+
+      expect(result.readyForSubmissionRows).toBe(3);
+      expect(result.alreadyPrivateRows).toBe(1);
+      expect(result.actions.privateUse.actionableRows).toBe(2);
+      // Per-row evidence must still say both saved prices exist, even the submitted one.
+      expect(result.rows.find((r) => r.id === 'submitted-saved')?.savedAsPrivatePrice).toBe(true);
+      expect(result.rows.find((r) => r.id === 'ready-saved')?.savedAsPrivatePrice).toBe(true);
+      expect(result.rows.find((r) => r.id === 'ready-new-1')?.savedAsPrivatePrice).toBe(false);
+    });
+
     it('positive: the uploader can read their own batch', async () => {
       const result = await service.getBatch(
         WORKSPACE_ID,
@@ -1133,6 +1156,18 @@ describe('BasicPriceImportService', () => {
       status: 'NEEDS_REVIEW',
       version: 0,
       uploadedByAccountId: ACCOUNT_ID,
+      regionId: null,
+      regionCoverageSetId: null,
+      effectiveDate: null,
+      reviewDate: null,
+      sourceType: null,
+      sourceOrigin: null,
+      sourceOrganizationName: null,
+      sourceVendorName: null,
+      sourcePeriodLabel: null,
+      sourcePeriodGranularity: null,
+      effectiveDateProvenance: null,
+      effectiveDateDerivationRule: null,
     };
 
     beforeEach(() => {
@@ -1155,6 +1190,48 @@ describe('BasicPriceImportService', () => {
       );
       expect(result.batchId).toBe('batch-01');
       expect(tx.basicPriceImportBatch.update).toHaveBeenCalled();
+    });
+
+    it('refuses publisher drift when any price from the batch is correction-linked', async () => {
+      tx.$queryRaw
+        .mockResolvedValueOnce([
+          { ...storedBatch, sourceVendorName: 'Supplier Lama' },
+        ])
+        .mockResolvedValueOnce([{ id: 'linked-price-01' }]);
+
+      await expect(
+        service.updateBatchMetadata(
+          WORKSPACE_ID,
+          'batch-01',
+          { version: 0, sourceVendorName: 'Supplier Baru' },
+          ACCOUNT_ID,
+          ['version', 'sourceVendorName'],
+        ),
+      ).rejects.toThrow('CORRECTION_LINK_CONTEXT_IMMUTABLE');
+      expect(tx.basicPriceImportBatch.update).not.toHaveBeenCalled();
+    });
+
+    it('preserves lawful publisher edits when the batch has no linked price', async () => {
+      tx.$queryRaw
+        .mockResolvedValueOnce([
+          { ...storedBatch, sourceVendorName: 'Supplier Lama' },
+        ])
+        .mockResolvedValueOnce([]);
+
+      await expect(
+        service.updateBatchMetadata(
+          WORKSPACE_ID,
+          'batch-01',
+          { version: 0, sourceVendorName: 'Supplier Baru' },
+          ACCOUNT_ID,
+          ['version', 'sourceVendorName'],
+        ),
+      ).resolves.toMatchObject({ batchId: 'batch-01' });
+      expect(tx.basicPriceImportBatch.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ sourceVendorName: 'Supplier Baru' }),
+        }),
+      );
     });
 
     it('USER-OWNED IMPORT BOUNDARY negative: a same-workspace account that did not upload this batch cannot update it (404), and no write occurs', async () => {
@@ -1208,7 +1285,8 @@ describe('BasicPriceImportService', () => {
       };
       tx.$queryRaw
         .mockResolvedValueOnce([completeBatch])
-        .mockResolvedValueOnce([{ id: 'coverage-set-01' }]);
+        .mockResolvedValueOnce([{ id: 'coverage-set-01' }])
+        .mockResolvedValueOnce([]);
       tx.region.findUnique.mockResolvedValue({
         id: 'district-01',
         code: '81.71.02',
@@ -1332,6 +1410,7 @@ describe('BasicPriceImportService', () => {
       };
       tx.$queryRaw
         .mockResolvedValueOnce([completeBatch])
+        .mockResolvedValueOnce([])
         .mockResolvedValueOnce([]);
       tx.region.findUnique.mockResolvedValue({
         id: 'district-01',

@@ -225,6 +225,18 @@ export function createIntakeHarness(options: { failStorage?: boolean } = {}) {
    * statement carries.
    */
   const queryRaw = (sql: unknown) => {
+    const text = (sql as { strings?: readonly string[] } | null)?.strings?.join(
+      '',
+    );
+    // Metadata edits now ask a read-only safety question: does this batch own a
+    // price in an adjudicated correction chain? Intake fixtures never mint
+    // BasicPrice rows, so the truthful answer is empty without adding a writer
+    // or a forbidden model to this harness.
+    if (
+      text?.includes('FROM "basic_prices" price') &&
+      text.includes('price."supersedesBasicPriceId"') &&
+      text.includes('JOIN "basic_price_import_rows" row')
+    ) return Promise.resolve([]);
     const values = (sql as { values?: unknown[] } | null)?.values;
     const batchId = Array.isArray(values) ? values[0] : undefined;
     const batch = batches.find((candidate) => candidate.id === batchId);

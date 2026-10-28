@@ -75,11 +75,17 @@ const collectTs = (dir: string): string[] =>
  * It is registered here rather than exempted, and the test below pins exactly
  * what it may touch: the two KDN columns, never money, never publication.
  *
+ * BP-C2: it now stands at twelve. The existing-price correction link adds one
+ * precisely bounded updateMany of supersedesBasicPriceId on the already-
+ * imported SUCCESSOR. It neither changes money nor creates a third BasicPrice;
+ * both source-import pointers are preserved and a provenance audit is written
+ * in the same transaction. Its exact write columns are asserted below.
+ *
  * Migration SQL is NOT a runtime writer and is deliberately out of scope here:
  * this test scans src/ only.
  */
 describe('W-01 permanent BasicPrice writer inventory', () => {
-  it('keeps exactly the eleven approved writers and no other Prisma writer method', () => {
+  it('keeps exactly the twelve approved writers and no other Prisma writer method', () => {
     const matches = collectTs(sourceRoot).flatMap((file) => {
       const source = readFileSync(file, 'utf8');
       return [
@@ -95,6 +101,14 @@ describe('W-01 permanent BasicPrice writer inventory', () => {
         method,
       })),
     ).toEqual([
+      // BP-C2 — the ONLY writer attaching a pre-existing imported private
+      // correction price to its exact pre-existing predecessor. This does NOT
+      // change money or delete an import row; it writes one lineage pointer,
+      // under source/actor/context proof, with an append-only audit.
+      {
+        file: 'basic-price/basic-price-private-asset.service.ts',
+        method: 'updateMany',
+      },
       // RM-03C — the ONE workspace-private writer. Creates only; it never
       // updates, and it never touches a row it did not create.
       {
@@ -690,6 +704,32 @@ describe('W-01 permanent BasicPrice writer inventory', () => {
     ]) {
       expect(new RegExp(`^\\s*${forbidden}\\s*:`, 'm').test(data)).toBe(false);
     }
+  });
+
+  it('BP-C2: imported price reconciliation writes only the successor lineage pointer', () => {
+    const source = readFileSync(
+      join(sourceRoot, 'basic-price', 'basic-price-private-asset.service.ts'), 'utf8',
+    );
+    const start = source.indexOf('async reconcileImportedPrivateCorrection(');
+    const end = source.indexOf('async keepBatchPrivate(', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const body = source.slice(start, end);
+    const updateStart = body.indexOf('await tx.basicPrice.updateMany({');
+    const updateEnd = body.indexOf('await tx.basicPriceProvenanceCorrection.create({', updateStart);
+    expect(updateStart).toBeGreaterThan(-1);
+    expect(updateEnd).toBeGreaterThan(updateStart);
+    const writer = body.slice(updateStart, updateEnd);
+    expect(writer).toContain('id: corrected.id');
+    expect(writer).toContain('workspaceId: actor.workspaceId');
+    expect(writer).toContain('supersedesBasicPriceId: null');
+    expect(writer).toContain('data: { supersedesBasicPriceId: previous.id }');
+    expect(writer).not.toMatch(/^[ \t]*(?:value|sourceImportRowId|resourceId|regionId|effectiveDate|status|verificationStatus)[ \t]*:/m);
+    expect(body).not.toMatch(/\.basicPrice\.create\s*\(/);
+    expect(body).not.toMatch(/\.basicPrice\.delete(Many)?\s*\(/);
+    expect(body).toContain('CORRECTION_PUBLISHER_IDENTITY_UNPROVED');
+    expect(body).toContain('CORRECTION_CONTEXT_MISMATCH');
+    expect(body).toContain('IMPORTED_PRICE_CORRECTION_LINK');
   });
 
   /**

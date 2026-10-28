@@ -128,6 +128,42 @@ const run = (
     ...over,
   });
 
+describe('BP-C1 shared catalog compensation keeps historic conflict without positive mapping evidence', () => {
+  const oldMapping = mapping({
+    resourceCatalogId: CATALOG_BAJA_TULANGAN.id,
+    rawName: 'Baja Tulangan/Besi Beton',
+    rawCode: 'M57a',
+    rawUnit: 'Kg',
+    originatingRowStatus: 'READY_FOR_SUBMISSION',
+    reason: 'Saya memilih padanan ini saat tinjauan.',
+  });
+  const evaluate = (mappings: ReviewedMappingEvidence[]) => run({
+    reference: { rawName: 'Baja Tulangan/Besi Beton', rawCode: 'M57a', rawUnit: 'Kg', resourceType: 'MATERIAL' },
+    catalogCandidates: [CATALOG_BAJA_TULANGAN],
+    reviewedMappings: mappings,
+  });
+  it('shows prior review when active, but not after cancellation', () => {
+    const active = evaluate([oldMapping]);
+    const former = active.candidates.find(item => item.resourceCatalogId === CATALOG_BAJA_TULANGAN.id);
+    expect(former?.evidence).toContain('REVIEWED_MAPPING_NAME_MATCH');
+    expect(former?.priorHumanDecision?.reviewerAccountId).toBe('acct-owner');
+    const canceled = evaluate([{ ...oldMapping, isCompensated: true }]);
+    const candidate = canceled.candidates.find(item => item.resourceCatalogId === CATALOG_BAJA_TULANGAN.id);
+    expect(candidate?.evidence).not.toContain('REVIEWED_MAPPING_NAME_MATCH');
+    expect(candidate?.evidence).not.toContain('REVIEWED_MAPPING_CODE_MATCH');
+    expect(candidate?.priorHumanDecision).toBeNull();
+    expect(canceled.authority).not.toBe('VERIFIED_PRIVATE_ROW_MAPPING_REUSED');
+  });
+  it('keeps conflicting historical mappings as a reason to refuse certainty', () => {
+    const canceledOther = {
+      ...oldMapping, mappingId: 'different-revoked-mapping',
+      resourceCatalogId: 'other-catalog', isCompensated: true,
+    };
+    const v = evaluate([oldMapping, canceledOther]);
+    expect(v.status).not.toBe('RESOLVED');
+  });
+});
+
 describe('BP-ROW8-COMPENSATION-01 — preserved history does not revive a retired identity', () => {
   it('keeps original sighting and human mapping as history without resolving a RETIRED catalog', () => {
     const oldId = 'preview-row8-original-catalog';

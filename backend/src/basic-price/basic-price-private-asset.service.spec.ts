@@ -63,9 +63,16 @@ describe('BasicPricePrivateAssetService', () => {
   let prisma: any;
   let service: BasicPricePrivateAssetService;
 
-  const makeTx = (overrides: { batch?: any; rows?: Array<{ id: string }> } = {}) => {
+  const makeTx = (overrides: {
+    batch?: any;
+    rows?: Array<{ id: string; resourceCatalogId?: string | null }>;
+  } = {}) => {
     const batch = overrides.batch === undefined ? baseBatch() : overrides.batch;
-    const rows = overrides.rows ?? [{ id: rowId }];
+    const rows = (overrides.rows ?? [{ id: rowId }]).map((row) => ({
+      resourceCatalogId,
+      ...row,
+      version: 2,
+    }));
     let queryCall = 0;
     tx = {
       $queryRaw: jest.fn().mockImplementation(() => {
@@ -78,6 +85,7 @@ describe('BasicPricePrivateAssetService', () => {
       },
       basicPrice: {
         findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn().mockResolvedValue(createdRow()),
       },
       basicPriceImportRow: {
@@ -91,6 +99,64 @@ describe('BasicPricePrivateAssetService', () => {
   beforeEach(() => {
     prisma = { $transaction: jest.fn() };
     service = new BasicPricePrivateAssetService(prisma as any);
+  });
+
+  describe('BP-C3 narrow selective private persistence (reuse canonical writer)', () => {
+    const other = '70000000-0000-4000-8000-000000000002';
+
+    it('persists ONLY the explicitly selected READY row and leaves another READY row untouched', async () => {
+      makeTx({ rows: [{ id: rowId }, { id: other }] });
+      const result = await service.keepBatchPrivate({ batchId, actor, onlyRowId: rowId, expectedRowVersion: 2 });
+      expect(result.createdCount).toBe(1);
+      expect(tx.basicPrice.create).toHaveBeenCalledTimes(1);
+      expect(tx.basicPrice.create.mock.calls[0][0].data.sourceImportRowId).toBe(rowId);
+      expect(tx.basicPriceImportRow.findUniqueOrThrow).toHaveBeenCalledTimes(1);
+      expect(tx.basicPriceImportRow.findUniqueOrThrow).toHaveBeenCalledWith({ where: { id: rowId } });
+    });
+
+    it('rejects a selected row that is NOT READY in the owned batch instead of expanding the scope', async () => {
+      makeTx({ rows: [{ id: rowId }] });
+      await expect(service.keepBatchPrivate({ batchId, actor, onlyRowId: other, expectedRowVersion: 2 }))
+        .rejects.toThrow('PRIVATE_ROW_NOT_READY_IN_BATCH');
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    });
+
+    it('refuses malformed selected row ID without touching any price', async () => {
+      makeTx();
+      await expect(service.keepBatchPrivate({ batchId, actor, onlyRowId: 'bad-id' }))
+        .rejects.toThrow('INVALID_PRIVATE_ROW_ID');
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    });
+
+    it('denies a stale selected row, and denies a missing version', async () => {
+      makeTx();
+      await expect(service.keepBatchPrivate({
+        batchId, actor, onlyRowId: rowId, expectedRowVersion: 1,
+      })).rejects.toThrow('ROW_VERSION_STALE');
+      makeTx(); // fresh transaction mock for the second independent request
+      await expect(service.keepBatchPrivate({
+        batchId, actor, onlyRowId: rowId,
+      })).rejects.toThrow('EXPECTED_PRIVATE_ROW_VERSION_REQUIRED');
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    });
+
+    it('preserves whole-batch behavior when no row scope was supplied', async () => {
+      makeTx({ rows: [{ id: rowId }, { id: other }] });
+      tx.basicPriceImportRow.findUniqueOrThrow.mockImplementation(({ where }: any) =>
+        Promise.resolve({ ...baseRow(), id: where.id }));
+      const result = await service.keepBatchPrivate({ batchId, actor });
+      expect(result.createdCount).toBe(2);
+      expect(tx.basicPrice.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('retains idempotence on an already-priced selected row', async () => {
+      makeTx({ rows: [{ id: rowId }, { id: other }] });
+      tx.basicPrice.findFirst.mockResolvedValue(createdRow());
+      const result = await service.keepBatchPrivate({ batchId, actor, onlyRowId: rowId, expectedRowVersion: 2 });
+      expect(result.createdCount).toBe(0);
+      expect(result.alreadyPrivateCount).toBe(1);
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    });
   });
 
   describe('the ownership and provenance a private price is born with', () => {
@@ -164,6 +230,183 @@ describe('BasicPricePrivateAssetService', () => {
       expect(tx.basicPrice.create.mock.calls[0][0].data.reportedByAccountId).toBe(
         accountId,
       );
+    });
+  });
+
+  describe('BP-C2 same-publisher current price intake guard', () => {
+    const competingPrice = (publisher: string | null) => ({
+      id: 'other-batch-price',
+      sourceImportRow: {
+        batch: { sourceVendorName: null, sourceOrganizationName: publisher },
+      },
+      sourceSubmission: null,
+      provenanceCorrections: [],
+    });
+
+    it.each([
+      ['125000.00', 'TIM  SIMPROK'],
+      ['65000.00', 'Tim Simprok'],
+    ])('refuses second current price regardless of amount %s', async (_amount, name) => {
+      makeTx({ batch: {
+        ...baseBatch(), sourceOrganizationName: 'Tim Simprok', sourceVendorName: null,
+      } });
+      tx.basicPriceImportRow.findUniqueOrThrow.mockResolvedValue({
+        ...baseRow(), proposedCanonicalPrice: new Prisma.Decimal(_amount),
+      });
+      tx.basicPrice.findMany.mockResolvedValue([competingPrice(name)]);
+      const result = await service.keepBatchPrivate({ batchId, actor });
+      expect(result.createdCount).toBe(0);
+      expect(result.heldRows).toEqual([{
+        rowId,
+        reasonCode: 'SAME_PUBLISHER_PRICE_CONTEXT_REQUIRES_REVIEW',
+      }]);
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(3); // transactional context lock
+    });
+
+    it('allows a proven different publisher while keeping the same canonical resource', async () => {
+      makeTx({ batch: {
+        ...baseBatch(), sourceOrganizationName: 'Tim Simprok', sourceVendorName: null,
+      } });
+      tx.basicPrice.findMany.mockResolvedValue([competingPrice('Penerbit Lain')]);
+      await expect(service.keepBatchPrivate({ batchId, actor }))
+        .resolves.toMatchObject({ createdCount: 1 });
+    });
+
+    it('does not treat missing publisher identity as a safe second issuer', async () => {
+      makeTx();
+      tx.basicPrice.findMany.mockResolvedValue([competingPrice(null)]);
+      const result = await service.keepBatchPrivate({ batchId, actor });
+      expect(result.createdCount).toBe(0);
+      expect(result.heldRows).toEqual([{
+        rowId,
+        reasonCode: 'SAME_PUBLISHER_PRICE_CONTEXT_REQUIRES_REVIEW',
+      }]);
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
+    });
+
+    it('holds only the conflicting row and still stores a distinct healthy resource', async () => {
+      const healthyRowId = '70000000-0000-4000-8000-000000000002';
+      const healthyResourceId = '80000000-0000-4000-8000-000000000002';
+      makeTx({
+        batch: { ...baseBatch(), sourceOrganizationName: 'Tim Simprok', sourceVendorName: null },
+        rows: [
+          { id: rowId, resourceCatalogId },
+          { id: healthyRowId, resourceCatalogId: healthyResourceId },
+        ],
+      });
+      tx.basicPriceImportRow.findUniqueOrThrow.mockImplementation(async ({ where }: any) => ({
+        ...baseRow(),
+        id: where.id,
+        resourceCatalogId: where.id === healthyRowId ? healthyResourceId : resourceCatalogId,
+      }));
+      tx.basicPrice.findMany
+        .mockResolvedValueOnce([competingPrice('Tim Simprok')])
+        .mockResolvedValueOnce([]);
+      const result = await service.keepBatchPrivate({ batchId, actor });
+      expect(result.createdCount).toBe(1);
+      expect(result.heldRows).toEqual([{
+        rowId,
+        reasonCode: 'SAME_PUBLISHER_PRICE_CONTEXT_REQUIRES_REVIEW',
+      }]);
+      expect(tx.basicPrice.create).toHaveBeenCalledTimes(1);
+      expect(tx.basicPrice.create.mock.calls[0][0].data.resourceId)
+        .toBe(healthyResourceId);
+    });
+
+    it('acquires unique multirow resource-context locks in one deterministic order', async () => {
+      const rowA = rowId;
+      const rowB = '70000000-0000-4000-8000-000000000002';
+      const resourceA = '80000000-0000-4000-8000-00000000000a';
+      const resourceB = '80000000-0000-4000-8000-00000000000b';
+      const runWithOrder = async (
+        rows: Array<{ id: string; resourceCatalogId: string }>,
+      ) => {
+        makeTx({ rows });
+        tx.basicPriceImportRow.findUniqueOrThrow.mockImplementation(
+          async ({ where }: any) => ({
+            ...baseRow(),
+            id: where.id,
+            resourceCatalogId: where.id === rowA ? resourceA : resourceB,
+          }),
+        );
+        const result = await service.keepBatchPrivate({ batchId, actor });
+        expect(result.createdCount).toBe(2);
+        return tx.$queryRaw.mock.calls
+          .filter(([query]: any[]) =>
+            query.strings?.join('').includes('pg_advisory_xact_lock'),
+          )
+          .map(([query]: any[]) => query.values[0]);
+      };
+
+      const forwardKeys = await runWithOrder([
+        { id: rowA, resourceCatalogId: resourceA },
+        { id: rowB, resourceCatalogId: resourceB },
+      ]);
+      const inverseKeys = await runWithOrder([
+        { id: rowB, resourceCatalogId: resourceB },
+        { id: rowA, resourceCatalogId: resourceA },
+      ]);
+
+      expect(inverseKeys).toEqual(forwardKeys);
+      expect(forwardKeys).toEqual([...forwardKeys].sort());
+      expect(new Set(forwardKeys)).toEqual(
+        new Set([
+          [workspaceId, resourceA, regionId, null].join('|'),
+          [workspaceId, resourceB, regionId, null].join('|'),
+        ]),
+      );
+    });
+
+    it('deduplicates equal multirow context locks without skipping either row', async () => {
+      const otherRow = '70000000-0000-4000-8000-000000000002';
+      makeTx({ rows: [{ id: rowId }, { id: otherRow }] });
+      tx.basicPriceImportRow.findUniqueOrThrow.mockImplementation(
+        async ({ where }: any) => ({ ...baseRow(), id: where.id }),
+      );
+
+      const result = await service.keepBatchPrivate({ batchId, actor });
+
+      const advisoryCalls = tx.$queryRaw.mock.calls.filter(
+        ([query]: any[]) =>
+          query.strings?.join('').includes('pg_advisory_xact_lock'),
+      );
+      expect(advisoryCalls).toHaveLength(1);
+      expect(result.createdCount).toBe(2);
+      expect(tx.basicPrice.create).toHaveBeenCalledTimes(2);
+    });
+
+    it('scopes cross-batch guard to resource, workspace and locality, never to exact day', async () => {
+      makeTx({ batch: {
+        ...baseBatch(), sourceOrganizationName: 'Tim Simprok', sourceVendorName: null,
+      } });
+      await service.keepBatchPrivate({ batchId, actor });
+      expect(tx.basicPrice.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          resourceId: resourceCatalogId,
+          workspaceId,
+          regionId,
+          supersededBy: { is: null },
+        }),
+      }));
+      const competingQuery = tx.basicPrice.findMany.mock.calls[0][0];
+      expect(competingQuery.where).not.toHaveProperty('effectiveDate');
+      expect(tx.basicPrice.create).toHaveBeenCalledTimes(1);
+    });
+
+    it('holds a different effective date from the same publisher instead of creating a second price root', async () => {
+      makeTx({ batch: {
+        ...baseBatch(), sourceOrganizationName: 'Tim Simprok', sourceVendorName: null,
+        effectiveDate: new Date('2026-09-01T00:00:00.000Z'),
+      } });
+      tx.basicPrice.findMany.mockResolvedValue([competingPrice('Tim Simprok')]);
+      const held = await service.keepBatchPrivate({ batchId, actor });
+      expect(held.createdCount).toBe(0);
+      expect(held.heldRows).toEqual([{
+        rowId, reasonCode: 'SAME_PUBLISHER_PRICE_CONTEXT_REQUIRES_REVIEW',
+      }]);
+      expect(tx.basicPrice.findMany.mock.calls[0][0].where).not.toHaveProperty('effectiveDate');
+      expect(tx.basicPrice.create).not.toHaveBeenCalled();
     });
   });
 

@@ -35,6 +35,7 @@ import {
   ConfirmBasicPriceImportRowCategoryDto,
   RejectBasicPriceImportRowDto,
   CompensateBasicPriceImportRowDto,
+  ReopenRejectedBasicPriceImportRowDto,
   ClarifyBasicPriceRowUnitReasonDto,
 } from './dto/resolve-basic-price-import-row.dto';
 import {
@@ -47,6 +48,7 @@ import { BasicPriceSmartSaveService } from './basic-price-smart-save.service';
 import { CorrectPrivateProvenanceDto } from './dto/correct-private-provenance.dto';
 import { EnrichBasicPriceKdnDto } from './dto/enrich-basic-price-kdn.dto';
 import { CorrectPrivateBasicPriceDto } from './dto/correct-private-basic-price.dto';
+import { ReconcileImportedPrivateCorrectionDto } from './dto/reconcile-imported-private-correction.dto';
 import { ObservePrivateBasicPriceDto } from './dto/observe-private-basic-price.dto';
 import { ObservePrivateKdnDto } from './dto/observe-private-kdn.dto';
 import { CorrectPrivateKdnDto } from './dto/correct-private-kdn.dto';
@@ -435,6 +437,24 @@ export class BasicPriceImportController {
     );
   }
 
+  /** BP-C1: reverse an unsubmitted rejected review row, never erase its decision. */
+  @Post(':batchId/rows/:rowId/reopen-rejected')
+  @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)
+  async reopenRejectedRow(
+    @Req() request: RequestIdentity,
+    @Param('batchId') batchId: string,
+    @Param('rowId') rowId: string,
+    @Body() dto: ReopenRejectedBasicPriceImportRowDto,
+  ) {
+    return this.resolutionService.reopenRejectedRow(
+      request.workspaceContext.workspaceId,
+      batchId,
+      rowId,
+      request.user.id,
+      dto,
+    );
+  }
+
   @Post(':batchId/rows/:rowId/reject')
   @Permissions(PERMISSIONS.BASIC_PRICE_RESOLVE)
   async rejectRow(
@@ -513,6 +533,29 @@ export class BasicPriceImportController {
    * No verifier control, no publisher control, no review queue, no publication
    * queue is exposed here or anywhere else to a general user.
    */
+  /**
+   * Fail closed on older QA/runtime backends. A single-row action MUST NOT use
+   * the pre-existing batch endpoint: that endpoint has no idea which row the
+   * new UI intended and would legally persist every READY row.
+   * This is just a scoped doorway to the SAME canonical transactional writer.
+   */
+  @Post(':batchId/rows/:rowId/keep-private')
+  @Permissions(PERMISSIONS.BASIC_PRICE_SUBMIT)
+  async keepOneReadyRowPrivate(
+    @Req() request: any,
+    @Param('batchId') batchId: string,
+    @Param('rowId') rowId: string,
+    @Body() body?: { expectedRowVersion?: number },
+  ) {
+    const actor = await this.trustedActor.resolveActor(
+      request.workspaceContext, request.user?.id,
+    );
+    return this.privateAssetService.keepBatchPrivate({
+      batchId, actor, onlyRowId: rowId,
+      expectedRowVersion: body?.expectedRowVersion,
+    });
+  }
+
   @Post(':batchId/keep-private')
   @Permissions(PERMISSIONS.BASIC_PRICE_SUBMIT)
   async keepBatchPrivate(
@@ -656,6 +699,30 @@ export class BasicPriceImportController {
   }
 
   /**
+   * BP-C2 — reconcile TWO EXISTING imported private prices after the owner
+   * confirms that one corrected the other. Uses the existing currentness
+   * relation and provenance journal. No third Basic Price is created.
+   */
+  @Post('prices/:priceId/reconcile-imported-correction')
+  @Permissions(PERMISSIONS.BASIC_PRICE_SUBMIT)
+  async reconcileImportedPrivateCorrection(
+    @Req() request: RequestIdentity,
+    @Param('priceId') priceId: string,
+    @Body() dto: ReconcileImportedPrivateCorrectionDto,
+  ) {
+    const actor = await this.trustedActor.resolveActor(
+      request.workspaceContext, request.user?.id,
+    );
+    return this.privateAssetService.reconcileImportedPrivateCorrection({
+      actor, previousPriceId: priceId,
+      correctedPriceId: dto.correctedPriceId,
+      expectedPreviousValue: dto.expectedPreviousValue,
+      expectedCorrectedValue: dto.expectedCorrectedValue,
+      reason: dto.reason,
+    });
+  }
+
+  /**
    * BP-CHANGE-SEM-03 — later lawful private price observation.
    *
    * Same BASIC_PRICE_SUBMIT as keep-private / correction. Does not claim
@@ -682,6 +749,7 @@ export class BasicPriceImportController {
       reason: dto.reason,
       sameSource: dto.sameSource,
       sourceIdentityName: dto.sourceIdentityName,
+      sourceOrigin: dto.sourceOrigin,
     });
   }
 

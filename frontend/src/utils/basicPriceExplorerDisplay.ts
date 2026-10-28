@@ -33,7 +33,15 @@ export interface ExplorerResourceIdentity {
   name: string;
   type: string;
   baseUnit: string;
+  /** Unit Kernel-verified presentation symbol; null means unresolved. */
+  displayUnit?: string | null;
 }
+
+/** One screen-wide representation, never a guessed unit conversion. */
+export const explorerVerifiedUnitLabel = (resource: ExplorerResourceIdentity): string =>
+  resource.displayUnit === undefined
+    ? resource.baseUnit // Legacy API compatibility only.
+    : resource.displayUnit || 'Perlu verifikasi';
 
 export type BasicPriceWorkspaceScope = 'WORKSPACE' | 'GLOBAL';
 
@@ -520,4 +528,44 @@ export const reverificationLine = (
   if (!item.reviewDate || item.reverification === 'NOT_RECOMMENDED') return null;
   const base = `${REVERIFICATION_LABEL} ${formatDate(item.reviewDate)}`;
   return item.reverification === 'DUE' ? `${base} · ${REVERIFICATION_DUE_BADGE}` : base;
+};
+
+/** BP-C2: selection-only UI offer. Backend remains the authority. */
+export const canLinkExistingImportedPricePair = (
+  a: BasicPriceExplorerItem, b: BasicPriceExplorerItem,
+): boolean =>
+  a.assetScope === 'WORKSPACE_PRIVATE' &&
+  b.assetScope === 'WORKSPACE_PRIVATE' &&
+  a.resource.id === b.resource.id &&
+  a.region?.id === b.region?.id &&
+  (a.regionCoverageSummary ?? null) === (b.regionCoverageSummary ?? null) &&
+  Boolean(a.sourceName?.trim()) &&
+  a.sourceName?.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLocaleLowerCase('id-ID') ===
+    b.sourceName?.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLocaleLowerCase('id-ID') &&
+  a.effectiveDate === b.effectiveDate &&
+  a.sourceType === b.sourceType &&
+  a.sourceOrigin === b.sourceOrigin &&
+  a.price !== b.price;
+
+/** Stable identity of the exact two rows a correction decision is about. */
+export const basicPriceCorrectionPairKey = (
+  basicPriceIds: readonly string[],
+): string | null => {
+  const unique = [...new Set(basicPriceIds)];
+  if (unique.length !== 2) return null;
+  return unique.sort().join('\u0000');
+};
+
+/** Consent for A/B can authorize only that exact pair and one of its rows. */
+export const correctionConsentMatchesPair = (
+  consentPairKey: string | null,
+  currentBasicPriceIds: readonly string[],
+  winnerId: string,
+  confirmed: boolean,
+): boolean => {
+  const currentPairKey = basicPriceCorrectionPairKey(currentBasicPriceIds);
+  return confirmed &&
+    consentPairKey !== null &&
+    consentPairKey === currentPairKey &&
+    currentBasicPriceIds.includes(winnerId);
 };
