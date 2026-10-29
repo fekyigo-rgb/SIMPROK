@@ -118,12 +118,15 @@ export type ConfirmImportFigures = {
   willSave: number;
   needsReview: number;
   cannotSave: number;
+  /** Matches whose canonical AHSP was deleted, never an active reusable AHSP. */
+  deleted: number;
 };
 
 export const confirmImportFigures = (
   items: ReadonlyArray<{
     admission?: string | null;
     identityVerdict?: string | null;
+    identityMatches?: ReadonlyArray<{ deleted?: boolean | null }> | null;
   }>,
 ): ConfirmImportFigures => ({
   understood: items.length,
@@ -131,7 +134,17 @@ export const confirmImportFigures = (
   willSave: confirmImportDoorRows(items, 'willSave').length,
   needsReview: confirmImportDoorRows(items, 'review').length,
   cannotSave: items.filter((item) => admissionOf(item) === 'HELD').length,
+  deleted: items.filter((item) => isDeletedIdentical(item)).length,
 });
+
+/** A soft-deleted canonical parent retains its unique key but cannot be adopted as an active recipe. */
+export function isDeletedIdentical(item: {
+  identityVerdict?: string | null;
+  identityMatches?: ReadonlyArray<{ deleted?: boolean | null }> | null;
+}): boolean {
+  return item.identityVerdict === 'IDENTICAL' &&
+    (item.identityMatches ?? []).some((match) => match.deleted === true);
+}
 
 /** One canonical disposition is used by counters and by their detail doors. */
 export type ConfirmImportDoor = 'understood' | 'existing' | 'willSave' | 'review';
@@ -139,16 +152,18 @@ export type ConfirmImportDoor = 'understood' | 'existing' | 'willSave' | 'review
 export function confirmImportDoorRows<T extends {
   admission?: string | null;
   identityVerdict?: string | null;
+  identityMatches?: ReadonlyArray<{ deleted?: boolean | null }> | null;
 }>(items: ReadonlyArray<T>, door: ConfirmImportDoor): Array<{ item: T; index: number }> {
   return items.flatMap((item, index) => {
     const admission = admissionOf(item);
-    const existing = item.identityVerdict === 'IDENTICAL' && admission !== 'HELD';
+    const deleted = isDeletedIdentical(item);
+    const existing = item.identityVerdict === 'IDENTICAL' && admission !== 'HELD' && !deleted;
     const held = admission === 'HELD';
-    const accepted = !existing && !held;
+    const accepted = item.identityVerdict !== 'IDENTICAL' && !held;
     const matches = door === 'understood' ||
       (door === 'existing' && existing) ||
       (door === 'willSave' && accepted) ||
-      (door === 'review' && (held || (accepted && admission === 'IDENTITY_PENDING')));
+      (door === 'review' && (deleted || held || (accepted && admission === 'IDENTITY_PENDING')));
     return matches ? [{ item, index }] : [];
   });
 }
@@ -184,20 +199,23 @@ const whole = (value: number | null | undefined): number =>
  * Does not change disposition/count math — only the spoken projection.
  */
 export const previewIntakeLine = (
-  items: ReadonlyArray<{ admission?: string | null; identityVerdict?: string | null }>,
+  items: ReadonlyArray<{ admission?: string | null; identityVerdict?: string | null; identityMatches?: ReadonlyArray<{ deleted?: boolean | null }> | null }>,
 ): string => {
   if (items.length === 0) return 'Tidak ada pekerjaan yang dapat dikenali dari dokumen ini.';
   const figures = confirmImportFigures(items);
-  const readyForUse = items.filter((item) => admissionOf(item) === 'PROVEN').length;
+  const readyForUse = items.filter((item) => admissionOf(item) === 'PROVEN' && item.identityVerdict !== 'IDENTICAL').length;
   const parts = [
     figures.understood + ' pekerjaan dikenali',
-    figures.willSave + ' dapat disimpan sekarang',
+    figures.willSave + ' calon AHSP baru dapat disimpan sekarang',
     figures.cannotSave + ' ditahan (belum dapat disimpan)',
     figures.needsReview + ' masih perlu ditinjau',
     readyForUse + ' siap digunakan setelah disimpan (lengkap dan terbukti)',
   ];
   if (figures.already > 0) {
-    parts.splice(2, 0, figures.already + ' sudah ada di SIMPROK (tidak disimpan dua kali)');
+    parts.splice(2, 0, figures.already + ' AHSP masih ada di SIMPROK (belum tentu siap digunakan)');
+  }
+  if (figures.deleted > 0) {
+    parts.splice(2, 0, figures.deleted + ' AHSP cocok dengan riwayat yang sudah dihapus dan memerlukan penanganan tersendiri');
   }
   return parts.join('. ') + '.';
 };
@@ -1134,3 +1152,62 @@ export const describeImportRecheckFailure = (failure: ApiFailure): ActionOutcome
       explainStatus(failure, 'Workspace aktif Anda tidak memiliki kewenangan untuk mengimpor AHSP.'),
   ),
 });
+
+
+/**
+ * The one actionable next step for a saved Import document.
+ * This is a navigation projection ONLY: it neither resolves an identity nor
+ * changes an AHSP. If the journal cannot yet be read, do not imply completion.
+ */
+export type ReviewNextAction = 'DECIDE' | 'UNIT' | 'IDENTITY' | 'RECHECK' | 'BLOCKED' | 'VERIFY';
+export function nextSavedImportAction(
+  job: ImportJobView,
+  canCurate: boolean,
+): { kind: ReviewNextAction; title: string; explanation: string; buttonLabel: string | null } {
+  const decisions = job.waitingItems.filter((item) => item.sameness !== null).length;
+  if (decisions > 0) return {
+    kind: 'DECIDE',
+    title: 'Putuskan kesamaan AHSP terlebih dahulu',
+    explanation: decisions + ' pekerjaan perlu pilihan Anda. Setelah memilih, gunakan Periksa & simpan yang siap untuk menyampaikan keputusan kepada SIMPROK.',
+    buttonLabel: 'Mulai keputusan AHSP (' + decisions + ')',
+  };
+  const unknownUnits = job.waitingItems.reduce((sum, item) => sum + item.unknownUnits.length, 0);
+  if (unknownUnits > 0) return {
+    kind: 'UNIT',
+    title: 'Selesaikan satuan yang belum terbukti',
+    explanation: 'Gunakan pemeriksaan Unit Kernel yang sudah ada. Jangan menebak satuan dari nama pekerjaan.',
+    buttonLabel: 'Buka penyelesaian satuan',
+  };
+  const hasIdentity = job.attention.some((item) =>
+    item.tone === 'IDENTITY' || item.key === 'identity' || item.key.startsWith('identity:'),
+  );
+  if (hasIdentity) return canCurate ? {
+    kind: 'IDENTITY',
+    title: 'Tinjau identitas sumber daya dalam dokumen ini',
+    explanation: 'Satu keputusan identitas yang sama dipakai pada seluruh kemunculannya. Hasil disimpan melalui pintu tinjauan yang sudah ada.',
+    buttonLabel: 'Buka pertanyaan identitas dokumen',
+  } : {
+    kind: 'BLOCKED',
+    title: 'Identitas masih memerlukan petugas berwenang',
+    explanation: 'Akun ini tidak memiliki kewenangan memilih identitas sumber daya. Belum dapat dinyatakan selesai.',
+    buttonLabel: null,
+  };
+  if (job.canRecheck) return {
+    kind: 'RECHECK',
+    title: 'Periksa kembali dokumen tersimpan',
+    explanation: 'SIMPROK akan membaca ulang status dan keputusan yang telah dicatat. Periksa ulang tidak menjamin semua AHSP menjadi siap.',
+    buttonLabel: 'Periksa ulang status dokumen',
+  };
+  if (job.deletedAhsp > 0) return {
+    kind: 'BLOCKED',
+    title: job.deletedAhsp + ' AHSP terhapus belum mempunyai jalur pemulihan',
+    explanation: 'Riwayat tetap tersedia, tetapi belum ada tindakan pemulihan terotorisasi pada backend. Jangan membuat duplikat atau menganggapnya aktif.',
+    buttonLabel: null,
+  };
+  return {
+    kind: 'VERIFY',
+    title: 'Periksa kesiapan sebenarnya pada daftar AHSP',
+    explanation: 'Dokumen yang tersimpan belum otomatis berarti resep lengkap, memiliki harga, atau siap menghitung RAB.',
+    buttonLabel: null,
+  };
+}

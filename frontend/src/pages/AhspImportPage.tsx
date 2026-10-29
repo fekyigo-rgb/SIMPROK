@@ -19,6 +19,7 @@ import {
   workItemHasGenuineNewOnly,
   confirmImportFigures,
   confirmImportDoorRows,
+  isDeletedIdentical,
   previewIdentityQuestions,
   type ConfirmImportDoor,
   describeImportIntake,
@@ -26,6 +27,7 @@ import {
   describeImportRecheckFailure,
   describePreviewAttention,
   describeWaitingImports,
+  nextSavedImportAction,
   previewIntakeLine,
   previewUnitIssues,
   waitingUnitIssues,
@@ -366,6 +368,7 @@ export function AhspImportPage() {
   const [showAllPreviewQuestions, setShowAllPreviewQuestions] = useState(false);
   const confirmDetailRef = useRef<HTMLDivElement | null>(null);
   const primarySaveRef = useRef<HTMLButtonElement | null>(null);
+  const savedReviewActionsRef = useRef<HTMLLIElement | null>(null);
   useEffect(() => {
     if (journeyStep !== 'confirm' || !previewDetailOpen || isReviewPage) return;
     confirmDetailRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
@@ -1274,6 +1277,7 @@ export function AhspImportPage() {
     : [];
   const previewIdentityRows = previewIdentityQuestions(preview?.workItems);
   const previewIdentityUses = previewIdentityRows.reduce((sum, question) => sum + question.uses, 0);
+  const deletedReviewRows = preview?.workItems.filter(isDeletedIdentical) ?? [];
   const openConfirmDoor = (door: ConfirmImportDoor) => {
     setPreviewDetailDoor(door);
     setPreviewDetailOpen(true);
@@ -1728,6 +1732,7 @@ export function AhspImportPage() {
 
   const waitingImports = describeWaitingImports(importJobs, { canCurate });
   const selectedReviewJob = isReviewPage ? waitingImports.find((job) => job.key === reviewJobId) : null;
+  const savedReviewGuide = selectedReviewJob ? nextSavedImportAction(selectedReviewJob, canCurate) : null;
   const hasEarlierWorkOrUnreadHistory =
     waitingImports.length > 0 ||
     importHasMore ||
@@ -1743,10 +1748,13 @@ export function AhspImportPage() {
     void loadObservations('REFRESH', scope);
     navigate('/ahsp/import/review/' + encodeURIComponent(importJobId));
   };
+  // The URL identifies the saved document on direct entry or refresh. The prior
+  // page's temporary selection may be null: never hide the journal behind it.
+  const effectiveSavedImportId = isReviewPage ? reviewJobId : selectedSavedImport;
   const jobEntries = placeOutcomes(waitingImports, (job) => job.key, jobOutcomes).filter(
     (entry) => entry.kind === 'ITEM'
-      ? entry.item.key === selectedSavedImport
-      : entry.outcome.key === selectedSavedImport,
+      ? entry.item.key === effectiveSavedImportId
+      : entry.outcome.key === effectiveSavedImportId,
   );
   const dismissJob = (key: string) => setJobOutcomes((prev) => prev.filter((outcome) => outcome.key !== key));
 
@@ -1763,6 +1771,8 @@ export function AhspImportPage() {
     const job = waitingImports.find((item) => item.key === unitDoor.jobKey);
     if (job) void confirmUnitDecision(job, issue, unitDefinitionId);
   };
+
+  const runExistingImportRecheck = (job: ImportJobView, at: number) => void recheckImport(job, at);
 
   const renderUnitWorkspace = (source: 'preview' | 'job', jobKey: string | null): ReactNode => {
     if (!unitDoor || unitDoor.source !== source) return null;
@@ -1806,7 +1816,7 @@ export function AhspImportPage() {
     const decisionItems = job.waitingItems.filter((item) => item.sameness !== null);
     const recheckLabel = busy ? 'Memproses…' : 'Periksa & simpan yang siap';
     const quietRecheckLabel = busy ? 'Memproses…' : 'Periksa ulang status';
-    const recheck = () => void recheckImport(job, at);
+    const recheck = () => runExistingImportRecheck(job, at);
     // The blue action is emphasized only where something is worth checking again — a
     // change the server reported, a write to retry, or a decision the reader chose
     // that the check will carry. "Lewati" carries nothing, so it urges nothing. It is
@@ -1819,7 +1829,7 @@ export function AhspImportPage() {
         return chosen !== undefined && chosen !== 'SKIP';
       });
     return (
-      <li key={job.key} aria-label={'Import ' + job.title} className={isReviewPage ? 'ahsp-completion ahsp-completion--review' : 'ahsp-completion'}>
+      <li key={job.key} ref={isReviewPage && job.key === reviewJobId ? savedReviewActionsRef : undefined} aria-label={'Import ' + job.title} className={isReviewPage ? 'ahsp-completion ahsp-completion--review' : 'ahsp-completion'}>
         {!isReviewPage ? <span className="ahsp-curation-item__title">{job.title}</span> : null}
         <p className="ahsp-completion__summary">{job.summaryLine}</p>
         {renderAttention(
@@ -2235,9 +2245,15 @@ export function AhspImportPage() {
                 </p>
               ) : null}
               {deletedIdentical.length > 0 ? (
-                <p style={{ margin: '0 0 var(--space-2)', paddingLeft: 'var(--space-2)', borderLeft: `2px solid ${MUTED}`, color: MUTED }}>
-                  {identicalDeletedAggregateLine(distinctIdentities(deletedIdentical))}
-                </p>
+                <div className="ahsp-deleted-review-notice" role="status">
+                  <p>{identicalDeletedAggregateLine(distinctIdentities(deletedIdentical))} Pekerjaan ini memerlukan pemeriksaan riwayat; tidak boleh dianggap aktif atau dipulihkan otomatis.</p>
+                  <button type="button" className="ahsp-action ahsp-action--outline ahsp-action--compact" onClick={() => {
+                    setJourneyStep('confirm');
+                    openConfirmDoor('review');
+                  }}>
+                    Periksa {distinctIdentities(deletedIdentical)} AHSP yang dihapus
+                  </button>
+                </div>
               ) : null}
               {possibleTwins.length > 0 ? (
                 <div className="ahsp-decisions" aria-label="Kemungkinan sama dengan AHSP yang sudah ada">
@@ -2340,8 +2356,8 @@ export function AhspImportPage() {
                         <Database size={22} />
                       </span>
                       <span className="ahsp-confirm-summary__body">
-                        <span className="ahsp-confirm-summary__value">{confirmFigures.already} sudah ada di SIMPROK</span>
-                        <span className="ahsp-confirm-summary__hint">Tidak disimpan dua kali.</span>
+                        <span className="ahsp-confirm-summary__value">{confirmFigures.already} AHSP masih ada</span>
+                        <span className="ahsp-confirm-summary__hint">Tersimpan dan belum tentu siap digunakan. Tidak dibuat duplikat.</span>
                         <span className="ahsp-confirm-summary__action">Buka rincian</span>
                       </span>
                     </button>
@@ -2355,7 +2371,7 @@ export function AhspImportPage() {
                         <FileText size={22} />
                       </span>
                       <span className="ahsp-confirm-summary__body">
-                        <span className="ahsp-confirm-summary__value">{confirmFigures.willSave} akan disimpan</span>
+                        <span className="ahsp-confirm-summary__value">{confirmFigures.willSave} AHSP baru</span>
                         <span className="ahsp-confirm-summary__hint">Disimpan dari dokumen; siap digunakan hanya bila seluruh faktanya terbukti.</span>
                         <span className="ahsp-confirm-summary__action">Buka rincian</span>
                       </span>
@@ -2370,8 +2386,8 @@ export function AhspImportPage() {
                         <AlertTriangle size={22} />
                       </span>
                       <span className="ahsp-confirm-summary__body">
-                        <span className="ahsp-confirm-summary__value">{confirmFigures.needsReview} masih perlu ditinjau</span>
-                        <span className="ahsp-confirm-summary__hint">Jumlah AHSP tertahan, bukan jumlah pertanyaan identitas sumber daya.</span>
+                        <span className="ahsp-confirm-summary__value">{confirmFigures.needsReview} perlu penanganan</span>
+                        <span className="ahsp-confirm-summary__hint">Termasuk {confirmFigures.deleted} AHSP terhapus. Pertanyaan identitas dihitung terpisah.</span>
                         <span className="ahsp-confirm-summary__action">Buka rincian</span>
                       </span>
                     </button>
@@ -2385,8 +2401,8 @@ export function AhspImportPage() {
               ) : null}
               <div className="ahsp-confirm-panels">
                 <section className="ahsp-confirm-panel ahsp-confirm-panel--save">
-                  <h3 className="ahsp-section-title">{confirmFigures?.willSave === 0 ? 'Tidak ada AHSP baru untuk disimpan' : 'Apa yang akan disimpan'}</h3>
-                  {confirmFigures?.willSave === 0 ? <p className="ahsp-line ahsp-line--abu">AHSP telah dikenali sebagai data yang sudah ada. Buka kartu "Sudah ada di SIMPROK" untuk melihat daftar pekerjaan tanpa membuat duplikat.</p> : null}
+                  <h3 className="ahsp-section-title">{confirmFigures?.willSave === 0 ? 'Tidak ada induk AHSP baru' : 'Apa yang akan disimpan'}</h3>
+                  {confirmFigures?.willSave === 0 ? <p className="ahsp-line ahsp-line--abu">Tidak ada calon induk AHSP baru. {confirmFigures.deleted} identitas cocok dengan AHSP terhapus sehingga belum dapat digunakan atau dipulihkan otomatis. {confirmFigures.already} AHSP masih tersimpan, tetapi kesiapan resepnya harus dibuktikan secara terpisah.</p> : null}
                   <ul className="ahsp-confirm-checklist">
                     <li>Identitas AHSP dari dokumen</li>
                     <li>Klasifikasi &amp; konteks yang Anda pilih</li>
@@ -2419,7 +2435,9 @@ export function AhspImportPage() {
                   <p className="ahsp-confirm-info-strip" role="note">
                     <Info size={16} aria-hidden />
                     <span>
-                      AHSP tetap dapat disimpan. Peninjauan dapat dilanjutkan setelah penyimpanan tanpa mengunggah ulang berkas.
+                      {(confirmFigures?.deleted ?? 0) > 0 && (confirmFigures?.willSave ?? 0) === 0
+                        ? 'Dokumen dapat disimpan sebagai catatan impor, tetapi AHSP yang sudah dihapus tidak otomatis dipulihkan atau siap digunakan. Pertanyaan identitas tetap perlu diselesaikan.'
+                        : 'Dokumen dapat disimpan tanpa menduplikasi induk AHSP. Peninjauan dapat dilanjutkan setelah penyimpanan tanpa mengunggah ulang berkas.'}
                     </span>
                   </p>
                 </section>
@@ -2429,12 +2447,13 @@ export function AhspImportPage() {
                   <div className="ahsp-confirm-focus__header">
                     <h3 className="ahsp-section-title">
                       {previewDetailDoor === 'understood' ? 'AHSP yang dipahami' :
-                        previewDetailDoor === 'existing' ? 'AHSP yang sudah ada di SIMPROK' :
-                        previewDetailDoor === 'willSave' ? 'AHSP yang dapat disimpan' : 'Tinjauan AHSP dan identitas sumber daya'}
+                        previewDetailDoor === 'existing' ? 'AHSP yang masih tersimpan' :
+                        previewDetailDoor === 'willSave' ? 'Calon AHSP baru' : 'AHSP terhapus dan pertanyaan identitas'}
                     </h3>
                     <button type="button" className="ahsp-action ahsp-action--quiet ahsp-action--compact" onClick={() => setPreviewDetailOpen(false)}>Tutup rincian</button>
                   </div>
                   <p className="ahsp-line ahsp-line--abu">{focusedDoorRows.length} pekerjaan sesuai kartu yang dipilih. Rincian pekerjaan ada pada tabel di bawah.</p>
+                  {previewDetailDoor === 'review' && deletedReviewRows.length > 0 ? <p className="ahsp-line" role="status">{deletedReviewRows.length} pekerjaan identik dengan AHSP yang sudah dihapus. Tidak dapat digunakan, disimpan sebagai induk duplikat, atau dipulihkan otomatis. Lihat rinciannya pada tabel di bawah; pemulihan membutuhkan tindakan sah terpisah.</p> : null}
                   {previewDetailDoor === 'review' ? (
                     <section aria-label="Pertanyaan identitas dari dokumen" className="ahsp-preview-identity">
                       <h4>Pertanyaan identitas sumber daya yang belum terbukti</h4>
@@ -2501,8 +2520,10 @@ export function AhspImportPage() {
                         const condition =
                           admission === 'HELD'
                             ? { label: 'Perlu tinjauan', tone: 'review' as const }
+                            : isDeletedIdentical(item)
+                              ? { label: 'Terhapus — perlu pemeriksaan', tone: 'review' as const }
                             : item.identityVerdict === 'IDENTICAL'
-                              ? { label: 'Sudah ada', tone: 'existing' as const }
+                              ? { label: 'Masih tersimpan', tone: 'existing' as const }
                               : genuineNew
                                 ? { label: 'Resource baru — akan ditambahkan', tone: 'new' as const }
                                 : admission === 'PROVEN'
@@ -2757,6 +2778,49 @@ export function AhspImportPage() {
             {selectedReviewJob ? <span className="ahsp-import-review-status">{selectedReviewJob.historyOnlyDeleted ? 'Riwayat penghapusan' : selectedReviewJob.waitingItems.length > 0 ? 'Masih perlu dilengkapi' : 'Dokumen tersimpan'}</span> : null}
           </div>
           <ReadNotice phase={importPhase} onRetry={() => void loadImportJobs(importJobs.length === 0 ? 'INITIAL' : 'REFRESH')} label="Muat ulang dokumen tersimpan" />
+          {selectedReviewJob && savedReviewGuide ? (
+            <div className="ahsp-guided-review" aria-label="Jalur penyelesaian dokumen AHSP">
+              <p className="ahsp-guided-review__kicker">Jalur penyelesaian dokumen ini</p>
+              <ol className="ahsp-guided-review__steps">
+                <li><strong>Dokumen diterima</strong><span>Sudah dicatat. Tidak perlu mengunggah ulang.</span></li>
+                <li><strong>Selesaikan pertanyaan</strong><span>Putuskan kesamaan, satuan, atau identitas yang masih memerlukan bukti.</span></li>
+                <li><strong>Periksa ulang hasil</strong><span>Jalankan pemeriksaan server setelah keputusan benar-benar tercatat.</span></li>
+                <li><strong>Buktikan siap digunakan</strong><span>Periksa status AHSP aktif, resep, sumber daya dan harga sebelum dipakai untuk RAB.</span></li>
+              </ol>
+              <div className="ahsp-guided-review__next" role="status">
+                <strong>Langkah Anda berikutnya: {savedReviewGuide.title}</strong>
+                <p>{savedReviewGuide.explanation}</p>
+                {selectedReviewJob.deletedAhsp > 0 ? (
+                  <p><strong>{selectedReviewJob.deletedAhsp} AHSP terhapus belum aktif.</strong> Pemeriksaan tidak memulihkannya secara otomatis; pemulihan memerlukan jalur berwenang yang belum tersedia.</p>
+                ) : null}
+                {savedReviewGuide.buttonLabel ? (
+                  <button
+                    type="button"
+                    className="ahsp-action ahsp-action--primary"
+                    disabled={jobBusy !== null}
+                    onClick={() => {
+                      if (savedReviewGuide.kind === 'DECIDE') {
+                        savedReviewActionsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      } else if (savedReviewGuide.kind === 'UNIT') {
+                        setUnitDoor({ spelling: null, lineKey: null, source: 'job', jobKey: selectedReviewJob.key });
+                        savedReviewActionsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                      } else if (savedReviewGuide.kind === 'IDENTITY') {
+                        void openIdentityReview({ kind: 'importJobId', importJobId: selectedReviewJob.key });
+                      } else if (savedReviewGuide.kind === 'RECHECK') {
+                        runExistingImportRecheck(selectedReviewJob, waitingImports.findIndex((job) => job.key === selectedReviewJob.key));
+                      }
+                    }}
+                  >
+                    {savedReviewGuide.buttonLabel}
+                  </button>
+                ) : savedReviewGuide.kind === 'VERIFY' && canViewAhsp ? (
+                  <Link className="ahsp-action ahsp-action--outline" to="/ahsp">Periksa kesiapan pada daftar AHSP</Link>
+                ) : (
+                  <p className="ahsp-guided-review__blocker">Tidak ada tindakan lanjutan yang sah dari halaman ini saat ini. Statusnya belum selesai.</p>
+                )}
+              </div>
+            </div>
+          ) : null}
           {selectedReviewJob ? importJobList : importPhase === 'READY' && importMayLoadOlder ? (
             <div className="ahsp-import-review-lookup" role="status">
               <p className="ahsp-line">
