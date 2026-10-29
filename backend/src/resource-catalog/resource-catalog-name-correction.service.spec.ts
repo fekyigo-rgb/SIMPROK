@@ -154,6 +154,81 @@ describe('BP-C3 governed ACTIVE ResourceCatalog typography correction', () => {
     await expect(service.correct(request())).resolves.toMatchObject({ corrected: true });
     expect(tx.resourceCatalog.updateMany).toHaveBeenCalledTimes(1);
   });
+  it('corrects a no-code workspace-owned catalog only with exact live name, unit, source evidence and existing journal', async () => {
+    const { service, tx } = setup();
+    const local = {
+      id: 'resource-A', workspaceId: 'ws-A', status: 'ACTIVE',
+      name: 'Kawat benrdat', code: null, type: 'MATERIAL', baseUnit: 'KG',
+      specifications: null, updatedAt: before,
+    };
+    tx.resourceCatalog.findFirst.mockReset()
+      .mockResolvedValueOnce({ type: 'MATERIAL' })
+      .mockResolvedValueOnce(local);
+    tx.resourceCatalog.findUniqueOrThrow.mockResolvedValue({
+      name: 'Kawat bendrat', type: 'MATERIAL', baseUnit: 'KG', updatedAt: after,
+    });
+    const result = await service.correct(request({
+      previousName: 'Kawat benrdat',
+      correctedName: 'Kawat bendrat',
+      confirmedCatalogName: 'Kawat benrdat',
+      confirmedCatalogBaseUnit: 'KG',
+      confirmedCatalogCode: undefined,
+      nomenclatureVerified: true,
+      sourceReference: 'Penetapan kurator dan pembuktian satu material yang sama',
+    }));
+    expect(result).toMatchObject({
+      corrected: true, catalogIdentityPreserved: true, unitUnchanged: true,
+    });
+    expect(tx.resourceCatalog.updateMany).toHaveBeenCalledTimes(1);
+    expect(tx.$executeRaw).toHaveBeenCalledTimes(2); // admission lock plus journal
+  });
+
+  it('rejects a fabricated or mismatched no-code identity without any catalog write', async () => {
+    for (const [catalogName, baseUnit] of [
+      ['Kawat Beton', 'KG'],
+      ['Kawat benrdat', 'M3'],
+      ['', 'KG'],
+    ]) {
+      const { service, tx } = setup();
+      tx.resourceCatalog.findFirst.mockReset()
+        .mockResolvedValueOnce({ type: 'MATERIAL' })
+        .mockResolvedValueOnce({
+          id: 'resource-A', workspaceId: 'ws-A', status: 'ACTIVE',
+          name: 'Kawat benrdat', code: null, type: 'MATERIAL', baseUnit: 'KG',
+          specifications: null, updatedAt: before,
+        });
+      await expect(service.correct(request({
+        previousName: 'Kawat benrdat',
+        correctedName: 'Kawat bendrat',
+        confirmedCatalogName: catalogName,
+        confirmedCatalogBaseUnit: baseUnit,
+        nomenclatureVerified: true,
+        sourceReference: 'Penetapan kurator pada resource yang sama',
+      }))).rejects.toThrow();
+      expect(tx.resourceCatalog.updateMany).not.toHaveBeenCalled();
+    }
+  });
+
+  it('does not allow no-code name and unit retype to bypass the code-present branch', async () => {
+    const { service, tx } = setup();
+    tx.resourceCatalog.findFirst.mockReset()
+      .mockResolvedValueOnce({ type: 'MATERIAL' })
+      .mockResolvedValueOnce({
+        id: 'resource-A', workspaceId: 'ws-A', status: 'ACTIVE',
+        name: 'Kawat benrdat', code: 'K07', type: 'MATERIAL', baseUnit: 'KG',
+        specifications: null, updatedAt: before,
+      });
+    await expect(service.correct(request({
+      previousName: 'Kawat benrdat',
+      correctedName: 'Kawat bendrat',
+      confirmedCatalogName: 'Kawat benrdat',
+      confirmedCatalogBaseUnit: 'KG',
+      nomenclatureVerified: true,
+      sourceReference: 'Penetapan kurator pada resource yang sama',
+    }))).rejects.toThrow('CATALOG_NOMENCLATURE_CODE_MISMATCH');
+    expect(tx.resourceCatalog.updateMany).not.toHaveBeenCalled();
+  });
+
   it('must never treat a retry as a second correction', async () => {
     const { service, tx } = setup();
     tx.resourceCatalog.findFirst.mockReset()

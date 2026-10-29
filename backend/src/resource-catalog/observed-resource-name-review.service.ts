@@ -148,6 +148,15 @@ function isNarrowSpellingChange(left: string, right: string): boolean {
  * technical symbol. The exact rest of the ORIGINAL text, including strength
  * and unit, must remain byte-for-byte identical. This never resolves identity.
  */
+/**
+ * Strict source-only equipment name spacing review. All remaining original
+ * characters must match exactly: capacity, model, class and unit cannot change.
+ */
+function isFlatbedSpacingOnly(rawName: string, reviewedName: string): boolean {
+  const normal = rawName.replace(/\bFLAT BED TRUCK\b/giu, 'FLATBED TRUCK');
+  return normal !== rawName && reviewedName === normal;
+}
+
 function isConcreteFcNotationOnly(rawName: string, reviewedName: string): boolean {
   if (!/\bbeton\b/iu.test(rawName)) return false;
   const canonicalNotation = rawName.replace(/\bfc\b/giu, "f'c");
@@ -172,7 +181,8 @@ export function assertSpellingOnlyNameReview(
     throw new BadRequestException('REVIEWED_NAME_INVALID');
   }
   // Exact notation-only correction, not a blanket punctuation whitelist.
-  if (isConcreteFcNotationOnly(rawName, reviewedName)) return;
+  if (isConcreteFcNotationOnly(rawName, reviewedName) ||
+      isFlatbedSpacingOnly(rawName, reviewedName)) return;
   const raw = tokens(rawName);
   const reviewed = tokens(reviewedName);
   if (

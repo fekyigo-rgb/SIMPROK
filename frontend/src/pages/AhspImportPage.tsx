@@ -1525,7 +1525,7 @@ export function AhspImportPage() {
                 value={specDraft.value}
                 disabled={locked}
                 maxLength={240}
-                placeholder="Contoh: 40–60 HP"
+                placeholder="Salin spesifikasi persis dari nama sumber (jika ada)"
                 onChange={(event) => setEvidenceField('value', event.target.value)}
               />
             </label>
@@ -1533,7 +1533,7 @@ export function AhspImportPage() {
               Alasan kandidat berbeda (dicatat pada keputusan)
               <textarea value={specDraft.reason} disabled={locked} rows={2} maxLength={500}
                 onChange={(event) => setEvidenceField('reason', event.target.value)}
-                placeholder="Contoh: Katalog hanya menyebut Mini Excavator umum; dokumen ini membatasi daya 40–60 HP."
+                placeholder="Jelaskan perbedaan teknis kandidat dan bukti yang tertulis di dokumen"
               />
             </label>
             {!evidenceIsVisible && specDraft.value.trim().length > 0 ? (

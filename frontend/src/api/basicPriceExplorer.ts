@@ -149,6 +149,8 @@ export const correctActiveResourceCatalogName = (resourceCatalogId: string, inpu
   sameIdentityConfirmed: true;
   nomenclatureVerified?: boolean;
   confirmedCatalogCode?: string;
+  confirmedCatalogName?: string;
+  confirmedCatalogBaseUnit?: string;
   sourceReference?: string;
 }): Promise<{ corrected: true; previousName: string; correctedName: string }> =>
   requestJson(
