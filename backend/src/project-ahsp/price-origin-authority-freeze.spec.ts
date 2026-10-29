@@ -50,10 +50,11 @@ describe('RAB-TRUTH-01H price-origin authority freeze', () => {
       serviceSource.indexOf('tx.aHSPVersion.findFirst('),
       serviceSource.indexOf('ELIGIBLE_AHSP_VERSION_NOT_FOUND'),
     );
-    // Additional read-only work labels travel in that same guarded query.
-    // They must not replace, or cause a second read of, the ownership authority.
+    // Read-only work labels AND the explicit source-code proof travel in the
+    // same guarded query. Neither may replace or cause a second read of the
+    // ownership authority captured for the immutable calculation occurrence.
     expect(versionLoad).toMatch(
-      /ahsp:\s*\{\s*select:\s*\{\s*ownershipType:\s*true,\s*workType:\s*true,\s*methodName:\s*true\s*\},?\s*\}/,
+      /ahsp:\s*\{\s*select:\s*\{\s*ownershipType:\s*true,\s*workType:\s*true,\s*methodName:\s*true,\s*code:\s*true\s*\},?\s*\}/,
     );
   });
 
