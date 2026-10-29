@@ -14,6 +14,8 @@ import { RabAutoReadinessService } from './rab-auto-readiness.service';
 import { RabAutoReadinessController } from './rab-auto-readiness.controller';
 import { RabAutoProvenReuseController } from './rab-auto-04-reuse.controller';
 import { RabAutoProvenReuseService } from './rab-auto-04-reuse.service';
+import { RabAutoFirstBindController } from './rab-auto-first-bind.controller';
+import { RabAutoFirstBindService } from './rab-auto-first-bind.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, BasicPriceModule, UnitKernelModule],
@@ -21,6 +23,7 @@ import { RabAutoProvenReuseService } from './rab-auto-04-reuse.service';
     ProjectAhspController,
     RabAutoReadinessController,
     RabAutoProvenReuseController,
+    RabAutoFirstBindController,
   ],
   providers: [
     ProjectAhspService,
@@ -31,6 +34,7 @@ import { RabAutoProvenReuseService } from './rab-auto-04-reuse.service';
     GhxDecisionContextTokenService,
     RabAutoReadinessService,
     RabAutoProvenReuseService,
+    RabAutoFirstBindService,
   ],
 })
 export class ProjectAhspModule {}

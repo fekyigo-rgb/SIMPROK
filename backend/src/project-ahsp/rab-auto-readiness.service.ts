@@ -110,7 +110,12 @@ export class RabAutoReadinessService {
       { q: '', page: '1', limit: '50' },
     );
     const recommendedCount = catalog.items.filter(
-      (v) => 'preference' in v && v.preference?.recommended === true,
+      (v) =>
+        'preference' in v &&
+        v.preference != null &&
+        typeof v.preference === 'object' &&
+        'recommended' in v.preference &&
+        v.preference.recommended === true,
     ).length;
 
     let kind:

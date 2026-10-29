@@ -1805,9 +1805,48 @@ export function RabWorkspacePage() {
     const startedProject = projectId;
     setIsReusingProven(true);
     setAutoReuseNotice(null);
+    let firstBound = 0;
     let reused = 0;
     let reviewed = 0;
     try {
+      // First use the Owner-approved BOQ's EXPLICIT AHSP reference where
+      // the server proves code, full specification, unit, region and version.
+      // Existing BOQs without such source evidence remain unchanged.
+      for (let page = 1; page <= 20; page++) {
+        const query = new URLSearchParams({ page: String(page), limit: '25' });
+        const response = await apiFetch(
+          `/projects/${projectId}/ahsp-occurrences/boq-items/working-draft/auto-bind-explicit-references?${query}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ businessPricingAsOfDate: calculationAsOfDate }),
+          },
+        );
+        if (!response.ok) throw new Error('FIRST_AHSP_ASSOCIATION_UNAVAILABLE');
+        const payload: unknown = await response.json();
+        if (!payload || typeof payload !== 'object' ||
+            !('projectId' in payload) || payload.projectId !== projectId ||
+            !('page' in payload) || payload.page !== page ||
+            !('hasNext' in payload) || typeof payload.hasNext !== 'boolean' ||
+            !('results' in payload) || !Array.isArray(payload.results) ||
+            payload.results.length > 25 ||
+            !payload.results.every((row: unknown) => row && typeof row === 'object' &&
+              'boqItemId' in row && typeof row.boqItemId === 'string' &&
+              'kind' in row && typeof row.kind === 'string')) {
+          throw new Error('FIRST_AHSP_ASSOCIATION_INVALID_PROOF');
+        }
+        firstBound += payload.results.filter((row: { kind: string }) =>
+          row.kind === 'FIRST_ASSOCIATION_PROVEN_AND_LINKED').length;
+        if (draftRevisionRef.current !== startedRevision ||
+            currentProjectIdRef.current !== startedProject) {
+          setStatusMessage('Draft berubah selama pemeriksaan. Simpan perubahan lokal sebelum memuat ulang hasil server.');
+          return;
+        }
+        if (!payload.hasNext) break;
+        if (page === 20) throw new Error('FIRST_AHSP_ASSOCIATION_PAGINATION_INCOMPLETE');
+      }
+      // Next reuse ONLY previous, original governed BOQ association facts,
+      // never inferred matches or recursively reused automated decisions.
       for (let page = 1; page <= 20; page++) {
         const query = new URLSearchParams({ page: String(page), limit: '25' });
         const response = await apiFetch(
@@ -1839,12 +1878,13 @@ export function RabWorkspacePage() {
           return;
         }
         if (!payload.hasNext) {
-          const message = reused > 0
-            ? `${reused} hubungan AHSP yang sudah terbukti digunakan kembali. Harga diperiksa melalui Cost Kernel; baris lainnya tetap menunggu bukti.`
-            : `${reviewed} baris diperiksa. Belum ada keputusan asosiasi kanonis yang dapat dipakai ulang; SIMPROK tidak menebak kecocokan AHSP.`;
+          const totalLinked = firstBound + reused;
+          const message = totalLinked > 0
+            ? `${firstBound} hubungan AHSP terbukti dari referensi BOQ yang disetujui, ${reused} keputusan terdahulu dipakai ulang. Harga selanjutnya diperiksa oleh Cost Kernel; sisanya tetap menunggu bukti.`
+            : `${reviewed} baris diperiksa. Belum ada referensi AHSP atau keputusan sebelumnya yang cukup terbukti. SIMPROK tidak menebak pasangan atau harga.`;
           setAutoReuseNotice({ projectId: startedProject, date: calculationAsOfDate, message });
           setStatusMessage(message);
-          if (reused > 0) {
+          if (totalLinked > 0) {
             await handleAutoPriceReady();
           } else {
             setRetryToken((n) => n + 1);

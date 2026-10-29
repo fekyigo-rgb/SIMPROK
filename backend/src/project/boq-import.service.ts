@@ -262,6 +262,9 @@ export class BoqImportService {
         const parentId = row.parentSourceReference ? ids.get(row.parentSourceReference) ?? null : null;
         const item = await tx.boqItem.create({ data: {
           boqStructureId: draft.id, parentId, wbsCode: row.sourceCode ?? '', name: row.description,
+          // Only a dedicated, explicitly labelled BOQ column can supply an AHSP
+          // source reference. Never reinterpret wbsCode or description as code.
+          sourceAhspCode: row.itemType === 'WORK_ITEM' ? row.sourceAhspCode ?? null : null,
           itemType: row.itemType,
           quantity: new Prisma.Decimal(structural ? STRUCTURAL_ROW_STORAGE.quantity : row.quantityDecimalString!),
           unit: structural ? STRUCTURAL_ROW_STORAGE.unit : row.unitRaw!,
