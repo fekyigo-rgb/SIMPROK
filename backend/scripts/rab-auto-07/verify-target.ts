@@ -40,12 +40,26 @@ async function main() {
                  inet_server_port() AS port,
                  current_user AS actor`);
     const row = result.rows[0];
+    // PostgreSQL inet::text may show its precise IPv4 mask as 127.0.0.1/32.
+    // Only this exact loopback CIDR is accepted, not arbitrary subnets.
+    const validLoopbackHost =
+      row?.addr === expected.host || row?.addr === `${expected.host}/32`;
     if (
       row?.db !== expected.database ||
-      row.addr !== expected.host ||
+      !validLoopbackHost ||
       row.port !== expected.port ||
       row.actor !== expected.actor
     ) {
+      // Diagnostic flags only; never echo DATABASE_URL or authentication data.
+      console.error(
+        'RAB_E2E_IDENTITY_FLAGS=' +
+          JSON.stringify({
+            db: row?.db === expected.database,
+            host: validLoopbackHost,
+            port: row?.port === expected.port,
+            actor: row?.actor === expected.actor,
+          }),
+      );
       throw new Error('RAB_E2E_LIVE_DATABASE_IDENTITY_MISMATCH');
     }
     console.log('RAB_AUTO_07_ISOLATED_DATABASE_READONLY_PREFLIGHT_PASS');
