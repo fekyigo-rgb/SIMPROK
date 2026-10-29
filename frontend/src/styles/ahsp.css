@@ -2251,3 +2251,23 @@ button.ahsp-confirm-summary__card[aria-expanded="true"] {
   color: inherit;
   background: var(--simprok-white);
 }
+
+/* Private resolution first; shared-catalog learning is explicitly separate. */
+.ahsp-private-identity-guidance {
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: var(--simprok-surface-light);
+}
+.ahsp-shared-learning-optional {
+  margin-block: 10px;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.ahsp-shared-learning-optional > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.ahsp-shared-learning-optional[open] {
+  background: var(--simprok-surface-light);
+}

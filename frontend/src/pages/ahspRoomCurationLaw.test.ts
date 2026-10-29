@@ -92,7 +92,10 @@ test("SIMPROK asks for confirmation and never declares a match on its own behalf
     !importPage.includes("Ini padanannya"),
     "the page must not assert an equivalence SIMPROK has not proved",
   );
-  assert.ok(importPage.includes("Benar, ini sama dengan"));
+  // Basic Price-parity wording remains a human CHOICE, never a machine assertion.
+  assert.ok(importPage.includes("'Gunakan Pilihan: ' + choice.name"));
+  assert.ok(importPage.includes("onClick={() => void curateExisting(group, at, choice, remember)}"));
+  assert.ok(importPage.includes("view.candidateChoices.map"));
 });
 
 test("a nomination too weak to act on is shown but never actionable", () => {
