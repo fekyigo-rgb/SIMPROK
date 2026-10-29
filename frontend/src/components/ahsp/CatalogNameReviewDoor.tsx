@@ -113,9 +113,9 @@ export function CatalogNameReviewDoor({
 
   return (
     <details className="ahsp-catalog-name-door">
-      <summary>Nama padanan katalog kurang tepat? Periksa nama katalog (BP-C3)</summary>
+      <summary>Nama padanan di katalog kurang tepat? Periksa namanya</summary>
       <p className="ahsp-line ahsp-line--abu">
-        Ini bukan koreksi nama Excel dan bukan keputusan padanan. SIMPROK memakai pemeriksaan dampak dan layanan koreksi katalog yang juga dipakai Basic Price. Resource ID tidak diganti.
+        Jika nama dalam Excel juga salah, gunakan “Perbaiki ejaan sumber” di atas. Bagian ini hanya memeriksa dan membenahi nama katalog SIMPROK, bukan memilih padanan atau membuat item baru. Pemeriksaannya sama dengan di Basic Price.
       </p>
       <p className="ahsp-line">Nama katalog saat ini: <strong>{resourceName}</strong></p>
       {!canPreview ? (

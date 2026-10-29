@@ -27,8 +27,9 @@ test('four-condition handling never confuses source spelling with existing catal
   assert.match(ahsp, /resourceCatalogId=\{choice\.resourceCatalogId\}/);
   assert.match(ahsp, /resourceName=\{choice\.name\}/);
   assert.match(ahsp, /onClick=\{\(\) => void curateExisting\(group, at, choice, remember\)\}/);
-  assert.match(door, /Ini bukan koreksi nama Excel dan bukan keputusan padanan/);
-  assert.match(door, /Resource ID tidak diganti/);
+  assert.match(door, /Jika nama dalam Excel juga salah, gunakan/);
+  assert.match(door, /bukan memilih padanan atau membuat item baru/);
+  assert.match(door, /Pemeriksaannya sama dengan di Basic Price/);
   assert.match(css, /\.ahsp-catalog-name-door/);
 });
 
