@@ -15,7 +15,10 @@ test('manual consecutive saves reuse ONE existing server route and keep assisted
   assert.ok(manual.includes("if (saveMode === 'another')"));
   assert.ok(manual.includes("navigate('/ahsp/' + created.id)"));
   const success = manual.slice(manual.indexOf('committed = true;'), manual.indexOf('} catch {', manual.indexOf('committed = true;')));
-  assert.ok(success.includes("setLastSaved({ id: created.id, name: uraian });"));
+  assert.ok(success.includes('setLastSaved({'));
+  assert.ok(success.includes('id: created.id'));
+  assert.ok(success.includes('name: uraian'));
+  assert.ok(success.includes('manualSaveDisposition(created.disposition)'));
   for (const reset of ["setMethodName('')", "setCode('')", "setKeterangan('')", "setOutputUnit('')", "setLabor([])", "setMaterial([])", "setEquipment([])"]) {
     assert.ok(success.includes(reset), reset);
   }

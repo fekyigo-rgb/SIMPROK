@@ -40,6 +40,7 @@ import {
 import { parseCoefficientInput } from '../utils/ahspCompositionDisplay';
 import { emptyAssistedContext } from '../utils/ahspAssistedContext';
 import { manualAdmissionFailure } from '../utils/ahspManualAdmission';
+import { manualSaveDisposition, manualSaveOutcomeMessage, type ManualSaveDisposition } from '../utils/ahspManualSaveOutcome';
 import { unitSuggestionLabels } from '../utils/unitSuggestionLabel';
 import '../styles/ahsp.css';
 
@@ -656,7 +657,7 @@ export function AhspManualPage(): ReactNode {
   const [assisted, setAssisted] = useState<AssistedClassificationContext>(() => emptyAssistedContext());
   const [methodName, setMethodName] = useState('');
   const methodNameInputRef = useRef<HTMLInputElement>(null);
-  const [lastSaved, setLastSaved] = useState<{ id: string; name: string } | null>(null);
+  const [lastSaved, setLastSaved] = useState<{ id: string; name: string; disposition: ManualSaveDisposition; resourceReviewPrepared?: boolean } | null>(null);
   const [itemSerial, setItemSerial] = useState(0);
   const [code, setCode] = useState('');
   const [keterangan, setKeterangan] = useState('');
@@ -922,9 +923,9 @@ export function AhspManualPage(): ReactNode {
               }
               return;
             }
-            const created = (await response.json()) as { id?: string };
+            const created = (await response.json()) as { id?: unknown; disposition?: unknown; resourceReviewPrepared?: unknown };
             if (typeof created.id !== 'string' || created.id === '') {
-              setError('Server tidak mengembalikan identitas AHSP yang baru dibuat.');
+              setError('Server tidak mengembalikan identitas AHSP untuk hasil penyimpanan. Periksa Ruang AHSP sebelum mengulang tindakan.');
               return;
             }
             committed = true;
@@ -947,7 +948,12 @@ export function AhspManualPage(): ReactNode {
               setLaborFailed(false);
               setMaterialFailed(false);
               setEquipmentFailed(false);
-              setLastSaved({ id: created.id, name: uraian });
+              setLastSaved({
+                id: created.id,
+                name: uraian,
+                disposition: manualSaveDisposition(created.disposition),
+                resourceReviewPrepared: typeof created.resourceReviewPrepared === 'boolean' ? created.resourceReviewPrepared : undefined,
+              });
               setItemSerial((previous) => previous + 1);
               submitLock.current = false;
               setBusy(false);
@@ -992,8 +998,8 @@ export function AhspManualPage(): ReactNode {
         </section>
 
         {lastSaved ? (
-          <div role="status" className="ahsp-manual-saved" style={{ marginBottom: 'var(--space-3)', color: 'var(--simprok-success-green-600, #2E9E6B)' }}>
-            AHSP “{lastSaved.name}” berhasil disimpan. Klasifikasi dan konteks tetap tersedia untuk AHSP berikutnya.{' '}
+          <div role="status" className="ahsp-manual-saved" style={{ marginBottom: 'var(--space-3)', color: lastSaved.disposition === 'UNCONFIRMED' || lastSaved.resourceReviewPrepared === false ? 'var(--simprok-warning-700, #A15C00)' : 'var(--simprok-success-green-600, #2E9E6B)' }}>
+            {manualSaveOutcomeMessage(lastSaved)} Klasifikasi dan konteks tetap tersedia untuk AHSP berikutnya.{' '}
             <Link to={'/ahsp/' + lastSaved.id}>Lihat AHSP tersimpan</Link>
           </div>
         ) : null}
