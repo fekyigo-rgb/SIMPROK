@@ -18,7 +18,7 @@ import { presentAhspIdentity } from '../utils/ahspIdentityDisplay';
 import '../styles/ahsp.css';
 import '../styles/ahspDetailApproved.css';
 import '../styles/ahspDetailUpdateResponsive.css';
-import { presentedUnitLabel } from '../utils/unitSuggestionLabel';
+import { presentedAhspOutputUnitSymbol, presentedUnitLabel } from '../utils/unitSuggestionLabel';
 import { UsulkanSimprokDialog } from '../components/ahsp/UsulkanSimprokDialog';
 import { AhspClassificationRevisionPanel } from '../components/AhspClassificationRevisionPanel';
 import {
@@ -536,7 +536,7 @@ export function AhspDetailPage() {
     });
   };
 
-  const presentedOutputUnit = presentedUnitLabel({
+  const presentedOutputUnit = presentedAhspOutputUnitSymbol({
     stored: currentVersion?.outputUnit,
     displayName: currentVersion?.outputUnitDisplayName,
     symbol: currentVersion?.outputUnitSymbol,
@@ -1664,7 +1664,7 @@ export function AhspDetailPage() {
                     <tr key={version.id}>
                       <td>{version.versionNumber != null ? `Versi ${version.versionNumber}` : '—'}</td>
                       <td>{version.regulationReference || '—'}</td>
-                      <td>{presentedUnitLabel({ stored: version.outputUnit, displayName: version.outputUnitDisplayName, symbol: version.outputUnitSymbol, code: version.outputUnitCode }) || '—'}</td>
+                      <td>{presentedAhspOutputUnitSymbol({ stored: version.outputUnit, displayName: version.outputUnitDisplayName, symbol: version.outputUnitSymbol, code: version.outputUnitCode }) || '—'}</td>
                       <td>{version.effectiveDate ? formatIndoDate(version.effectiveDate) : '—'}</td>
                       <td>{historyStatusLabel(version.status)}</td>
                     </tr>

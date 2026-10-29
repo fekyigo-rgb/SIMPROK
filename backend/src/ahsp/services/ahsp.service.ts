@@ -609,7 +609,7 @@ export class AhspService {
             regulationReference: true,
             // Existing Unit Kernel resolution attached to each AHSP version.
             // List projects its verified symbol; stored source value stays intact.
-            outputUnitDefinition: { select: { symbol: true } },
+            outputUnitDefinition: { select: { code: true, symbol: true } },
           },
         },
         _count: { select: { versions: true } },

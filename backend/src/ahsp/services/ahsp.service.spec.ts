@@ -863,7 +863,7 @@ describe('AhspService', () => {
         select: {
           outputUnit: true,
           regulationReference: true,
-          outputUnitDefinition: { select: { symbol: true } },
+          outputUnitDefinition: { select: { code: true, symbol: true } },
         },
       });
       expect(call.select.versions.where).toBeUndefined();

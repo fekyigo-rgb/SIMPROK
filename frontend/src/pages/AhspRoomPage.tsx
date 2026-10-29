@@ -6,6 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { canProposeAhsp } from '../utils/ahspProposalStatus';
 import { USULKAN_TOOLTIP } from '../utils/ahspProposalCopy';
 import { presentAhspIdentity } from '../utils/ahspIdentityDisplay';
+import { presentedAhspOutputUnitSymbol } from '../utils/unitSuggestionLabel';
 import {
   NETWORK_FAILURE,
   describeBulkDelete,
@@ -52,7 +53,7 @@ type AhspRow = {
   reviewStatus: string | null;
   proposedAt: string | null;
   archivedAt: string | null;
-  versions?: Array<{ outputUnit: string | null; regulationReference: string | null; outputUnitDefinition?: { symbol: string | null } | null }> | null;
+  versions?: Array<{ outputUnit: string | null; regulationReference: string | null; outputUnitDefinition?: { code: string | null; symbol: string | null } | null }> | null;
 };
 
 type RoomState =
@@ -201,7 +202,7 @@ export function AhspRoomPage() {
           ? paths.map((path) => path.jenisPekerjaan).filter(Boolean).join(' · ')
           : identity.workType;
         case 'DESCRIPTION': return row.methodName;
-        case 'UNIT': return row.versions?.[0]?.outputUnitDefinition?.symbol ?? row.versions?.[0]?.outputUnit;
+        case 'UNIT': return presentedAhspOutputUnitSymbol({ stored: row.versions?.[0]?.outputUnit, code: row.versions?.[0]?.outputUnitDefinition?.code, symbol: row.versions?.[0]?.outputUnitDefinition?.symbol });
         case 'CATEGORY': return paths.length > 0
           ? paths.map((path) => path.kategori).filter(Boolean).join(' · ')
           : row.fieldCategory;
@@ -593,7 +594,7 @@ export function AhspRoomPage() {
                             <td>{orDash(identity.code)}</td>
                             <td>{orDash(jenisLabel)}</td>
                             <td>{orDash(row.methodName)}</td>
-                            <td>{orDash(row.versions?.[0]?.outputUnitDefinition?.symbol ?? row.versions?.[0]?.outputUnit)}</td>
+                            <td>{orDash(presentedAhspOutputUnitSymbol({ stored: row.versions?.[0]?.outputUnit, code: row.versions?.[0]?.outputUnitDefinition?.code, symbol: row.versions?.[0]?.outputUnitDefinition?.symbol }))}</td>
                             <td>{orDash(kategoriLabel)}</td>
                             <td style={{ whiteSpace: 'nowrap' }}>
                               <Link to={'/ahsp/' + row.id} className="ahsp-action ahsp-action--outline ahsp-action--compact ahsp-action--view">

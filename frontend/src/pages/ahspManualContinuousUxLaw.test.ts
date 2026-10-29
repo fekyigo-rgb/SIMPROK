@@ -35,8 +35,9 @@ test('both save actions are honest; success requires a persisted server identifi
 });
 
 test('AHSP Explorer displays the authoritative unit symbol without changing stored outputUnit', () => {
-  assert.ok(backend.includes('outputUnitDefinition: { select: { symbol: true } }'));
-  assert.ok(room.includes("row.versions?.[0]?.outputUnitDefinition?.symbol ?? row.versions?.[0]?.outputUnit"));
+  assert.ok(backend.includes('outputUnitDefinition: { select: { code: true, symbol: true } }'));
+  assert.ok(room.includes('presentedAhspOutputUnitSymbol({ stored: row.versions?.[0]?.outputUnit'));
+  assert.ok(room.includes('code: row.versions?.[0]?.outputUnitDefinition?.code'));
   assert.ok(room.includes("r.versions?.[0]?.outputUnit ?? ''"), 'export keeps original source value');
   assert.ok(!room.includes('normalizeUnitAlias'), 'no second unit resolver in Explorer');
 });
