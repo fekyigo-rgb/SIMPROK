@@ -1,10 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { useLocation, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft, FileInput, FileText } from 'lucide-react';
+import { useAuth } from '../contexts/AuthContext';
 import {
   ImportRequestError,
   IntakeRefusalError,
   getBasicPriceImportBatch,
+  listBasicPriceImportHistory,
+  dismissBasicPriceUnfinishedHistory,
+  type BasicPriceImportHistoryPage,
   previewBasicPriceImport,
   updateBasicPriceImportBatch,
   type BasicPriceImportMetadata,
@@ -83,6 +87,7 @@ export const FILE_REPLACE_CONFIRMATION =
  * through `metadataGateView` and `reimportDecisionView` exactly as before.
  */
 export function BasicPriceImportPage() {
+  const { activeWorkspaceId } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   // Present only on the reopen route. Absent for a fresh upload, which is why
@@ -90,6 +95,9 @@ export function BasicPriceImportPage() {
   const { batchId: reopenBatchId } = useParams<{ batchId: string }>();
   const usedExistingFromNav = Boolean(
     (location.state as { usedExisting?: boolean } | null)?.usedExisting,
+  );
+  const showHistoryFromNav = Boolean(
+    (location.state as { showImportHistory?: boolean } | null)?.showImportHistory,
   );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -110,6 +118,12 @@ export function BasicPriceImportPage() {
   const [coveredVillages, setCoveredVillages] = useState<RegionLookupItem[]>([]);
   const [isBusy, setIsBusy] = useState(false);
   const [statusMessage, setStatusMessage] = useState('Pilih berkas daftar harga (XLSX atau CSV) untuk memulai.');
+  const [importHistory, setImportHistory] = useState<BasicPriceImportHistoryPage | null>(null);
+  const [historyBusy, setHistoryBusy] = useState(false);
+  const [dismissingBatchId, setDismissingBatchId] = useState<string | null>(null);
+  const [historySuccess, setHistorySuccess] = useState<string | null>(null);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const historyScopeRef = useRef(activeWorkspaceId);
   // USI-01 — the answers a human has given about THIS file. Empty on the first
   // attempt: SIMPROK asks nothing until the source proves it must.
   const [selection, setSelection] = useState<BasicPriceIntakeSelection>({});
@@ -127,6 +141,89 @@ export function BasicPriceImportPage() {
    */
   const [isMetadataDirty, setIsMetadataDirty] = useState(false);
   const [usedExistingNotice, setUsedExistingNotice] = useState(usedExistingFromNav);
+
+  // Existing batches already carry source rows and committed decisions.
+  // This read adds discoverability only; never creates a second draft database.
+  // Do not claim temporary, unconfirmed picker selections have been saved.
+  useEffect(() => {
+    let alive = true;
+    historyScopeRef.current = activeWorkspaceId;
+    setImportHistory(null);
+    setHistoryError(null);
+    if (!activeWorkspaceId) { setHistoryBusy(false); return; }
+    const scope = activeWorkspaceId;
+    setHistoryBusy(true);
+    void listBasicPriceImportHistory().then((result) => {
+      if (alive && historyScopeRef.current === scope) setImportHistory(result);
+    }).catch(() => {
+      if (alive && historyScopeRef.current === scope) {
+        setHistoryError('Riwayat belum dapat dibaca. Data impor tidak dihapus; coba muat ulang.');
+      }
+    }).finally(() => {
+      if (alive && historyScopeRef.current === scope) setHistoryBusy(false);
+    });
+    return () => { alive = false; };
+  }, [location.pathname, activeWorkspaceId]);
+
+  const dismissDraft = async (item: BasicPriceImportHistoryPage['items'][number]) => {
+    if (historyBusy || dismissingBatchId) return;
+    if (item.savedPrivateRows > 0 || item.submittedRows > 0 ||
+        ['SUBMITTED', 'PARTIALLY_SUBMITTED', 'APPROVED_FOR_SUBMISSION'].includes(item.status)) return;
+    if (!window.confirm(
+      `Hapus draft "${item.sourceFileName}" dari Riwayat Impor?\n\n` +
+      'Hanya draft yang belum mempunyai harga privat/pengajuan. ' +
+      'Dokumen sumber dan riwayat audit tetap dicatat untuk pemeriksaan. ' +
+      'Tindakan ini menyembunyikan batch dari riwayat aktif, bukan menghapus data secara fisik.',
+    )) return;
+    setDismissingBatchId(item.batchId);
+    setHistoryError(null);
+    setHistorySuccess(null);
+    try {
+      const result = await dismissBasicPriceUnfinishedHistory(item.batchId);
+      if (!result.hiddenFromHistory || result.batchId !== item.batchId) {
+        throw new Error('DISMISS_READBACK_NOT_CONFIRMED');
+      }
+      const refreshed = await listBasicPriceImportHistory();
+      setImportHistory(refreshed);
+      setHistorySuccess('Draft dikeluarkan dari Riwayat aktif. Bukti sumber dan audit tetap tersimpan.');
+    } catch (error) {
+      setHistoryError(error instanceof ImportRequestError
+        ? error.httpStatus === 409
+          ? 'Draft tidak boleh dihapus: sudah ada harga tersimpan, pengajuan, atau perubahan keadaan. Muat ulang riwayat.'
+          : importRequestMessage(error.httpStatus)
+        : 'Belum dapat memastikan penghapusan draft dari riwayat. Jangan ulangi sebelum memuat ulang.');
+    } finally {
+      setDismissingBatchId(null);
+    }
+  };
+
+  const loadMoreHistory = async () => {
+    if (!importHistory?.hasNext || historyBusy) return;
+    const page = importHistory.page + 1;
+    const scope = activeWorkspaceId;
+    if (!scope) return;
+    setHistoryBusy(true);
+    setHistoryError(null);
+    try {
+      const result = await listBasicPriceImportHistory(page);
+      if (historyScopeRef.current !== scope) return;
+      setImportHistory((current) => current && current.page === page - 1
+        ? {
+            items: [...current.items, ...result.items],
+            page: result.page,
+            hasNext: result.hasNext,
+          }
+        : current);
+    } catch (error) {
+      if (historyScopeRef.current === scope) {
+        setHistoryError(error instanceof ImportRequestError
+          ? importRequestMessage(error.httpStatus)
+          : 'Halaman riwayat berikutnya belum terbaca. Riwayat yang sudah tampil tetap tersedia.');
+      }
+    } finally {
+      if (historyScopeRef.current === scope) setHistoryBusy(false);
+    }
+  };
 
   const updateMetadataField = <K extends keyof BasicPriceImportMetadata>(key: K, value: BasicPriceImportMetadata[K]) => {
     setMetadata((current) => ({ ...current, [key]: value }));
@@ -397,7 +494,10 @@ export function BasicPriceImportPage() {
         <button
           type="button"
           className="bp-btn bp-btn--sm"
-          onClick={() => navigate('/basic-price')}
+          onClick={() => {
+            if (isMetadataDirty && !window.confirm('Konteks Sumber yang belum ditekan Simpan tidak tercatat dalam Riwayat. Keluar tanpa menyimpan perubahan ini?')) return;
+            navigate('/basic-price');
+          }}
           title="Kembali ke daftar Basic Price"
           aria-label="Kembali ke daftar Basic Price"
         >
@@ -453,6 +553,66 @@ export function BasicPriceImportPage() {
         crossing between the two rooms does not lose the thread.
       */}
       <BasicPriceJourneyStepper batch={batch} />
+
+      <details className="bp-details" open={showHistoryFromNav} aria-label="Riwayat Impor Basic Price">
+        <summary>Riwayat Impor Basic Price — lanjutkan pekerjaan yang belum selesai</summary>
+        <p className="bp-field__help">
+          Item yang sudah <strong>Simpan Privat</strong> tetap menjadi harga tersimpan.
+          Baris yang masih Perlu Tinjauan tetap dalam batch semula; tidak perlu unggah ulang.
+          Pilihan sementara yang belum dikonfirmasi pada formulir bukan keputusan tersimpan.
+        </p>
+        {historyBusy && !importHistory ? <p role="status">Memuat riwayat impor...</p> : null}
+        {historyError ? <p role="alert">{historyError}</p> : null}
+        {historySuccess ? <p role="status">{historySuccess}</p> : null}
+        {!historyBusy && importHistory?.items.length === 0
+          ? <p className="bp-field__help">Belum ada batch impor milik akun ini di ruang kerja ini.</p>
+          : null}
+        {importHistory && importHistory.items.length > 0 ? (
+          <ul className="bp-stack" aria-label="Batch impor yang dapat dilanjutkan">
+            {importHistory.items.map((entry) => (
+              <li key={entry.batchId} className="bp-note" style={{ listStyle: 'none' }}>
+                <strong>{entry.sourceFileName}</strong>
+                <p className="bp-field__help">
+                  Sheet {entry.selectedSheetName} · diterima {new Date(entry.createdAt).toLocaleDateString('id-ID')}
+                </p>
+                <p className="bp-field__help">
+                  <strong>{entry.savedPrivateRows} disimpan privat</strong>
+                  {' · '}{entry.pendingRows} perlu ditinjau
+                  {' · '}{entry.readyToSaveRows} siap disimpan
+                  {' · '}{entry.rejectedRows} ditolak
+                  {' · '}dari {entry.totalRows} baris
+                </p>
+                <div className="bp-rowcard__actions">
+                  <button type="button" className="bp-btn bp-btn--primary bp-btn--sm"
+                    onClick={() => navigate(`/basic-price/import/${entry.batchId}/review`)}>
+                    Lanjut Pemeriksaan
+                  </button>
+                  <button type="button" className="bp-btn bp-btn--sm"
+                    onClick={() => navigate(`/basic-price/import/${entry.batchId}`)}>
+                    Periksa Konteks Sumber
+                  </button>
+                  <button type="button" className="bp-btn bp-btn--sm"
+                    disabled={historyBusy || !!dismissingBatchId || entry.savedPrivateRows > 0 ||
+                      entry.submittedRows > 0 ||
+                      ['SUBMITTED', 'PARTIALLY_SUBMITTED', 'APPROVED_FOR_SUBMISSION'].includes(entry.status)}
+                    title={entry.savedPrivateRows > 0 || entry.submittedRows > 0
+                      ? 'Tidak bisa menghapus: batch sudah memiliki harga privat atau pengajuan.'
+                      : 'Sembunyikan draft dari riwayat aktif; dokumen dan audit tetap tersimpan.'}
+                    onClick={() => void dismissDraft(entry)}>
+                    {dismissingBatchId === entry.batchId ? 'Memproses...' : 'Hapus Draft dari Riwayat'}
+                  </button>
+                </div>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {importHistory?.hasNext ? (
+          <button type="button" className="bp-btn bp-btn--sm"
+            disabled={historyBusy} onClick={() => void loadMoreHistory()}>
+            {historyBusy ? 'Memuat...' : 'Lihat riwayat lebih lama'}
+          </button>
+        ) : null}
+      </details>
 
       {question?.kind === 'file-composition' ? (
         <p className="bp-mixed-decision__notice" aria-live="polite">

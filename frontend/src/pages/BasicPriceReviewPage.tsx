@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useBlocker, useNavigate, useParams } from 'react-router-dom';
 import { ArrowLeft } from 'lucide-react';
 import {
   smartSaveBatch,
@@ -267,6 +267,25 @@ export function BasicPriceReviewPage() {
   // Read historical identity decisions; no external approval is required for private items.
   const [identityReviewStatuses, setIdentityReviewStatuses] = useState<Record<string, BasicPriceIdentityReviewRow> | null>(null);
   const [isBusy, setIsBusy] = useState(false);
+
+  const hasUncommittedChoices = touchedRowIds.size > 0 || safeNewRowIds.size > 0 ||
+    Object.values(categoryDrafts).some(Boolean) ||
+    Object.values(reasonClarificationDrafts).some((value) => value.trim().length > 0);
+  const hasUnfinishedBatch = !!batch && batch.rows.some((row) =>
+    row.status === 'NEEDS_REVIEW' || row.status === 'PARSED' ||
+    (row.status === 'READY_FOR_SUBMISSION' && !row.savedAsPrivatePrice));
+  const guardLeave = hasUnfinishedBatch || hasUncommittedChoices;
+  const navigationBlocker = useBlocker(({ currentLocation, nextLocation }) =>
+    guardLeave && currentLocation.pathname !== nextLocation.pathname);
+  useEffect(() => {
+    if (!guardLeave) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = '';
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [guardLeave]);
 
   /**
    * @param announceProgress whether the reload may replace the status line.
@@ -1185,6 +1204,30 @@ export function BasicPriceReviewPage() {
     });
   };
 
+  const leaveToImportHistory = () => {
+    if (isBusy) return;
+    navigate('/basic-price/import', { state: { showImportHistory: true } });
+  };
+
+  const saveDraftBeforeLeaving = async () => {
+    if (!batch || navigationBlocker.state !== 'blocked' || isBusy) return;
+    setIsBusy(true);
+    try {
+      const live = await getBasicPriceImportBatch(batch.batchId);
+      if (live.batchId !== batch.batchId) throw new Error('BATCH_READBACK_MISMATCH');
+      // Only server-committed facts are the saved draft. Never claim a
+      // temporary picker, unsubmitted category, or edit is persisted.
+      navigationBlocker.proceed();
+    } catch (error) {
+      setStatusMessage(error instanceof ImportRequestError
+        ? importRequestMessage(error.httpStatus)
+        : 'Draft belum dapat diverifikasi dari server. Tetap di halaman dan periksa koneksi.');
+      navigationBlocker.reset();
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   return (
     <div className="bp-room">
       {/*
@@ -1210,6 +1253,15 @@ export function BasicPriceReviewPage() {
           title="Kembali ke daftar Basic Price"
         >
           Basic Price →
+        </button>
+        <button
+          type="button"
+          className="bp-btn bp-btn--sm"
+          disabled={isBusy}
+          onClick={leaveToImportHistory}
+          title="Verifikasi status tersimpan, lalu buka Riwayat Impor"
+        >
+          Selesai untuk Sekarang · Riwayat Impor
         </button>
       </div>
 
@@ -2285,6 +2337,48 @@ export function BasicPriceReviewPage() {
           );
         })}
       </div>
+      {navigationBlocker.state === 'blocked' ? (
+        <div style={{
+          position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(22,41,75,.55)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '1rem',
+        }}>
+          <section role="alertdialog" aria-modal="true"
+            aria-labelledby="bp-leave-title" aria-describedby="bp-leave-description"
+            className="bp-note" style={{
+              maxWidth: '36rem', width: '100%', padding: '1.5rem', background: '#fff',
+              boxShadow: '0 18px 48px rgba(0,0,0,.22)', borderRadius: '.75rem',
+            }}>
+            <h2 id="bp-leave-title">Pemeriksaan Basic Price belum selesai</h2>
+            <p id="bp-leave-description">
+              Dokumen dan keputusan yang sudah dikonfirmasi tersimpan di SIMPROK.
+              {hasUncommittedChoices
+                ? ' Masih ada pilihan formulir sementara yang belum disimpan.'
+                : ' Sebagian baris masih menunggu pemeriksaan atau penyimpanan.'}
+            </p>
+            <p className="bp-field__help">
+              Simpan sebagai Draft akan memeriksa ulang batch tersimpan di server.
+              Pilihan kandidat, jenis, atau isian sementara yang belum dikonfirmasi
+              tidak ikut tersimpan dan harus dipilih lagi saat dilanjutkan.
+              Tinggalkan tanpa menyimpan tidak menghapus dokumen, harga privat,
+              maupun keputusan yang sebelumnya telah tersimpan.
+            </p>
+            <div className="bp-rowcard__actions" style={{ display: 'flex', flexWrap: 'wrap', gap: '.6rem' }}>
+              <button type="button" className="bp-btn" autoFocus disabled={isBusy}
+                onClick={() => navigationBlocker.reset()}>
+                Tetap di halaman
+              </button>
+              <button type="button" className="bp-btn bp-btn--primary" disabled={isBusy}
+                onClick={() => void saveDraftBeforeLeaving()}>
+                {isBusy ? 'Memverifikasi Draft...' : 'Simpan sebagai Draft'}
+              </button>
+              <button type="button" className="bp-btn bp-btn--sm" disabled={isBusy}
+                onClick={() => navigationBlocker.proceed()}>
+                Tinggalkan tanpa menyimpan
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
       {visibleRows.length < filteredRows.length ? (
         <div className="bp-review-more">
           <button

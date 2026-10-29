@@ -248,6 +248,44 @@ export async function previewBasicPriceImport(
   return parseOrThrow(response);
 }
 
+/** One user's own canonical import batches; unfinished rows are never a second draft. */
+export interface BasicPriceImportHistoryItem {
+  batchId: string;
+  sourceFileName: string;
+  selectedSheetName: string;
+  status: string;
+  createdAt: string;
+  updatedAt: string;
+  totalRows: number;
+  pendingRows: number;
+  readyToSaveRows: number;
+  savedPrivateRows: number;
+  rejectedRows: number;
+  submittedRows: number;
+}
+
+export interface BasicPriceImportHistoryPage {
+  items: BasicPriceImportHistoryItem[];
+  page: number;
+  hasNext: boolean;
+}
+
+export async function listBasicPriceImportHistory(page = 1): Promise<BasicPriceImportHistoryPage> {
+  const response = await apiFetch(`/basic-price-imports/history?page=${page}`, {
+    cache: 'no-store',
+  });
+  return parseOrThrow<BasicPriceImportHistoryPage>(response);
+}
+
+export async function dismissBasicPriceUnfinishedHistory(batchId: string): Promise<{
+  batchId: string; hiddenFromHistory: boolean;
+}> {
+  const response = await apiFetch(`/basic-price-imports/${batchId}/dismiss-history`, {
+    method: 'POST',
+  });
+  return parseOrThrow(response);
+}
+
 export async function getBasicPriceImportBatch(batchId: string): Promise<BasicPriceImportBatchSummary> {
   // Decision/readiness is live server truth. Never reuse a browser-cached 409-era snapshot.
   const response = await apiFetch(`/basic-price-imports/${batchId}`, { cache: 'no-store' });

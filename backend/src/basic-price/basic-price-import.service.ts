@@ -2634,6 +2634,147 @@ export class BasicPriceImportService {
     }
   }
 
+  /**
+   * Read-only history over the EXISTING canonical batch and row tables.
+   * A partially saved batch remains one batch: prices already persisted are
+   * counted by their real BasicPrice sourceImportRowId; unresolved rows remain
+   * in the batch, never copied into a second draft or import engine.
+   *
+   * The uploading account is part of the FIRST batch selection (not a filter
+   * applied after fetching), and pagination is bounded. No permission to
+   * enumerate another member's upload in the same workspace.
+   */
+  async listOwnedImportHistory(
+    workspaceId: string,
+    currentAccountId: string,
+    pageText?: string,
+  ) {
+    if (pageText && !/^[1-9][0-9]{0,3}$/.test(pageText)) {
+      throw new BadRequestException('INVALID_HISTORY_PAGE');
+    }
+    const page = pageText ? Number(pageText) : 1;
+    if (page > 1000) throw new BadRequestException('INVALID_HISTORY_PAGE');
+    const limit = 20;
+    // New optional dismissal columns are read ONLY through a parameterized
+    // query. The running canonical Prisma Client is shared by worktrees;
+    // never regenerate it in place as part of QA work.
+    const found = await this.prisma.$queryRaw<Array<{
+      id: string; sourceFileName: string; selectedSheetName: string;
+      status: string; createdAt: Date; updatedAt: Date;
+    }>>(Prisma.sql`
+      SELECT id, "sourceFileName", "selectedSheetName",
+             status::text, "createdAt", "updatedAt"
+      FROM "basic_price_import_batches"
+      WHERE "workspaceId" = ${workspaceId}::uuid
+        AND "uploadedByAccountId" = ${currentAccountId}::uuid
+        AND "historyDismissedAt" IS NULL
+      ORDER BY "createdAt" DESC, id DESC
+      LIMIT ${limit + 1} OFFSET ${(page - 1) * limit}
+    `);
+    const hasNext = found.length > limit;
+    const batches = found.slice(0, limit);
+    if (batches.length === 0) {
+      return { items: [], page, hasNext: false };
+    }
+    const ids = batches.map((batch) => batch.id);
+    const counts = await this.prisma.$queryRaw<Array<{
+      batchId: string; total: number; pending: number; readyToSave: number;
+      savedPrivate: number; rejected: number; submitted: number;
+    }>>(Prisma.sql`
+      SELECT r."batchId" AS "batchId",
+        COUNT(*)::int AS "total",
+        COUNT(*) FILTER (WHERE r."status" IN ('PARSED', 'NEEDS_REVIEW'))::int AS "pending",
+        COUNT(*) FILTER (WHERE r."status" = 'READY_FOR_SUBMISSION' AND p."id" IS NULL)::int AS "readyToSave",
+        COUNT(p."id")::int AS "savedPrivate",
+        COUNT(*) FILTER (WHERE r."status" = 'REJECTED')::int AS "rejected",
+        COUNT(*) FILTER (WHERE r."status" = 'SUBMISSION_CREATED' AND p."id" IS NULL)::int AS "submitted"
+      FROM "basic_price_import_rows" r
+      LEFT JOIN "basic_prices" p
+        ON p."sourceImportRowId" = r."id"
+        AND p."workspaceId" = ${workspaceId}::uuid
+      WHERE r."batchId" IN (${Prisma.join(ids.map((id) => Prisma.sql`${id}::uuid`))})
+      GROUP BY r."batchId"
+    `);
+    const byId = new Map(counts.map((row) => [row.batchId, row]));
+    return {
+      items: batches.map((batch) => {
+        const tally = byId.get(batch.id);
+        return {
+          batchId: batch.id,
+          sourceFileName: batch.sourceFileName,
+          selectedSheetName: batch.selectedSheetName,
+          status: batch.status,
+          createdAt: batch.createdAt,
+          updatedAt: batch.updatedAt,
+          totalRows: tally?.total ?? 0,
+          pendingRows: tally?.pending ?? 0,
+          readyToSaveRows: tally?.readyToSave ?? 0,
+          savedPrivateRows: tally?.savedPrivate ?? 0,
+          rejectedRows: tally?.rejected ?? 0,
+          submittedRows: tally?.submitted ?? 0,
+        };
+      }),
+      page,
+      hasNext,
+    };
+  }
+
+  /**
+   * Hide an unfinished, owned manual upload from its active history.
+   * NEVER delete canonical rows, bytes, previous decisions or BasicPrices.
+   * Lock the batch and its rows so a concurrent price-writer cannot turn this
+   * into a misleading "deleted" state after a successful private save.
+   */
+  async dismissUnfinishedImportHistory(
+    workspaceId: string, batchId: string, currentAccountId: string,
+  ) {
+    return this.prisma.$transaction(async (tx) => {
+      const batch = await tx.$queryRaw<Array<{
+        id: string; status: string; ingestionChannel: string; dismissed: Date | null;
+      }>>(Prisma.sql`
+        SELECT id, status::text, "ingestionChannel"::text,
+               "historyDismissedAt" AS dismissed
+        FROM "basic_price_import_batches"
+        WHERE id = ${batchId}::uuid AND "workspaceId" = ${workspaceId}::uuid
+          AND "uploadedByAccountId" = ${currentAccountId}::uuid
+        FOR UPDATE
+      `);
+      if (batch.length !== 1) throw new NotFoundException('IMPORT_BATCH_NOT_FOUND');
+      if (batch[0].dismissed) return { batchId, hiddenFromHistory: true };
+      if (batch[0].ingestionChannel !== 'USER_UPLOAD' ||
+          ['SUBMITTED', 'PARTIALLY_SUBMITTED', 'APPROVED_FOR_SUBMISSION'].includes(batch[0].status)) {
+        throw new ConflictException('IMPORT_HISTORY_HAS_COMMITTED_ACTIVITY');
+      }
+      await tx.$queryRaw(Prisma.sql`
+        SELECT id FROM "basic_price_import_rows"
+        WHERE "batchId" = ${batchId}::uuid ORDER BY id FOR UPDATE
+      `);
+      const counts = await tx.$queryRaw<Array<{ saved: bigint; submitted: bigint }>>(Prisma.sql`
+        SELECT
+          (SELECT COUNT(*) FROM "basic_prices" p
+           JOIN "basic_price_import_rows" r ON r.id = p."sourceImportRowId"
+           WHERE r."batchId" = ${batchId}::uuid) AS saved,
+          (SELECT COUNT(*) FROM "basic_price_import_rows" r
+           WHERE r."batchId" = ${batchId}::uuid
+             AND (r."priceSubmissionId" IS NOT NULL OR r.status = 'SUBMISSION_CREATED')) AS submitted
+      `);
+      if (!counts.length || counts[0].saved !== 0n || counts[0].submitted !== 0n) {
+        throw new ConflictException('IMPORT_HISTORY_HAS_COMMITTED_ACTIVITY');
+      }
+      const dismissed = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+        UPDATE "basic_price_import_batches"
+        SET "historyDismissedAt" = NOW(),
+            "historyDismissedByAccountId" = ${currentAccountId}::uuid
+        WHERE id = ${batchId}::uuid AND "workspaceId" = ${workspaceId}::uuid
+          AND "uploadedByAccountId" = ${currentAccountId}::uuid
+          AND "historyDismissedAt" IS NULL
+        RETURNING id
+      `);
+      if (dismissed.length !== 1) throw new ConflictException('IMPORT_HISTORY_DISMISS_RACE');
+      return { batchId, hiddenFromHistory: true };
+    });
+  }
+
   async getBatch(
     workspaceId: string,
     batchId: string,

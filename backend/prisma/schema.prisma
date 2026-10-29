@@ -3050,6 +3050,12 @@ model BasicPriceImportBatch {
   ingestionConnector IngestionConnector?   @relation(fields: [ingestionConnectorId], references: [id], onDelete: Restrict)
   rows               BasicPriceImportRow[]
 
+  // BP-HISTORY: remove only an unfinished, unsubmitted import from the user's
+  // active history. Keep the canonical source, fingerprint and audit evidence.
+  // NEVER cascade-delete already committed BasicPrice or identity decisions.
+  historyDismissedAt DateTime?
+  historyDismissedByAccountId String? @db.Uuid
+
   @@unique([workspaceId, importFingerprint])
   /// USI-01R2 §6B — ONE OBSERVATION, ONE FACT, ENFORCED BY THE DATABASE.
   ///
