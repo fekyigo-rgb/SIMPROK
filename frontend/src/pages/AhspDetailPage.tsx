@@ -18,7 +18,7 @@ import { presentAhspIdentity } from '../utils/ahspIdentityDisplay';
 import '../styles/ahsp.css';
 import '../styles/ahspDetailApproved.css';
 import '../styles/ahspDetailUpdateResponsive.css';
-import { presentedUnitLabel } from '../utils/unitSuggestionLabel';
+import { presentedAhspOutputUnitSymbol, presentedUnitLabel } from '../utils/unitSuggestionLabel';
 import { UsulkanSimprokDialog } from '../components/ahsp/UsulkanSimprokDialog';
 import { AhspClassificationRevisionPanel } from '../components/AhspClassificationRevisionPanel';
 import {
@@ -536,7 +536,7 @@ export function AhspDetailPage() {
     });
   };
 
-  const presentedOutputUnit = presentedUnitLabel({
+  const presentedOutputUnit = presentedAhspOutputUnitSymbol({
     stored: currentVersion?.outputUnit,
     displayName: currentVersion?.outputUnitDisplayName,
     symbol: currentVersion?.outputUnitSymbol,
@@ -1207,14 +1207,14 @@ export function AhspDetailPage() {
                     {infoRow('Jenis Pengadaan', orDash(groupedClassificationValue(classificationPaths, 'jenisPengadaan')))}
                     {infoRow('Kategori', orDash(groupedClassificationValue(classificationPaths, 'kategori')))}
                     {infoRow('Subkategori', orDash(groupedClassificationValue(classificationPaths, 'subkategori')))}
-                    {infoRow('Jenis Pekerjaan', orDash(groupedClassificationValue(classificationPaths, 'jenisPekerjaan')))}
+                    {infoRow('Lingkup Pekerjaan', orDash(groupedClassificationValue(classificationPaths, 'jenisPekerjaan')))}
                   </>
                 ) : (
                   <>
                     {infoRow('Jenis Pengadaan', orDash(ahsp.classification))}
                     {infoRow('Kategori', orDash(ahsp.fieldCategory))}
                     {infoRow('Subkategori', orDash(ahsp.subCategory))}
-                    {infoRow('Jenis Pekerjaan', orDash(presentAhspIdentity(ahsp).workType))}
+                    {infoRow('Lingkup Pekerjaan', orDash(presentAhspIdentity(ahsp).workType))}
                   </>
                 )}
                 {infoRow('Keterangan', orDash(ahsp.keterangan))}
@@ -1664,7 +1664,7 @@ export function AhspDetailPage() {
                     <tr key={version.id}>
                       <td>{version.versionNumber != null ? `Versi ${version.versionNumber}` : '—'}</td>
                       <td>{version.regulationReference || '—'}</td>
-                      <td>{presentedUnitLabel({ stored: version.outputUnit, displayName: version.outputUnitDisplayName, symbol: version.outputUnitSymbol, code: version.outputUnitCode }) || '—'}</td>
+                      <td>{presentedAhspOutputUnitSymbol({ stored: version.outputUnit, displayName: version.outputUnitDisplayName, symbol: version.outputUnitSymbol, code: version.outputUnitCode }) || '—'}</td>
                       <td>{version.effectiveDate ? formatIndoDate(version.effectiveDate) : '—'}</td>
                       <td>{historyStatusLabel(version.status)}</td>
                     </tr>

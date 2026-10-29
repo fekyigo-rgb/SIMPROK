@@ -167,7 +167,9 @@ export function readableClassificationPaths(input: {
       if (name) names.unshift(name);
       cursor = input.parentOf(cursor);
     }
-    if (input.rootName) names.unshift(input.rootName);
+    // The canonical parent chain may already contain the procurement root.
+    // Never show it twice: one hierarchy must have one meaning on screen.
+    if (input.rootName && names[0] !== input.rootName) names.unshift(input.rootName);
     if (names.length > 1) lines.push(names.join(' \u2192 '));
   }
   return [...new Set(lines)];

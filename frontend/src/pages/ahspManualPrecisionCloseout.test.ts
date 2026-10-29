@@ -151,14 +151,14 @@ test('Manual distinguishes exact duplicate from identity review without creating
 });
 
 test('manual keyboard input never implicitly saves and Keterangan stays multiline', () => {
-  assert.equal(manual.includes('const explicitSave = useRef(false);'), true);
-  assert.equal(manual.includes('if (!explicitSave.current) return;'), true);
+  assert.equal(manual.includes("const explicitSave = useRef<'detail' | 'another' | null>(null);"), true);
+  assert.equal(manual.includes('if (!saveMode) return;'), true);
   assert.equal(manual.includes("if (event.key !== 'Enter' || event.nativeEvent.isComposing) return;"), true);
   assert.equal(manual.includes('if (target instanceof HTMLTextAreaElement) return;'), true);
   assert.equal(manual.includes('event.shiftKey ? -1 : 1'), true);
   assert.equal(manual.includes('event.currentTarget.form?.requestSubmit();'), true);
-  assert.equal(manual.includes('explicitSave.current = true;'), true);
-  assert.equal(manual.includes('explicitSave.current = false;'), true);
+  assert.equal(manual.includes("explicitSave.current = 'detail';"), true);
+  assert.equal(manual.includes('explicitSave.current = null;'), true);
   assert.equal(manual.includes('type="submit"'), false);
 
   const keterangan = manual.slice(

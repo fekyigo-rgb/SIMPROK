@@ -40,6 +40,7 @@ import {
 import { parseCoefficientInput } from '../utils/ahspCompositionDisplay';
 import { emptyAssistedContext } from '../utils/ahspAssistedContext';
 import { manualAdmissionFailure } from '../utils/ahspManualAdmission';
+import { manualSaveDisposition, manualSaveOutcomeMessage, type ManualSaveDisposition } from '../utils/ahspManualSaveOutcome';
 import { unitSuggestionLabels } from '../utils/unitSuggestionLabel';
 import '../styles/ahsp.css';
 
@@ -655,6 +656,9 @@ export function AhspManualPage(): ReactNode {
 
   const [assisted, setAssisted] = useState<AssistedClassificationContext>(() => emptyAssistedContext());
   const [methodName, setMethodName] = useState('');
+  const methodNameInputRef = useRef<HTMLInputElement>(null);
+  const [lastSaved, setLastSaved] = useState<{ id: string; name: string; disposition: ManualSaveDisposition; resourceReviewPrepared?: boolean } | null>(null);
+  const [itemSerial, setItemSerial] = useState(0);
   const [code, setCode] = useState('');
   const [keterangan, setKeterangan] = useState('');
   const [outputUnit, setOutputUnit] = useState('');
@@ -677,7 +681,7 @@ export function AhspManualPage(): ReactNode {
   const [equipmentFailed, setEquipmentFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const submitLock = useRef(false);
-  const explicitSave = useRef(false);
+  const explicitSave = useRef<'detail' | 'another' | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [identityConflict, setIdentityConflict] = useState(false);
   const [conflictAhspId, setConflictAhspId] = useState<string | null>(null);
@@ -842,7 +846,8 @@ export function AhspManualPage(): ReactNode {
         }}
         onSubmit={async (event: FormEvent) => {
           event.preventDefault();
-          if (!explicitSave.current) return;
+          const saveMode = explicitSave.current;
+          if (!saveMode) return;
           if (busy || submitLock.current) return;
           setIdentityConflict(false);
           setConflictAhspId(null);
@@ -864,6 +869,7 @@ export function AhspManualPage(): ReactNode {
           submitLock.current = true;
           setBusy(true);
           setError(null);
+          setLastSaved(null);
           let committed = false;
           try {
             const labels = assisted.displayLabels;
@@ -917,13 +923,44 @@ export function AhspManualPage(): ReactNode {
               }
               return;
             }
-            const created = (await response.json()) as { id?: string };
+            const created = (await response.json()) as { id?: unknown; disposition?: unknown; resourceReviewPrepared?: unknown };
             if (typeof created.id !== 'string' || created.id === '') {
-              setError('Server tidak mengembalikan identitas AHSP yang baru dibuat.');
+              setError('Server tidak mengembalikan identitas AHSP untuk hasil penyimpanan. Periksa Ruang AHSP sebelum mengulang tindakan.');
               return;
             }
             committed = true;
-            navigate('/ahsp/' + created.id);
+            if (saveMode === 'another') {
+              // Keep the same classification, references and issuer; reset only the AHSP item.
+              setMethodName('');
+              setCode('');
+              setKeterangan('');
+              setOutputUnit('');
+              setUnitHits([]);
+              setLabor([]);
+              setMaterial([]);
+              setEquipment([]);
+              setLaborQ('');
+              setMaterialQ('');
+              setEquipmentQ('');
+              setLaborHits([]);
+              setMaterialHits([]);
+              setEquipmentHits([]);
+              setLaborFailed(false);
+              setMaterialFailed(false);
+              setEquipmentFailed(false);
+              setLastSaved({
+                id: created.id,
+                name: uraian,
+                disposition: manualSaveDisposition(created.disposition),
+                resourceReviewPrepared: typeof created.resourceReviewPrepared === 'boolean' ? created.resourceReviewPrepared : undefined,
+              });
+              setItemSerial((previous) => previous + 1);
+              submitLock.current = false;
+              setBusy(false);
+              methodNameInputRef.current?.focus();
+            } else {
+              navigate('/ahsp/' + created.id);
+            }
           } catch {
             setIdentityConflict(false);
             setConflictAhspId(null);
@@ -960,6 +997,13 @@ export function AhspManualPage(): ReactNode {
           />
         </section>
 
+        {lastSaved ? (
+          <div role="status" className="ahsp-manual-saved" style={{ marginBottom: 'var(--space-3)', color: lastSaved.disposition === 'UNCONFIRMED' || lastSaved.resourceReviewPrepared === false ? 'var(--simprok-warning-700, #A15C00)' : 'var(--simprok-success-green-600, #2E9E6B)' }}>
+            {manualSaveOutcomeMessage(lastSaved)} Klasifikasi dan konteks tetap tersedia untuk AHSP berikutnya.{' '}
+            <Link to={'/ahsp/' + lastSaved.id}>Lihat AHSP tersimpan</Link>
+          </div>
+        ) : null}
+
         <section className="ahsp-manual-card" aria-label="Informasi AHSP">
           <header className="ahsp-manual-card__header">
             <span className="ahsp-manual-card__icon ahsp-manual-card__icon--purple" aria-hidden>
@@ -975,6 +1019,7 @@ export function AhspManualPage(): ReactNode {
                 Uraian AHSP <span className="ahsp-required">*</span>
               </span>
               <input
+                ref={methodNameInputRef}
                 className="ahsp-field__control"
                 required
                 value={methodName}
@@ -1051,6 +1096,7 @@ export function AhspManualPage(): ReactNode {
           </header>
           <div className="ahsp-manual-comp-grid">
             <ManualResourceGroupPanel
+              key={'labor-' + itemSerial}
               title="Tenaga Kerja"
               tone="labor"
               resourceType="LABOR"
@@ -1065,6 +1111,7 @@ export function AhspManualPage(): ReactNode {
               disabled={busy}
             />
             <ManualResourceGroupPanel
+              key={'material-' + itemSerial}
               title="Bahan"
               tone="material"
               resourceType="MATERIAL"
@@ -1079,6 +1126,7 @@ export function AhspManualPage(): ReactNode {
               disabled={busy}
             />
             <ManualResourceGroupPanel
+              key={'equipment-' + itemSerial}
               title="Peralatan"
               tone="equipment"
               resourceType="EQUIPMENT"
@@ -1115,16 +1163,29 @@ export function AhspManualPage(): ReactNode {
           </Link>
           <button
             type="button"
-            className="ahsp-action ahsp-action--primary"
-            disabled={busy}
+            className="ahsp-action ahsp-action--outline"
+            disabled={busy || !canManage}
             aria-busy={busy || undefined}
             onClick={(event) => {
-              explicitSave.current = true;
+              explicitSave.current = 'another';
               event.currentTarget.form?.requestSubmit();
-              explicitSave.current = false;
+              explicitSave.current = null;
             }}
           >
-            <Check size={16} /> {busy ? 'Menyimpan\u2026' : 'Simpan AHSP'}
+            <Plus size={16} /> {busy ? 'Menyimpan\u2026' : 'Simpan & Tambah Lagi'}
+          </button>
+          <button
+            type="button"
+            className="ahsp-action ahsp-action--primary"
+            disabled={busy || !canManage}
+            aria-busy={busy || undefined}
+            onClick={(event) => {
+              explicitSave.current = 'detail';
+              event.currentTarget.form?.requestSubmit();
+              explicitSave.current = null;
+            }}
+          >
+            <Check size={16} /> {busy ? 'Menyimpan\u2026' : 'Simpan & Lihat Detail'}
           </button>
         </div>
       </form>

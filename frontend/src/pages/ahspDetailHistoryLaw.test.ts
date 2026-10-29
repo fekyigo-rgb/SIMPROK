@@ -33,7 +33,7 @@ test('history displays actual version, source, unit, date and status without inv
   }
   assert.ok(history.includes('version.versionNumber != null'));
   assert.ok(history.includes('version.regulationReference'));
-  assert.ok(history.includes('presentedUnitLabel({ stored: version.outputUnit'));
+  assert.ok(history.includes('presentedAhspOutputUnitSymbol({ stored: version.outputUnit'));
   assert.ok(history.includes("version.effectiveDate ? formatIndoDate(version.effectiveDate)"));
   assert.ok(history.includes('historyStatusLabel(version.status)'));
 });

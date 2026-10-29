@@ -26,7 +26,7 @@ test('manual entry uses the same canonical output fields rather than creating a 
   }
   assert.ok(detail.includes("apiFetch('/ahsp/' + ahspId)"));
   assert.ok(detail.includes('groupAhspDefinitionResources(currentVersion?.resources)'));
-  for (const field of ['Informasi AHSP', 'Komponen Pembentuk AHSP', "'Jenis Pengadaan'", "'Kategori'", "'Subkategori'", "'Jenis Pekerjaan'", "'Dasar AHSP'", "'Penerbit'", "'Tanggal berlaku versi'"]) {
+  for (const field of ['Informasi AHSP', 'Komponen Pembentuk AHSP', "'Jenis Pengadaan'", "'Kategori'", "'Subkategori'", "'Lingkup Pekerjaan'", "'Dasar AHSP'", "'Penerbit'", "'Tanggal berlaku versi'"]) {
     assert.ok(detail.includes(field), field);
   }
   assert.ok(detail.includes("ahsp.workspaceId === null ? 'Pustaka SIMPROK' : 'AHSP Saya'"));

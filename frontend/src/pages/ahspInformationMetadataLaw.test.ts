@@ -37,7 +37,7 @@ test('Owner UI: classifications precede note in BOTH canonical and fallback path
     "infoRow('Jenis Pengadaan', orDash(ahsp.classification))",
     "infoRow('Kategori', orDash(ahsp.fieldCategory))",
     "infoRow('Subkategori', orDash(ahsp.subCategory))",
-    "infoRow('Jenis Pekerjaan', orDash(presentAhspIdentity(ahsp).workType))",
+    "infoRow('Lingkup Pekerjaan', orDash(presentAhspIdentity(ahsp).workType))",
     "infoRow('Keterangan'",
     "infoRow('Dasar AHSP'",
     "infoRow('Penerbit'",

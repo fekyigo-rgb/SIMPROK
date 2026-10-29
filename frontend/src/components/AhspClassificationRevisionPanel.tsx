@@ -108,7 +108,7 @@ export function AhspClassificationRevisionPanel(props: {
     const leafNodeIds = [...new Set(draft.paths.map((path) => path.leafNodeId))];
     const pendingPaths = draft.pendingPaths ?? [];
     if (leafNodeIds.length === 0 && pendingPaths.length === 0) {
-      setError('Pilih minimal satu Jenis Pekerjaan.');
+      setError('Pilih minimal satu Lingkup Pekerjaan.');
       return;
     }
     if (onSaveAttempt?.() === false) return;

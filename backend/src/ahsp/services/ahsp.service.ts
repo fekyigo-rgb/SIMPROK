@@ -599,12 +599,18 @@ export class AhspService {
         archivedAt: true,
         updatedAt: true,
         // The applicable version's Satuan and Dasar for the list columns — the
-        // newest version, the same "current" the detail shows. Read-only, no
-        // second query per row.
+        // newest version, the same "current" the detail shows. Read-only,
+        // including its linked unit symbol, with no second query per row.
         versions: {
           orderBy: { versionNumber: 'desc' },
           take: 1,
-          select: { outputUnit: true, regulationReference: true },
+          select: {
+            outputUnit: true,
+            regulationReference: true,
+            // Existing Unit Kernel resolution attached to each AHSP version.
+            // List projects its verified symbol; stored source value stays intact.
+            outputUnitDefinition: { select: { code: true, symbol: true } },
+          },
         },
         _count: { select: { versions: true } },
         classificationAssignments: {
