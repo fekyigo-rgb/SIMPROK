@@ -166,6 +166,48 @@ describe('ObservedResourceNameReviewService', () => {
     }
   });
 
+  it("accepts only the exact Beton fc -> f'c notation without changing strength or source facts", async () => {
+    const raw = {
+      ...observation,
+      rawName: 'Beton fc 10 Mpa',
+      rawUnit: 'M3',
+      rawCode: 'M265',
+      resourceType: 'MATERIAL',
+    };
+    const sourceFingerprint = observedResourceSourceFactsFingerprint(raw);
+    prisma.observedResource.findFirst.mockResolvedValue(raw);
+    const reviewedName = "Beton f'c 10 Mpa";
+    expect(() => assertSpellingOnlyNameReview(raw.rawName, reviewedName)).not.toThrow();
+    const saved = await append({
+      expectedSourceFactsFingerprint: sourceFingerprint,
+      reviewedName,
+      reason: 'Membakukan penulisan notasi f-c kuat tekan pada nama sumber.',
+      evidence: 'Nama asli tetap; mutu 10 MPa dan satuan M3 tidak diubah.',
+    });
+    expect(saved).toMatchObject({ version: 1, reviewedName, sourceFactsFingerprint: sourceFingerprint });
+    expect(prisma.observedResourceNameReview.create).toHaveBeenCalledTimes(1);
+    expect(prisma.observedResource.update).not.toHaveBeenCalled();
+    expect(reviewedNameForCuration({
+      ...raw,
+      nameReviews: [{ reviewedName, sourceFactsFingerprint: sourceFingerprint }],
+    })).toBe(reviewedName);
+  });
+
+  it('rejects changed concrete strength, unit, arbitrary punctuation, and no-op names', () => {
+    for (const [raw, corrected] of [
+      ['Beton fc 10 Mpa', "Beton f'c 15 Mpa"],
+      ['Beton fc 10 Mpa', "Beton f'c 10 Kpa"],
+      ['Beton fc 10 Mpa', "Beton f'c 10 Mpa+"],
+      ['Beton fc 10 Mpa', "Beton f'c 10 Mpa dengan admixture"],
+      ['Cat fc 10 Mpa', "Cat f'c 10 Mpa"],
+      ['Beton fc 10 Mpa', 'Beton fc 10 Mpa'],
+      ['Beton fc 10 Mpa', 'Beton fc 10 MPa'],
+      ['Beton fc 10 Mpa', "Beton f'c 10 MPa"],
+    ]) {
+      expect(() => assertSpellingOnlyNameReview(raw, corrected)).toThrow(BadRequestException);
+    }
+  });
+
   it('RI01 P1: refuses material family/type/spec substitutions disguised as one-character typos', () => {
     for (const [rawName, reviewedName] of [
       ['PIPA PVC', 'PIPA CPVC'],

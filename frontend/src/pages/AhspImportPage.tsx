@@ -39,7 +39,6 @@ import {
   type UnitResolutionIssue,
 } from '../utils/ahspImportIntakeDisplay';
 import {
-  IQL_COPY,
   REASON_MISSING_OUTCOME,
   describeGovernanceFailure,
   describeGovernanceSuccess,
@@ -1438,23 +1437,12 @@ export function AhspImportPage() {
           ))}
         </details>
         {view.candidateLine ? <span className="ahsp-line" style={{ color: MUTED }}>{view.candidateLine}</span> : null}
-        {/* A decision already offered for learning is WAITING on someone else —
-            that is this question's state, not an explanation, so it stays here. */}
-        {learning.stateLine && learning.stateTone === 'PENDING' ? (
-          <span className="ahsp-line ahsp-line--emas">{learning.stateLine}</span>
-        ) : null}
-        {correctedHere ? <span className="ahsp-line ahsp-line--abu">Koreksi ini berlaku hanya pada observasi tersebut, tanpa pembelajaran bersama.</span> : null}
-        {mayRemember ? (
-          <label className="ahsp-check">
-            <input
-              type="checkbox"
-              checked={remember}
-              disabled={locked}
-              onChange={(event) => setRememberFor((prev) => ({ ...prev, [group.key]: event.target.checked }))}
-            />
-            <span>{IQL_COPY.remember}</span>
-          </label>
-        ) : null}
+        {/* Private AHSP decisions reuse the SAME canonical workspace authority
+            as Basic Price. Shared/global teaching is NOT a private-use gate. */}
+        <p className="ahsp-line ahsp-private-identity-guidance">
+          <strong>Keputusan resource privat:</strong> Gunakan Pilihan jika identitas dan spesifikasinya sesuai, atau Tetapkan Item Baru bila berbeda dan buktinya cukup. Keputusan dicatat pada workspace Anda tanpa menunggu persetujuan pembelajaran bersama.
+        </p>
+        {correctedHere ? <span className="ahsp-line ahsp-line--abu">Koreksi ejaan hanya untuk observasi tersebut, bukan keputusan identitas.</span> : null}
         {/* The label asks the reader to CONFIRM what SIMPROK found,
             and never asserts the match on SIMPROK's behalf. Only
             candidates the kernel backed with evidence it can name
@@ -1474,7 +1462,7 @@ export function AhspImportPage() {
                   aria-busy={busy || undefined}
                   onClick={() => void curateExisting(group, at, choice, remember)}
                 >
-                  <span>{busy ? 'Menyimpan…' : 'Benar, ini sama dengan: ' + choice.name}</span>
+                  <span>{busy ? 'Menyimpan…' : 'Gunakan Pilihan: ' + choice.name}</span>
                   <span className="ahsp-action__sub">{choice.basis}</span>
                   {choice.unprovedFacts.length > 0 ? (
                     <span className="ahsp-action__sub">Belum dinyatakan sumber: {choice.unprovedFacts.join(', ')}</span>
@@ -1493,7 +1481,7 @@ export function AhspImportPage() {
               aria-busy={busyOn('new') || undefined}
               onClick={() => void curateNew(group, at, view.newUnitDefinitionId as string)}
             >
-              {busyOn('new') ? 'Menyimpan…' : view.newResourceActionLabel}
+              {busyOn('new') ? 'Menyimpan…' : 'Tetapkan Item Baru'}
             </button>
           ) : view.newResourceBlockedLine && !positiveCandidateReview ? (
             // A door that cannot open is shown shut and explained — never a refusal waiting to happen.
@@ -1555,6 +1543,22 @@ export function AhspImportPage() {
             <p className="ahsp-line ahsp-line--abu">Kernel identitas akan memeriksa lagi seluruh kandidat, satuan dan spesifikasi dalam transaksi. Jika bukti tidak cukup, keputusan ditahan tanpa membuat duplikat.</p>
           </details>
         ) : null}
+        {/* Shared learning is an independently governed opt-in, NEVER a gate
+            for a private decision. Keep its existing endpoint behind an optional door. */}
+        {(mayRemember || learning.stateLine) ? (
+          <details className="ahsp-shared-learning-optional">
+            <summary>Pembelajaran bersama (opsional, terpisah dari resource privat)</summary>
+            <p className="ahsp-line ahsp-line--abu">Keputusan identitas privat di atas tidak membutuhkan persetujuan pihak lain. Hanya jika Anda ingin mengajarkan pola yang sama kepada katalog bersama, pengajuan ini ditinjau petugas berwenang.</p>
+            {learning.stateLine ? <p className="ahsp-line ahsp-line--abu">Riwayat pembelajaran bersama: {learning.stateLine} Status ini tidak menghalangi keputusan resource privat.</p> : null}
+            {mayRemember ? (
+              <label className="ahsp-check">
+                <input type="checkbox" checked={remember} disabled={locked}
+                  onChange={(event) => setRememberFor((prev) => ({ ...prev, [group.key]: event.target.checked }))} />
+                <span>Ajukan pola keputusan yang sama untuk pembelajaran bersama, selain menyimpan keputusan privat.</span>
+              </label>
+            ) : null}
+          </details>
+        ) : null}
         <div className="ahsp-action-row">
           <button
             type="button"
@@ -1577,12 +1581,10 @@ export function AhspImportPage() {
             {view.weakPossibilityLine ? <span className="ahsp-line ahsp-line--abu">{view.weakPossibilityLine}</span> : null}
             {/* Rows the kernel RULED OUT are shown as what they are — never a button. */}
             {view.ruledOutLine ? <span className="ahsp-line ahsp-line--abu">{view.ruledOutLine}</span> : null}
-            {learning.stateLine && learning.stateTone !== 'PENDING' ? (
-              <span className="ahsp-line ahsp-line--abu">{learning.stateLine}</span>
-            ) : null}
+
             <span className="ahsp-line" style={{ color: MUTED }}>{view.guidance}</span>
             {!learning.offered && learning.unavailableLine ? (
-              <span className="ahsp-line ahsp-line--abu">{learning.unavailableLine}</span>
+              <span className="ahsp-line ahsp-line--abu">Catatan pembelajaran bersama (bukan syarat keputusan privat): {learning.unavailableLine}</span>
             ) : null}
           </div>
         ) : null}
