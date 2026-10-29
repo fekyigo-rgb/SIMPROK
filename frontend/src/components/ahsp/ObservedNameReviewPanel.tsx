@@ -72,6 +72,10 @@ export function ObservedNameReviewPanel({
 
   const save = async () => {
     if (!record || saving || loading || record.observationStatus !== 'OBSERVED') return;
+    if (name.trim() === (record.latest?.reviewedName ?? record.rawName)) {
+      setError('Nama belum berubah. Tidak perlu menyimpan koreksi; lanjutkan pemeriksaan identitas.');
+      return;
+    }
     if (!name.trim() || !reason.trim() || !evidence.trim()) {
       setError('Nama, alasan dan bukti koreksi wajib diisi.');
       return;
@@ -93,10 +97,18 @@ export function ObservedNameReviewPanel({
         }),
       });
       if (!response.ok) {
+        const rejection = response.status === 400
+          ? await response.json().catch(() => null) as { message?: unknown } | null
+          : null;
+        const reasonCode = typeof rejection?.message === 'string' ? rejection.message : null;
         throw new Error(response.status === 409
           ? 'Koreksi tidak disimpan: versi atau fakta sumber telah berubah. Muat ulang riwayat.'
           : response.status === 400
-            ? 'Koreksi ditolak: periksa ejaan dan jangan mengubah spesifikasi teknis.'
+            ? reasonCode === 'REVIEWED_NAME_UNCHANGED'
+              ? 'Nama tidak berubah menurut aturan ejaan. Tidak perlu koreksi; lanjutkan pemeriksaan identitas.'
+              : reasonCode === 'NAME_REVIEW_NOT_SPELLING_ONLY'
+                ? 'Perubahan ini bukan koreksi ejaan/notasi yang diizinkan. Jangan ubah mutu, satuan atau spesifikasi di sini; gunakan pemeriksaan identitas.'
+                : 'Koreksi ditolak server. Periksa isian, alasan dan bukti koreksi.'
             : 'Koreksi belum disimpan (HTTP ' + response.status + ').');
       }
       // A successful POST is not enough: read back the durable event after reload.
@@ -150,10 +162,13 @@ export function ObservedNameReviewPanel({
                   value={evidence} disabled={saving || record.observationStatus !== 'OBSERVED'}
                   onChange={(event) => setEvidence(event.target.value)} />
               </label>
-              <p className="ahsp-line ahsp-line--abu">Hanya perbaikan penulisan. Jangan ubah kode, satuan, kapasitas atau spesifikasi. Pilihan identitas tetap diperiksa SIMPROK.</p>
+              <p className="ahsp-line ahsp-line--abu">Hanya perbaikan ejaan atau notasi yang tidak mengubah fakta sumber. Contoh: Beton fc 10 Mpa → Beton f'c 10 Mpa. Jangan ubah kode, satuan, kapasitas atau spesifikasi. Pilihan identitas tetap diperiksa SIMPROK.</p>
+              {name.trim() === (record.latest?.reviewedName ?? record.rawName) ? (
+                <p role="status" className="ahsp-line ahsp-line--abu">Nama belum diubah. Koreksi tidak diperlukan; silakan lanjutkan ke pilihan identitas resource.</p>
+              ) : null}
               <div className="ahsp-action-row">
                 <button type="button" className="ahsp-action ahsp-action--outline"
-                  disabled={saving || record.observationStatus !== 'OBSERVED' || !name.trim() || !reason.trim() || !evidence.trim()}
+                  disabled={saving || record.observationStatus !== 'OBSERVED' || !name.trim() || !reason.trim() || !evidence.trim() || name.trim() === (record.latest?.reviewedName ?? record.rawName)}
                   onClick={() => void save()}>{saving ? 'Menyimpan koreksi…' : 'Simpan koreksi nama'}</button>
                 <button type="button" className="ahsp-action ahsp-action--quiet" disabled={saving || loading} onClick={() => void read()}>Muat ulang riwayat</button>
               </div>

@@ -143,10 +143,22 @@ function isNarrowSpellingChange(left: string, right: string): boolean {
 }
 
 /**
- * This door records spelling only. Capacity/model numerics and unit tokens must
- * remain byte-equivalent, and a wholesale word replacement is not relabelled a
- * typo. Unsupported ambiguity stays outside this event and needs normal identity
- * review; this function never decides identity.
+ * A single, evidence-bounded concrete compressive-strength notation repair.
+ * "Beton fc 10 Mpa" -> "Beton f'c 10 Mpa" is ONLY punctuation of the
+ * technical symbol. The exact rest of the ORIGINAL text, including strength
+ * and unit, must remain byte-for-byte identical. This never resolves identity.
+ */
+function isConcreteFcNotationOnly(rawName: string, reviewedName: string): boolean {
+  if (!/\bbeton\b/iu.test(rawName)) return false;
+  const canonicalNotation = rawName.replace(/\bfc\b/giu, "f'c");
+  return canonicalNotation !== rawName && reviewedName === canonicalNotation;
+}
+
+/**
+ * This door records spelling/notation only. Capacity/model numerics and unit
+ * tokens must remain byte-equivalent; arbitrary punctuation or a wholesale
+ * word replacement is not relabelled a typo. Unsupported ambiguity stays
+ * outside this event and needs normal identity review.
  */
 export function assertSpellingOnlyNameReview(
   rawName: string,
@@ -159,6 +171,8 @@ export function assertSpellingOnlyNameReview(
   ) {
     throw new BadRequestException('REVIEWED_NAME_INVALID');
   }
+  // Exact notation-only correction, not a blanket punctuation whitelist.
+  if (isConcreteFcNotationOnly(rawName, reviewedName)) return;
   const raw = tokens(rawName);
   const reviewed = tokens(reviewedName);
   if (
