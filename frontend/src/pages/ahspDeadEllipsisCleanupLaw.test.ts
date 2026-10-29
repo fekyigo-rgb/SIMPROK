@@ -39,7 +39,7 @@ test('no writer is replaced or duplicated: existing delete, propose, export, upd
 
 test('Owner-approved AHSP table columns, natural sorting and 20 per page are still preserved', () => {
   assert.ok(list.includes('const PAGE_SIZE = 20;'));
-  for (const name of ['Kode', 'Jenis Pekerjaan', 'Uraian', 'Satuan', 'Kategori']) {
+  for (const name of ['Kode', 'Lingkup Pekerjaan', 'Uraian', 'Satuan', 'Kategori']) {
     assert.ok(list.includes("'"+name+"'") || list.includes("'"+name.toUpperCase()+"'"), name);
   }
   assert.ok(list.includes('className="ahsp-room__table"'));

@@ -69,7 +69,7 @@ test('sort filters first, then sorts matching records, then paginates; selection
 test('all five displayed values are sortable with an active arrow, aria-sort and keyboard buttons', () => {
   const header = room.slice(room.indexOf('<thead>'), room.indexOf('</thead>'));
   for (const [key, title] of [
-    ['CODE', 'Kode'], ['WORK_TYPE', 'Jenis Pekerjaan'],
+    ['CODE', 'Kode'], ['WORK_TYPE', 'Lingkup Pekerjaan'],
     ['DESCRIPTION', 'Uraian'], ['UNIT', 'Satuan'], ['CATEGORY', 'Kategori'],
   ]) {
     assert.ok(header.includes(`<th aria-sort={headerSort('${key}')}>{sortButton('${key}', '${title}')}</th>`));
@@ -88,7 +88,7 @@ test('Owner-approved blue table, purple Lihat, search and filter presentation ar
   assert.match(css, /\.ahsp-room__table \.ahsp-action--view\s*\{[^}]*background:\s*#8b5cf6;/s);
   assert.ok(css.includes('.ahsp-room__table th .ahsp-room__sort-button {'));
   assert.ok(css.includes('.ahsp-room__table th .ahsp-room__sort-button:focus-visible {'));
-  for (const term of ['Cari AHSP', 'Saring sumber AHSP', 'Saring jenis pengadaan AHSP', 'Saring kategori AHSP', 'Saring subkategori AHSP', 'Saring jenis pekerjaan AHSP']) {
+  for (const term of ['Cari AHSP', 'Saring sumber AHSP', 'Saring jenis pengadaan AHSP', 'Saring kategori AHSP', 'Saring subkategori AHSP', 'Saring lingkup pekerjaan AHSP']) {
     assert.ok(room.includes(term), term);
   }
   assert.ok(room.includes("to={'/ahsp/' + row.id}"));

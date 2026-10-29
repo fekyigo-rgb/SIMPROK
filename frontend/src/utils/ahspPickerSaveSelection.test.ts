@@ -106,7 +106,7 @@ test('real picker emits Bina Marga / Drainase Jalan / Beton as a saveable pendin
   assert.ok(onRootChange);
   onRootChange({ target: { value: 'root' } });
   await settle();
-  for (const [label, name] of [['Kategori', 'Bina Marga'], ['Subkategori', 'Drainase Jalan'], ['Jenis Pekerjaan', 'Beton']]) {
+  for (const [label, name] of [['Kategori', 'Bina Marga'], ['Subkategori', 'Drainase Jalan'], ['Lingkup Pekerjaan', 'Beton']]) {
     const menu = all(render()).find(n => n.props?.label === label);
     assert.ok(menu, label);
     const option = all(menu.props.children).find(n => n.type === 'label' && JSON.stringify(n).includes(name));

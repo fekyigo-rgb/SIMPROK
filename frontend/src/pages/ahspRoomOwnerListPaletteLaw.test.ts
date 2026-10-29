@@ -19,7 +19,7 @@ test('Owner 21 Oct: all list header labels and sort arrows inherit white on the 
   assert.match(sortRule, /color:\s*inherit;/);
   assert.match(hoverRule, /color:\s*inherit;/);
   assert.ok(page.includes('<th>Aksi</th>'));
-  for (const label of ['Kode', 'Jenis Pekerjaan', 'Uraian', 'Satuan', 'Kategori']) {
+  for (const label of ['Kode', 'Lingkup Pekerjaan', 'Uraian', 'Satuan', 'Kategori']) {
     assert.ok(page.includes("'" + label + "')"), label);
   }
   assert.ok(page.includes('<ArrowUp size={12} aria-hidden="true" />'));
