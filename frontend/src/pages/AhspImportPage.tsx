@@ -105,6 +105,7 @@ import {
 } from '../utils/ahspSamenessDisplay';
 import { ActionOutcomeNotice } from '../components/ahsp/ActionOutcomeNotice';
 import { ObservedNameReviewPanel } from '../components/ahsp/ObservedNameReviewPanel';
+import { CatalogNameReviewDoor } from '../components/ahsp/CatalogNameReviewDoor';
 import '../styles/ahsp.css';
 
 type SamenessDecision = 'USE_EXISTING' | 'KEEP_SEPARATE' | 'SKIP';
@@ -1454,8 +1455,8 @@ export function AhspImportPage() {
             {view.candidateChoices.map((choice) => {
               const busy = busyOn('existing:' + choice.resourceCatalogId);
               return (
-                <button
-                  key={choice.resourceCatalogId}
+                <div key={choice.resourceCatalogId} className="ahsp-choice-with-catalog-review">
+                  <button
                   type="button"
                   className="ahsp-action ahsp-action--choice"
                   disabled={locked}
@@ -1467,7 +1468,15 @@ export function AhspImportPage() {
                   {choice.unprovedFacts.length > 0 ? (
                     <span className="ahsp-action__sub">Belum dinyatakan sumber: {choice.unprovedFacts.join(', ')}</span>
                   ) : null}
-                </button>
+                  </button>
+                  <CatalogNameReviewDoor
+                    resourceCatalogId={choice.resourceCatalogId}
+                    resourceName={choice.name}
+                    onCatalogNameSaved={async () => {
+                      await loadObservations('REFRESH');
+                    }}
+                  />
+                </div>
               );
             })}
           </div>

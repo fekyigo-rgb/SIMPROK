@@ -2271,3 +2271,26 @@ button.ahsp-confirm-summary__card[aria-expanded="true"] {
 .ahsp-shared-learning-optional[open] {
   background: var(--simprok-surface-light);
 }
+
+/* AHSP reuses BP-C3 without adding a second name engine or a new page. */
+.ahsp-choice-with-catalog-review { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.ahsp-catalog-name-door {
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+}
+.ahsp-catalog-name-door > summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.ahsp-catalog-name-door[open] { background: var(--simprok-surface-light); }
+.ahsp-catalog-name-door__field { display: flex; flex-direction: column; gap: 5px; margin: 10px 0; font-size: 13px; }
+.ahsp-catalog-name-door__field input,
+.ahsp-catalog-name-door__field textarea {
+  padding: 8px 10px;
+  border-radius: 6px;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  background: var(--simprok-white);
+  color: inherit;
+}
+.ahsp-catalog-name-door__check { display: flex; align-items: flex-start; gap: 8px; margin: 10px 0; font-size: 13px; }
+.ahsp-catalog-name-door__result { margin-top: 12px; padding: 10px; border-left: 3px solid var(--simprok-engineering-blue-500); }
+.ahsp-catalog-name-door__result p { font-size: 13px; margin: 6px 0; }
