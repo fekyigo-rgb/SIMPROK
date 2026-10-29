@@ -44,7 +44,8 @@ test('keeps frozen calculation lineage and manual prices distinct from working A
   assert.equal(result.manual, 1);
   assert.equal(result.linked, 1);
   assert.equal(result.other, 1);
-  assert.match(result.label, /harga tersimpan menunggu pembuktian ulang/);
+  assert.match(result.label, /harga Cost Kernel tersimpan \(jejak perlu pembuktian ulang\)/);
+  assert.match(result.label, /Harga tersimpan tidak dihitung sebagai tautan kerja aktif/);
 });
 
 test('does not equate candidate recommendations with linked or priced BOQ', () => {
@@ -59,5 +60,6 @@ test('does not equate candidate recommendations with linked or priced BOQ', () =
     noAhsp: result.noAhsp, needsProof: result.needsProof, other: result.other }, {
     checked: 5, linked: 1, noAhsp: 1, needsProof: 2, other: 1,
   });
+  assert.match(result.label, /tautan kerja AHSP aktif/);
   assert.match(result.label, /Harga tidak ditentukan dari rekomendasi/);
 });

@@ -71,6 +71,6 @@ export function summarizeRabAutoDraft(lines: readonly RabAutoDraftLine[]) {
     noAhsp,
     needsProof,
     other,
-    label: `Pemeriksaan AHSP otomatis: ${lines.length} item diperiksa · ${linked} AHSP terhubung · ${persisted} harga tersimpan menunggu pembuktian ulang · ${manual} harga manual dipertahankan · ${noAhsp} belum ada AHSP eligible · ${needsProof} perlu bukti kecocokan${other > 0 ? ` · ${other} memerlukan pemeriksaan lain` : ''}. Harga tidak ditentukan dari rekomendasi.`,
+    label: `Pemeriksaan AHSP otomatis: ${lines.length} item diperiksa · ${linked} tautan kerja AHSP aktif · ${persisted} harga Cost Kernel tersimpan (jejak perlu pembuktian ulang) · ${manual} harga manual dipertahankan · ${noAhsp} belum ada AHSP eligible · ${needsProof} perlu bukti kecocokan${other > 0 ? ` · ${other} memerlukan pemeriksaan lain` : ''}. Harga tersimpan tidak dihitung sebagai tautan kerja aktif dan tidak dihitung ulang otomatis. Harga tidak ditentukan dari rekomendasi.`,
   };
 }
