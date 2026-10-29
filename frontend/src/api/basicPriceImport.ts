@@ -277,6 +277,15 @@ export async function listBasicPriceImportHistory(page = 1): Promise<BasicPriceI
   return parseOrThrow<BasicPriceImportHistoryPage>(response);
 }
 
+export async function dismissBasicPriceUnfinishedHistory(batchId: string): Promise<{
+  batchId: string; hiddenFromHistory: boolean;
+}> {
+  const response = await apiFetch(`/basic-price-imports/${batchId}/dismiss-history`, {
+    method: 'POST',
+  });
+  return parseOrThrow(response);
+}
+
 export async function getBasicPriceImportBatch(batchId: string): Promise<BasicPriceImportBatchSummary> {
   // Decision/readiness is live server truth. Never reuse a browser-cached 409-era snapshot.
   const response = await apiFetch(`/basic-price-imports/${batchId}`, { cache: 'no-store' });

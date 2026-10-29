@@ -7,6 +7,7 @@ import {
   IntakeRefusalError,
   getBasicPriceImportBatch,
   listBasicPriceImportHistory,
+  dismissBasicPriceUnfinishedHistory,
   type BasicPriceImportHistoryPage,
   previewBasicPriceImport,
   updateBasicPriceImportBatch,
@@ -119,6 +120,8 @@ export function BasicPriceImportPage() {
   const [statusMessage, setStatusMessage] = useState('Pilih berkas daftar harga (XLSX atau CSV) untuk memulai.');
   const [importHistory, setImportHistory] = useState<BasicPriceImportHistoryPage | null>(null);
   const [historyBusy, setHistoryBusy] = useState(false);
+  const [dismissingBatchId, setDismissingBatchId] = useState<string | null>(null);
+  const [historySuccess, setHistorySuccess] = useState<string | null>(null);
   const [historyError, setHistoryError] = useState<string | null>(null);
   const historyScopeRef = useRef(activeWorkspaceId);
   // USI-01 — the answers a human has given about THIS file. Empty on the first
@@ -161,6 +164,38 @@ export function BasicPriceImportPage() {
     });
     return () => { alive = false; };
   }, [location.pathname, activeWorkspaceId]);
+
+  const dismissDraft = async (item: BasicPriceImportHistoryPage['items'][number]) => {
+    if (historyBusy || dismissingBatchId) return;
+    if (item.savedPrivateRows > 0 || item.submittedRows > 0 ||
+        ['SUBMITTED', 'PARTIALLY_SUBMITTED', 'APPROVED_FOR_SUBMISSION'].includes(item.status)) return;
+    if (!window.confirm(
+      `Hapus draft "${item.sourceFileName}" dari Riwayat Impor?\n\n` +
+      'Hanya draft yang belum mempunyai harga privat/pengajuan. ' +
+      'Dokumen sumber dan riwayat audit tetap dicatat untuk pemeriksaan. ' +
+      'Tindakan ini menyembunyikan batch dari riwayat aktif, bukan menghapus data secara fisik.',
+    )) return;
+    setDismissingBatchId(item.batchId);
+    setHistoryError(null);
+    setHistorySuccess(null);
+    try {
+      const result = await dismissBasicPriceUnfinishedHistory(item.batchId);
+      if (!result.hiddenFromHistory || result.batchId !== item.batchId) {
+        throw new Error('DISMISS_READBACK_NOT_CONFIRMED');
+      }
+      const refreshed = await listBasicPriceImportHistory();
+      setImportHistory(refreshed);
+      setHistorySuccess('Draft dikeluarkan dari Riwayat aktif. Bukti sumber dan audit tetap tersimpan.');
+    } catch (error) {
+      setHistoryError(error instanceof ImportRequestError
+        ? error.httpStatus === 409
+          ? 'Draft tidak boleh dihapus: sudah ada harga tersimpan, pengajuan, atau perubahan keadaan. Muat ulang riwayat.'
+          : importRequestMessage(error.httpStatus)
+        : 'Belum dapat memastikan penghapusan draft dari riwayat. Jangan ulangi sebelum memuat ulang.');
+    } finally {
+      setDismissingBatchId(null);
+    }
+  };
 
   const loadMoreHistory = async () => {
     if (!importHistory?.hasNext || historyBusy) return;
@@ -528,6 +563,7 @@ export function BasicPriceImportPage() {
         </p>
         {historyBusy && !importHistory ? <p role="status">Memuat riwayat impor...</p> : null}
         {historyError ? <p role="alert">{historyError}</p> : null}
+        {historySuccess ? <p role="status">{historySuccess}</p> : null}
         {!historyBusy && importHistory?.items.length === 0
           ? <p className="bp-field__help">Belum ada batch impor milik akun ini di ruang kerja ini.</p>
           : null}
@@ -554,6 +590,16 @@ export function BasicPriceImportPage() {
                   <button type="button" className="bp-btn bp-btn--sm"
                     onClick={() => navigate(`/basic-price/import/${entry.batchId}`)}>
                     Periksa Konteks Sumber
+                  </button>
+                  <button type="button" className="bp-btn bp-btn--sm"
+                    disabled={historyBusy || !!dismissingBatchId || entry.savedPrivateRows > 0 ||
+                      entry.submittedRows > 0 ||
+                      ['SUBMITTED', 'PARTIALLY_SUBMITTED', 'APPROVED_FOR_SUBMISSION'].includes(entry.status)}
+                    title={entry.savedPrivateRows > 0 || entry.submittedRows > 0
+                      ? 'Tidak bisa menghapus: batch sudah memiliki harga privat atau pengajuan.'
+                      : 'Sembunyikan draft dari riwayat aktif; dokumen dan audit tetap tersimpan.'}
+                    onClick={() => void dismissDraft(entry)}>
+                    {dismissingBatchId === entry.batchId ? 'Memproses...' : 'Hapus Draft dari Riwayat'}
                   </button>
                 </div>
               </li>

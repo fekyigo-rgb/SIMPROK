@@ -134,6 +134,17 @@ export class BasicPriceImportController {
     );
   }
 
+  /** Owner-uploader dismisses an unfinished draft from the ACTIVE history only. */
+  @Post(':batchId/dismiss-history')
+  @Permissions(PERMISSIONS.BASIC_PRICE_IMPORT)
+  async dismissOwnedHistory(@Req() request: RequestIdentity, @Param('batchId') batchId: string) {
+    return this.importService.dismissUnfinishedImportHistory(
+      request.workspaceContext.workspaceId,
+      batchId,
+      request.user.id,
+    );
+  }
+
   @Get(':batchId')
   @Permissions(PERMISSIONS.BASIC_PRICE_IMPORT)
   async getBatch(@Req() request: any, @Param('batchId') batchId: string) {
