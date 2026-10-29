@@ -1,11 +1,11 @@
 /**
  * Product Law v1.4 — assisted classification panel inside existing AhspImportPage.
  * Owner PASS visual: Jenis Pengadaan single-select; Kategori / Subkategori /
- * Jenis Pekerjaan = vertical checkbox multi-select (soft cascade). No "Tambah
+ * Lingkup Pekerjaan = vertical checkbox multi-select (soft cascade). No "Tambah
  * jalur klasifikasi" control — multi-path is produced by multiple leaf checks.
  *
  * Jenis Pengadaan roots come from the classification service.
- * Kategori, Subkategori, and Jenis Pekerjaan options come from the shared
+ * Kategori, Subkategori, and Lingkup Pekerjaan options come from the shared
  * lower-level vocabulary plus lawful local nodes already stored for this parent.
  * Checking a baseline name does not write a node. "+ Tambahkan pilihan baru"
  * remains the explicit local-create action.
@@ -826,11 +826,11 @@ export function AhspImportAssistedClassificationPanel({
       </CheckboxMenu>
 
       <CheckboxMenu
-        label="Jenis Pekerjaan"
+        label="Lingkup Pekerjaan"
         summary={
           selectedSubkategoriIds.size === 0
             ? 'Tergantung subkategori'
-            : summaryLabel(jenisOptions, selectedJenisIds, 'Pilih jenis pekerjaan')
+            : summaryLabel(jenisOptions, selectedJenisIds, 'Pilih lingkup pekerjaan')
         }
         chips={chipsFor(selectedJenisIds, jenisOptions)}
         disabled={selectedSubkategoriIds.size === 0 && searchHitsJenis.length === 0}
@@ -845,7 +845,7 @@ export function AhspImportAssistedClassificationPanel({
               <input
                 type="search"
                 value={searchJenis}
-                placeholder={'Cari Jenis Pekerjaan\u2026'}
+                placeholder={'Cari Lingkup Pekerjaan\u2026'}
                 onChange={(e) => {
                   setSearchJenis(e.target.value);
                   void searchLevel(
@@ -859,7 +859,7 @@ export function AhspImportAssistedClassificationPanel({
             </label>
             {firstSub ? (
               <LocalAddFooter
-                levelLabel="jenis pekerjaan"
+                levelLabel="lingkup pekerjaan"
                 draft={draftJenis}
                 onDraft={setDraftJenis}
                 busy={customBusy}
@@ -874,7 +874,7 @@ export function AhspImportAssistedClassificationPanel({
       >
         {jenisOptions.length === 0 ? (
           <p className="ahsp-line ahsp-line--abu">
-            Pilih subkategori, cari lintas saran, atau tambah jenis pekerjaan lokal.
+            Pilih subkategori, cari lintas saran, atau tambah lingkup pekerjaan lokal.
           </p>
         ) : (
           jenisOptions.map((n) => (

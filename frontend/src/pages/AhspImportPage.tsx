@@ -2597,7 +2597,7 @@ export function AhspImportPage() {
                   <table className="ahsp-confirm-table" aria-label="Daftar hasil import">
                     <thead>
                       <tr>
-                        <th>Jenis Pekerjaan</th>
+                        <th>Lingkup Pekerjaan</th>
                         <th>Uraian</th>
                         <th>Satuan Output</th>
                         <th>Kondisi Import</th>

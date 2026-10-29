@@ -52,7 +52,7 @@ type AhspRow = {
   reviewStatus: string | null;
   proposedAt: string | null;
   archivedAt: string | null;
-  versions?: Array<{ outputUnit: string | null; regulationReference: string | null }> | null;
+  versions?: Array<{ outputUnit: string | null; regulationReference: string | null; outputUnitDefinition?: { symbol: string | null } | null }> | null;
 };
 
 type RoomState =
@@ -201,7 +201,7 @@ export function AhspRoomPage() {
           ? paths.map((path) => path.jenisPekerjaan).filter(Boolean).join(' · ')
           : identity.workType;
         case 'DESCRIPTION': return row.methodName;
-        case 'UNIT': return row.versions?.[0]?.outputUnit;
+        case 'UNIT': return row.versions?.[0]?.outputUnitDefinition?.symbol ?? row.versions?.[0]?.outputUnit;
         case 'CATEGORY': return paths.length > 0
           ? paths.map((path) => path.kategori).filter(Boolean).join(' · ')
           : row.fieldCategory;
@@ -383,7 +383,7 @@ export function AhspRoomPage() {
 
   const exportSelection = () => {
     if (selectedRows.length === 0) return;
-    const header = ['Kode', 'Jenis Pekerjaan', 'Uraian', 'Satuan', 'Kategori', 'Sumber'];
+    const header = ['Kode', 'Lingkup Pekerjaan', 'Uraian', 'Satuan', 'Kategori', 'Sumber'];
     const escape = (v: string) => '"' + v.replace(/"/g, '""') + '"';
     const lines = [header.map(escape).join(',')];
     for (const r of selectedRows) {
@@ -503,9 +503,9 @@ export function AhspRoomPage() {
                 </select>
               </label>
               <label className="ahsp-field">
-                <span className="ahsp-field__label">Jenis Pekerjaan</span>
-                <select className="ahsp-field__control" value={jenis} onChange={(e) => { setJenis(e.target.value); setPage(0); }} aria-label="Saring jenis pekerjaan AHSP">
-                  <option value="">Semua Jenis Pekerjaan</option>
+                <span className="ahsp-field__label">Lingkup Pekerjaan</span>
+                <select className="ahsp-field__control" value={jenis} onChange={(e) => { setJenis(e.target.value); setPage(0); }} aria-label="Saring lingkup pekerjaan AHSP">
+                  <option value="">Semua Lingkup Pekerjaan</option>
                   {options.jenis.map((o) => <option key={o} value={o}>{o}</option>)}
                 </select>
               </label>
@@ -564,7 +564,7 @@ export function AhspRoomPage() {
                           <input type="checkbox" aria-label="Pilih semua di halaman ini" checked={pageAllSelected} onChange={toggleSelectPage} />
                         </th>
                         <th aria-sort={headerSort('CODE')}>{sortButton('CODE', 'Kode')}</th>
-                        <th aria-sort={headerSort('WORK_TYPE')}>{sortButton('WORK_TYPE', 'Jenis Pekerjaan')}</th>
+                        <th aria-sort={headerSort('WORK_TYPE')}>{sortButton('WORK_TYPE', 'Lingkup Pekerjaan')}</th>
                         <th aria-sort={headerSort('DESCRIPTION')}>{sortButton('DESCRIPTION', 'Uraian')}</th>
                         <th aria-sort={headerSort('UNIT')}>{sortButton('UNIT', 'Satuan')}</th>
                         <th aria-sort={headerSort('CATEGORY')}>{sortButton('CATEGORY', 'Kategori')}</th>
@@ -573,7 +573,7 @@ export function AhspRoomPage() {
                     </thead>
                     <tbody>
                       {pageRows.map((row) => {
-                        // Kode and Jenis Pekerjaan are named from ONE mapping: a recorded
+                        // Kode and Lingkup Pekerjaan are named from ONE mapping: a recorded
                         // source code is shown as the code, never again as a work type.
                         const identity = presentAhspIdentity(row);
                         const paths = canonicalPaths(row);
@@ -593,7 +593,7 @@ export function AhspRoomPage() {
                             <td>{orDash(identity.code)}</td>
                             <td>{orDash(jenisLabel)}</td>
                             <td>{orDash(row.methodName)}</td>
-                            <td>{orDash(row.versions?.[0]?.outputUnit)}</td>
+                            <td>{orDash(row.versions?.[0]?.outputUnitDefinition?.symbol ?? row.versions?.[0]?.outputUnit)}</td>
                             <td>{orDash(kategoriLabel)}</td>
                             <td style={{ whiteSpace: 'nowrap' }}>
                               <Link to={'/ahsp/' + row.id} className="ahsp-action ahsp-action--outline ahsp-action--compact ahsp-action--view">

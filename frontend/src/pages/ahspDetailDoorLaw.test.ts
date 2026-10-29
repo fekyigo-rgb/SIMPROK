@@ -85,7 +85,7 @@ test("official-domain names and interpretation are never hardcoded as fact", () 
 });
 
 test("the Owner-approved fields and status are present, in human words", () => {
-  for (const field of ['Kode', 'Jenis Pengadaan', 'Kategori', 'Subkategori', 'Jenis Pekerjaan', 'Dasar AHSP', 'Status Usulan', 'Dibuat oleh', 'Tanggal input', 'Informasi AHSP', 'Komponen Pembentuk AHSP', 'Tentang AHSP Ini']) {
+  for (const field of ['Kode', 'Jenis Pengadaan', 'Kategori', 'Subkategori', 'Lingkup Pekerjaan', 'Dasar AHSP', 'Status Usulan', 'Dibuat oleh', 'Tanggal input', 'Informasi AHSP', 'Komponen Pembentuk AHSP', 'Tentang AHSP Ini']) {
     assert.ok(detail.includes(field), `missing "${field}"`);
   }
   // Status Usulan is translated, not an enum.

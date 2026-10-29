@@ -860,7 +860,11 @@ describe('AhspService', () => {
       expect(call.select.versions).toEqual({
         orderBy: { versionNumber: 'desc' },
         take: 1,
-        select: { outputUnit: true, regulationReference: true },
+        select: {
+          outputUnit: true,
+          regulationReference: true,
+          outputUnitDefinition: { select: { symbol: true } },
+        },
       });
       expect(call.select.versions.where).toBeUndefined();
       // The binding predicate's date/status invariants never appear anywhere,

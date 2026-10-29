@@ -1207,14 +1207,14 @@ export function AhspDetailPage() {
                     {infoRow('Jenis Pengadaan', orDash(groupedClassificationValue(classificationPaths, 'jenisPengadaan')))}
                     {infoRow('Kategori', orDash(groupedClassificationValue(classificationPaths, 'kategori')))}
                     {infoRow('Subkategori', orDash(groupedClassificationValue(classificationPaths, 'subkategori')))}
-                    {infoRow('Jenis Pekerjaan', orDash(groupedClassificationValue(classificationPaths, 'jenisPekerjaan')))}
+                    {infoRow('Lingkup Pekerjaan', orDash(groupedClassificationValue(classificationPaths, 'jenisPekerjaan')))}
                   </>
                 ) : (
                   <>
                     {infoRow('Jenis Pengadaan', orDash(ahsp.classification))}
                     {infoRow('Kategori', orDash(ahsp.fieldCategory))}
                     {infoRow('Subkategori', orDash(ahsp.subCategory))}
-                    {infoRow('Jenis Pekerjaan', orDash(presentAhspIdentity(ahsp).workType))}
+                    {infoRow('Lingkup Pekerjaan', orDash(presentAhspIdentity(ahsp).workType))}
                   </>
                 )}
                 {infoRow('Keterangan', orDash(ahsp.keterangan))}

@@ -101,7 +101,7 @@ test("C rows open the existing definition; import is a SEPARATE door, not inline
 });
 
 test("C the Owner mockup columns are present", () => {
-  for (const col of ['Kode', 'Jenis Pekerjaan', 'Uraian', 'Satuan', 'Bidang', 'Aksi']) {
+  for (const col of ['Kode', 'Lingkup Pekerjaan', 'Uraian', 'Satuan', 'Bidang', 'Aksi']) {
     assert.ok(room.includes(col), `missing column "${col}"`);
   }
 });
@@ -109,7 +109,7 @@ test("C the Owner mockup columns are present", () => {
 test("C search and the canonical filters form the control area", () => {
   assert.ok(room.includes("Cari kode atau uraian pekerjaan"));
   assert.ok(room.includes("Reset Filter"));
-  for (const f of ['Jenis Pengadaan', 'Kategori', 'Subkategori', 'Jenis Pekerjaan']) {
+  for (const f of ['Jenis Pengadaan', 'Kategori', 'Subkategori', 'Lingkup Pekerjaan']) {
     assert.ok(room.includes(f), `missing filter "${f}"`);
   }
   assert.ok(room.includes("Saring sumber AHSP"));
