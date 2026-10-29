@@ -409,6 +409,7 @@ export class ResourceObservationController {
       reason?: string;
       refusedCandidateIds?: unknown;
       candidateContextDigest?: unknown;
+      confirmedSpecifications?: unknown;
     },
   ) {
     if (!body?.unitDefinitionId) {
@@ -439,6 +440,9 @@ export class ResourceObservationController {
       unitDefinitionId: body.unitDefinitionId,
       actorAccountId: this.actor(request),
       reason: body.reason ?? null,
+      confirmedSpecifications: body.confirmedSpecifications === undefined
+        ? null
+        : body.confirmedSpecifications as Record<string, string>,
       examination: hasRefused
         ? {
             refusedCandidateIds: refused as string[],
