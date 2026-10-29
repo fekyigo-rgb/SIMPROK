@@ -165,6 +165,9 @@ export interface CorrectResourceCatalogNameInput {
   sameIdentityConfirmed: boolean;
   nomenclatureVerified?: boolean;
   confirmedCatalogCode?: string;
+  /** Required instead of an invented code when the existing catalog has NO code. */
+  confirmedCatalogName?: string;
+  confirmedCatalogBaseUnit?: string;
   sourceReference?: string;
 }
 
@@ -193,10 +196,15 @@ export class ResourceCatalogNameCorrectionService {
       throw new ConflictException('CATALOG_CORRECTION_REQUIRES_IDENTITY_ADJUDICATION');
     }
     const nomenclature = changeClass === 'NOMENCLATURE_REQUIRES_VERIFICATION';
+    // Catalog code is optional canonical data. Never require a fake code.
+    // Code-present records retain the existing retype gate. Code-absent
+    // records require independent live name + unit retype, verified again
+    // inside the transaction against the locked resource.
     if (nomenclature &&
         (input.nomenclatureVerified !== true ||
-         typeof input.confirmedCatalogCode !== 'string' ||
-         !input.confirmedCatalogCode.trim())) {
+         !(typeof input.confirmedCatalogCode === 'string' && input.confirmedCatalogCode.trim()) &&
+         !(typeof input.confirmedCatalogName === 'string' && input.confirmedCatalogName.trim() &&
+           typeof input.confirmedCatalogBaseUnit === 'string' && input.confirmedCatalogBaseUnit.trim()))) {
       throw new BadRequestException('CATALOG_NOMENCLATURE_CURATOR_VERIFICATION_REQUIRED');
     }
     // Reference to actual documented basis: source/specification OR an
@@ -244,11 +252,18 @@ export class ResourceCatalogNameCorrectionService {
       if (classifyCatalogNameChange(resource.name, correctedName) !== changeClass) {
         throw new ConflictException('CATALOG_CORRECTION_STALE_DECISION');
       }
-      if (nomenclature &&
-          (resource.code === null ||
-           resource.code.toLocaleLowerCase('id-ID') !==
-             input.confirmedCatalogCode?.trim().toLocaleLowerCase('id-ID'))) {
-        throw new ConflictException('CATALOG_NOMENCLATURE_CODE_MISMATCH');
+      if (nomenclature) {
+        if (resource.code && resource.code.trim()) {
+          if (resource.code.toLocaleLowerCase('id-ID') !==
+              input.confirmedCatalogCode?.trim().toLocaleLowerCase('id-ID')) {
+            throw new ConflictException('CATALOG_NOMENCLATURE_CODE_MISMATCH');
+          }
+        } else if (
+          resource.name !== input.confirmedCatalogName?.trim() ||
+          resource.baseUnit !== input.confirmedCatalogBaseUnit?.trim()
+        ) {
+          throw new ConflictException('CATALOG_NOMENCLATURE_NO_CODE_IDENTITY_MISMATCH');
+        }
       }
 
       // This is a spelling-collision check, NOT a new identity matcher.

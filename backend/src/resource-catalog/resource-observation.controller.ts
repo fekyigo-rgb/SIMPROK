@@ -85,6 +85,8 @@ export class ResourceObservationController {
       sameIdentityConfirmed?: boolean;
       nomenclatureVerified?: boolean;
       confirmedCatalogCode?: string;
+      confirmedCatalogName?: string;
+      confirmedCatalogBaseUnit?: string;
       sourceReference?: string;
     },
   ) {
@@ -103,6 +105,8 @@ export class ResourceObservationController {
       sameIdentityConfirmed: body?.sameIdentityConfirmed === true,
       nomenclatureVerified: body?.nomenclatureVerified === true,
       confirmedCatalogCode: body?.confirmedCatalogCode,
+      confirmedCatalogName: body?.confirmedCatalogName,
+      confirmedCatalogBaseUnit: body?.confirmedCatalogBaseUnit,
       sourceReference: body?.sourceReference,
     });
   }

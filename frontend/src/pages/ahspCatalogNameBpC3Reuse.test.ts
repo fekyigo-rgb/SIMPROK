@@ -38,7 +38,10 @@ test('preview and correction are permission-scoped, explicitly chosen and fail c
   assert.match(door, /hasPermission\('AHSP_RESOURCE_IDENTITY_DECIDE'\)/);
   assert.match(door, /if \(busy \|\| !canPreview \|\| proposal\.trim\(\)\.length < 3\) return/);
   assert.match(door, /canCorrect && writableVerdict && verified/);
-  assert.match(door, /nomenclatureVerified && sourceReference\.trim\(\)\.length >= 12 && codeCorrect/);
+  assert.match(door, /nomenclatureVerified && sourceReference\.trim\(\)\.length >= 12/);
+  assert.match(door, /result\?\.resourceCode \? codeCorrect : noCodeConfirmed/);
+  assert.match(door, /confirmedCatalogName\.trim\(\) === result\.currentName/);
+  assert.match(door, /confirmedCatalogBaseUnit\.trim\(\) === result\.baseUnit/);
   assert.match(door, /resourceCatalogId, result\.proposedName/);
   assert.match(door, /readback\.verdict !== 'NO_CHANGE'/);
   assert.match(door, /setError\('Permintaan diterima, tetapi nama baru belum terbukti/);

@@ -25,10 +25,13 @@ test('BP-C3: impact preview stays read-only and write needs curator evidence', (
   assert.match(panel, /nomenclatureVerified/u);
   assert.match(panel, /confirmedCatalogCode/u);
   assert.match(panel, /nameSourceReference\.trim\(\)\.length < 12/u);
-  assert.match(panel, /tulisan petunjuk bukan isian/u);
-  assert.match(panel, /Kode belum diisi/u);
-  assert.match(panel, /kode katalog tidak cocok/u);
-  assert.match(panel, /Ketik ulang kode katalog di kotak kode/u);
+  assert.match(panel, /Jangan membuat kode baru/u);
+  assert.match(panel, /Katalog tanpa kode: ketik ulang nama lama dan satuan/u);
+  assert.match(panel, /confirmedCatalogName/u);
+  assert.match(panel, /confirmedCatalogBaseUnit/u);
+  assert.match(panel, /Kode katalog belum diisi/u);
+  assert.match(panel, /Kode yang diketik tidak cocok/u);
+  assert.match(panel, /Simpan belum aktif: pastikan kode katalog/u);
   assert.match(panel, /Jangan menyatakan dokumen impor menulis Ton/u);
   assert.match(panel, /Dasar koreksi nama \(dokumen atau penetapan Owner\/kurator yang nyata\)/u);
   assert.match(panel, /bukan klaim kedua istilah sinonim/u);

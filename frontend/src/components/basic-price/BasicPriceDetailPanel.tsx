@@ -151,6 +151,8 @@ export function BasicPriceDetailPanel({
   const [nameCorrectionConfirmed, setNameCorrectionConfirmed] = useState(false);
   const [nomenclatureVerified, setNomenclatureVerified] = useState(false);
   const [confirmedCatalogCode, setConfirmedCatalogCode] = useState('');
+  const [confirmedCatalogName, setConfirmedCatalogName] = useState('');
+  const [confirmedCatalogBaseUnit, setConfirmedCatalogBaseUnit] = useState('');
   const [nameSourceReference, setNameSourceReference] = useState('');
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
@@ -498,22 +500,41 @@ export function BasicPriceDetailPanel({
                             <p className="bp-field__help">
                               Catat keputusan atau referensi yang benar-benar ada, beserta pihak dan tanggalnya. Jangan menyatakan dokumen impor menulis Ton bila sumbernya menulis TC.
                             </p>
-                            <label className="bp-field">
-                              <span className="bp-field__label">Ketik ulang kode katalog untuk memastikan item yang dipilih</span>
-                              <input className="bp-input" value={confirmedCatalogCode}
-                                onChange={(event) => setConfirmedCatalogCode(event.target.value)}
-                                placeholder={nameImpactResult.resourceCode
-                                  ? 'Ketik ' + nameImpactResult.resourceCode + ' secara manual'
-                                  : 'Kode katalog tidak tersedia'}
-                                maxLength={80} />
-                            </label>
+                            {nameImpactResult.resourceCode ? (
+                              <label className="bp-field">
+                                <span className="bp-field__label">Ketik ulang kode katalog untuk memastikan item yang dipilih</span>
+                                <input className="bp-input" value={confirmedCatalogCode}
+                                  onChange={(event) => setConfirmedCatalogCode(event.target.value)}
+                                  placeholder={'Ketik ' + nameImpactResult.resourceCode + ' secara manual'}
+                                  maxLength={80} />
+                              </label>
+                            ) : (
+                              <>
+                                <p className="bp-field__help">Resource katalog ini tidak memiliki kode. Jangan membuat kode baru; konfirmasikan nama lama dan satuannya.</p>
+                                <label className="bp-field">
+                                  <span className="bp-field__label">Ketik ulang nama katalog lama ({nameImpactResult.currentName})</span>
+                                  <input className="bp-input" value={confirmedCatalogName}
+                                    onChange={(event) => setConfirmedCatalogName(event.target.value)} maxLength={180} />
+                                </label>
+                                <label className="bp-field">
+                                  <span className="bp-field__label">Ketik ulang satuan katalog ({nameImpactResult.baseUnit})</span>
+                                  <input className="bp-input" value={confirmedCatalogBaseUnit}
+                                    onChange={(event) => setConfirmedCatalogBaseUnit(event.target.value)} maxLength={80} />
+                                </label>
+                              </>
+                            )}
                             <p className="bp-field__help" role="status" aria-live="polite">
-                              {!confirmedCatalogCode.trim()
-                                ? 'Kode belum diisi. Ketik ulang ' + (nameImpactResult.resourceCode ?? 'kode katalog') + ' pada kotak di atas; tulisan petunjuk bukan isian.'
-                                : confirmedCatalogCode.trim().toLocaleLowerCase('id-ID') !==
-                                  nameImpactResult.resourceCode?.toLocaleLowerCase('id-ID')
-                                  ? 'Kode yang diketik tidak cocok dengan identitas katalog. Periksa ulang.'
-                                  : 'Kode katalog sudah cocok.'}
+                              {!nameImpactResult.resourceCode
+                                ? confirmedCatalogName.trim() === nameImpactResult.currentName &&
+                                  confirmedCatalogBaseUnit.trim() === nameImpactResult.baseUnit
+                                  ? 'Nama lama dan satuan katalog cocok. Simpan tetap memerlukan bukti dan keputusan kurator.'
+                                  : 'Katalog tanpa kode: ketik ulang nama lama dan satuan persis seperti yang tampil.'
+                                : !confirmedCatalogCode.trim()
+                                  ? 'Kode katalog belum diisi. Ketik ulang kode yang tampil.'
+                                  : confirmedCatalogCode.trim().toLocaleLowerCase('id-ID') !==
+                                    nameImpactResult.resourceCode.toLocaleLowerCase('id-ID')
+                                    ? 'Kode yang diketik tidak cocok dengan identitas katalog.'
+                                    : 'Kode katalog sudah cocok.'}
                             </p>
                             <label className="bp-field">
                               <input type="checkbox" checked={nomenclatureVerified}
@@ -563,12 +584,11 @@ export function BasicPriceDetailPanel({
                         </label>
                         <p className="bp-field__help" aria-live="polite">
                           {nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' &&
-                            !confirmedCatalogCode.trim()
-                            ? 'Simpan belum aktif: kode ' + (nameImpactResult.resourceCode ?? 'katalog') + ' masih berupa petunjuk. Ketik ulang kode katalog di kotak kode.'
-                            : nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' &&
-                              (!nameImpactResult.resourceCode ||
-                                confirmedCatalogCode.trim().toLocaleLowerCase('id-ID') !== nameImpactResult.resourceCode.toLocaleLowerCase('id-ID'))
-                              ? 'Simpan belum aktif: kode katalog tidak cocok.'
+                            !(nameImpactResult.resourceCode
+                              ? confirmedCatalogCode.trim().toLocaleLowerCase('id-ID') === nameImpactResult.resourceCode.toLocaleLowerCase('id-ID')
+                              : confirmedCatalogName.trim() === nameImpactResult.currentName &&
+                                confirmedCatalogBaseUnit.trim() === nameImpactResult.baseUnit)
+                              ? 'Simpan belum aktif: pastikan kode katalog, atau untuk katalog tanpa kode, nama lama dan satuan persis sesuai data.'
                               : nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' &&
                                 nameSourceReference.trim().length < 12
                                 ? 'Simpan belum aktif: lengkapi dasar koreksi yang nyata (minimal 12 karakter).'
@@ -592,8 +612,10 @@ export function BasicPriceDetailPanel({
                             (nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' &&
                               (!nomenclatureVerified ||
                                nameSourceReference.trim().length < 12 ||
-                               !nameImpactResult.resourceCode ||
-                               confirmedCatalogCode.trim().toLocaleLowerCase('id-ID') !== nameImpactResult.resourceCode.toLocaleLowerCase('id-ID')))}
+                               !(nameImpactResult.resourceCode
+                                 ? confirmedCatalogCode.trim().toLocaleLowerCase('id-ID') === nameImpactResult.resourceCode.toLocaleLowerCase('id-ID')
+                                 : confirmedCatalogName.trim() === nameImpactResult.currentName &&
+                                   confirmedCatalogBaseUnit.trim() === nameImpactResult.baseUnit)))}
                           onClick={async () => {
                             setNameImpactBusy(true);
                             setNameImpactError(null);
@@ -606,7 +628,9 @@ export function BasicPriceDetailPanel({
                                 evidence: nameCorrectionEvidence,
                                 sameIdentityConfirmed: true,
                                 nomenclatureVerified: nameImpactResult.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED' && nomenclatureVerified,
-                                confirmedCatalogCode: confirmedCatalogCode.trim(),
+                                confirmedCatalogCode: nameImpactResult.resourceCode ? confirmedCatalogCode.trim() : undefined,
+                                confirmedCatalogName: !nameImpactResult.resourceCode ? confirmedCatalogName.trim() : undefined,
+                                confirmedCatalogBaseUnit: !nameImpactResult.resourceCode ? confirmedCatalogBaseUnit.trim() : undefined,
                                 sourceReference: nameSourceReference.trim(),
                               });
                               setNameImpactOpen(false);

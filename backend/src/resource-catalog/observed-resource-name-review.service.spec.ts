@@ -208,6 +208,28 @@ describe('ObservedResourceNameReviewService', () => {
     }
   });
 
+  it('accepts exact FLAT BED TRUCK to FLATBED TRUCK spacing while preserving 10 TON and source lineage', async () => {
+    const raw = { ...observation, rawName: 'FLAT BED TRUCK 10 TON', rawUnit: 'Jam', resourceType: 'EQUIPMENT' };
+    const sourceFingerprint = observedResourceSourceFactsFingerprint(raw);
+    prisma.observedResource.findFirst.mockResolvedValue(raw);
+    expect(() => assertSpellingOnlyNameReview(raw.rawName, 'FLATBED TRUCK 10 TON')).not.toThrow();
+    const saved = await append({
+      expectedSourceFactsFingerprint: sourceFingerprint,
+      reviewedName: 'FLATBED TRUCK 10 TON',
+      reason: 'Meratakan spasi istilah Flatbed sesuai nama baku.',
+      evidence: 'Jenis alat, model dan kapasitas 10 TON tidak diubah oleh penulisan.',
+    });
+    expect(saved).toMatchObject({ version: 1, reviewedName: 'FLATBED TRUCK 10 TON' });
+    expect(prisma.observedResource.update).not.toHaveBeenCalled();
+    for (const bad of [
+      'FLATBED TRUCK 4 TON',
+      'FLATBED TRUCK 10 KG',
+      'FLATBED TRUCK 10 TON PLUS',
+      'DUMP TRUCK 10 TON',
+      'FLATBED CRANE 10 TON',
+    ]) expect(() => assertSpellingOnlyNameReview(raw.rawName, bad)).toThrow(BadRequestException);
+  });
+
   it('RI01 P1: refuses material family/type/spec substitutions disguised as one-character typos', () => {
     for (const [rawName, reviewedName] of [
       ['PIPA PVC', 'PIPA CPVC'],

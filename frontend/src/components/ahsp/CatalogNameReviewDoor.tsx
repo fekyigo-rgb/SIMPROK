@@ -35,6 +35,8 @@ export function CatalogNameReviewDoor({
   const [verified, setVerified] = useState(false);
   const [sourceReference, setSourceReference] = useState('');
   const [catalogCode, setCatalogCode] = useState('');
+  const [confirmedCatalogName, setConfirmedCatalogName] = useState('');
+  const [confirmedCatalogBaseUnit, setConfirmedCatalogBaseUnit] = useState('');
   const [nomenclatureVerified, setNomenclatureVerified] = useState(false);
 
   const changeProposal = (value: string) => {
@@ -44,6 +46,9 @@ export function CatalogNameReviewDoor({
     setReceipt(null);
     setVerified(false);
     setNomenclatureVerified(false);
+    setConfirmedCatalogName('');
+    setConfirmedCatalogBaseUnit('');
+    setCatalogCode('');
   };
   const preview = async () => {
     if (busy || !canPreview || proposal.trim().length < 3) return;
@@ -64,9 +69,13 @@ export function CatalogNameReviewDoor({
   const nomenclature = result?.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED';
   const codeCorrect = !!result?.resourceCode &&
     catalogCode.trim().toLocaleLowerCase('id-ID') === result.resourceCode.toLocaleLowerCase('id-ID');
+  const noCodeConfirmed = result !== null && result.resourceCode == null &&
+    confirmedCatalogName.trim() === result.currentName &&
+    confirmedCatalogBaseUnit.trim() === result.baseUnit;
   const ready = canCorrect && writableVerdict && verified &&
     reason.trim().length >= 10 && evidence.trim().length >= 20 &&
-    (!nomenclature || (nomenclatureVerified && sourceReference.trim().length >= 12 && codeCorrect));
+    (!nomenclature || (nomenclatureVerified && sourceReference.trim().length >= 12 &&
+      (result?.resourceCode ? codeCorrect : noCodeConfirmed)));
 
   const save = async () => {
     if (!result || !ready || busy) return;
@@ -82,7 +91,9 @@ export function CatalogNameReviewDoor({
         evidence: evidence.trim(),
         sameIdentityConfirmed: true,
         nomenclatureVerified: nomenclature && nomenclatureVerified,
-        confirmedCatalogCode: nomenclature ? catalogCode.trim() : undefined,
+        confirmedCatalogCode: nomenclature && result.resourceCode ? catalogCode.trim() : undefined,
+        confirmedCatalogName: nomenclature && !result.resourceCode ? confirmedCatalogName.trim() : undefined,
+        confirmedCatalogBaseUnit: nomenclature && !result.resourceCode ? confirmedCatalogBaseUnit.trim() : undefined,
         sourceReference: nomenclature ? sourceReference.trim() : undefined,
       });
       // BP-C3's live read is the authority for the visible after-save state.
@@ -146,7 +157,7 @@ export function CatalogNameReviewDoor({
               <p>{result.verdict === 'SPELLING_ONLY_PREVIEW'
                 ? 'Penulisan tampak berbeda tanpa indikasi perubahan teknis. Tetap wajib bukti identitas.'
                 : result.verdict === 'NOMENCLATURE_VERIFICATION_REQUIRED'
-                  ? 'Nomenklatur perlu penetapan nyata oleh kurator; kode dan referensi koreksi harus dikonfirmasi.'
+                  ? 'Nomenklatur perlu penetapan nyata oleh kurator; bukti dan identitas katalog harus dikonfirmasi. Jika tidak ada kode, gunakan nama lama dan satuan asli, bukan kode buatan.'
                   : result.verdict === 'NO_CHANGE'
                     ? 'Tidak ada perubahan nama.'
                     : result.verdict === 'IDENTITY_CONFLICT_REVIEW_REQUIRED'
@@ -164,11 +175,27 @@ export function CatalogNameReviewDoor({
                         <input value={sourceReference} maxLength={350}
                           onChange={(event) => setSourceReference(event.target.value)} />
                       </label>
-                      <label className="ahsp-catalog-name-door__field">
-                        Ketik ulang kode katalog ({result.resourceCode ?? 'tidak tersedia'})
-                        <input value={catalogCode} maxLength={80}
-                          onChange={(event) => setCatalogCode(event.target.value)} />
-                      </label>
+                      {result.resourceCode ? (
+                        <label className="ahsp-catalog-name-door__field">
+                          Ketik ulang kode katalog ({result.resourceCode})
+                          <input value={catalogCode} maxLength={80}
+                            onChange={(event) => setCatalogCode(event.target.value)} />
+                        </label>
+                      ) : (
+                        <>
+                          <p className="ahsp-line ahsp-line--abu">Katalog ini memang tanpa kode. Konfirmasikan nama katalog lama dan satuan yang ditampilkan, bukan membuat kode baru.</p>
+                          <label className="ahsp-catalog-name-door__field">
+                            Ketik ulang nama katalog lama ({result.currentName})
+                            <input value={confirmedCatalogName} maxLength={180}
+                              onChange={(event) => setConfirmedCatalogName(event.target.value)} />
+                          </label>
+                          <label className="ahsp-catalog-name-door__field">
+                            Ketik ulang satuan katalog ({result.baseUnit})
+                            <input value={confirmedCatalogBaseUnit} maxLength={80}
+                              onChange={(event) => setConfirmedCatalogBaseUnit(event.target.value)} />
+                          </label>
+                        </>
+                      )}
                       <label className="ahsp-catalog-name-door__check">
                         <input type="checkbox" checked={nomenclatureVerified}
                           onChange={(event) => setNomenclatureVerified(event.target.checked)} />
