@@ -2220,3 +2220,34 @@ button.ahsp-confirm-summary__card[aria-expanded="true"] {
 @media (max-width: 480px) {
   .ahsp-guided-review__steps { grid-template-columns: 1fr; }
 }
+
+/* One curation question, one visible decision; observation spelling edits are optional. */
+.ahsp-observation-corrections, .ahsp-specific-new-review {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 8px;
+}
+.ahsp-observation-corrections > summary, .ahsp-specific-new-review > summary {
+  cursor: pointer;
+  font-weight: 600;
+}
+.ahsp-observation-corrections[open], .ahsp-specific-new-review[open] {
+  background: var(--simprok-surface-light);
+}
+.ahsp-specific-new-review__field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 9px 0;
+  font-size: 13px;
+}
+.ahsp-specific-new-review__field input,
+.ahsp-specific-new-review__field select,
+.ahsp-specific-new-review__field textarea {
+  padding: 8px 10px;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 6px;
+  color: inherit;
+  background: var(--simprok-white);
+}

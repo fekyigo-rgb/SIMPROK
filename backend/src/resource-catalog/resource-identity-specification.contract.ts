@@ -73,3 +73,25 @@ export function compareConfirmedSpecifications(
       known[key].toLocaleLowerCase('id-ID') === source[key].toLocaleLowerCase('id-ID'))) return 'MATCH';
   return 'UNKNOWN';
 }
+
+
+/**
+ * Guard a human-entered source qualifier without inventing new specifications.
+ * This is only positive literal document evidence; the shared identity kernel
+ * decides whether it proves a distinct resource against the live candidates.
+ */
+export function sourceStatedSpecifications(
+  originalDesignation: string,
+  supplied: unknown,
+  reason?: string | null,
+): ConfirmedResourceSpecifications | null {
+  if (!reason?.trim() || reason.length > 500) return null;
+  const specs = confirmedSpecifications(supplied);
+  if (!specs) return null;
+  const visible = originalDesignation.trim().replace(/\s+/gu, ' ').toLocaleLowerCase('id-ID');
+  if (!Object.values(specs).every((value) =>
+    visible.includes(value.trim().replace(/\s+/gu, ' ').toLocaleLowerCase('id-ID')))) {
+    return null;
+  }
+  return specs;
+}

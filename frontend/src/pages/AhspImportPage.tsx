@@ -333,6 +333,7 @@ export function AhspImportPage() {
   const [curationOutcomes, setCurationOutcomes] = useState<AnchoredOutcome[]>([]);
   // IQL-01 — offering a decision as learning is a separate, explicit choice per question.
   const [rememberFor, setRememberFor] = useState<Record<string, boolean>>({});
+  const [newResourceEvidence, setNewResourceEvidence] = useState<Record<string, { attribute: string; value: string; reason: string }>>({});
   const [questionsRead, setQuestionsRead] = useState<ListRead<GovernedQuestionWire>>(() =>
     emptyListRead<GovernedQuestionWire>(),
   );
@@ -992,7 +993,12 @@ export function AhspImportPage() {
       remember,
     });
 
-  const curateNew = (group: ObservationGroup, at: number, unitDefinitionId: string) =>
+  const curateNew = (group: ObservationGroup, at: number, unitDefinitionId: string, evidence?: {
+    attribute: string;
+    value: string;
+    reason: string;
+    refusal: { candidateIds: string[]; candidateContextDigest: string };
+  }) =>
     curateGroup({
       group,
       at,
@@ -1003,13 +1009,21 @@ export function AhspImportPage() {
       // Branch (c): the nominations the reader is refusing, and the candidate
       // context they were shown under — re-proved by the server under its lock.
       bodyFor: () =>
-        group.view.newResourceRefusal
+        evidence
           ? {
               unitDefinitionId,
-              refusedCandidateIds: group.view.newResourceRefusal.candidateIds,
-              candidateContextDigest: group.view.newResourceRefusal.candidateContextDigest,
+              confirmedSpecifications: { [evidence.attribute]: evidence.value },
+              reason: evidence.reason,
+              refusedCandidateIds: evidence.refusal.candidateIds,
+              candidateContextDigest: evidence.refusal.candidateContextDigest,
             }
-          : { unitDefinitionId },
+          : group.view.newResourceRefusal
+            ? {
+                unitDefinitionId,
+                refusedCandidateIds: group.view.newResourceRefusal.candidateIds,
+                candidateContextDigest: group.view.newResourceRefusal.candidateContextDigest,
+              }
+            : { unitDefinitionId },
       decision: { kind: 'NEW', title: group.view.title, chosenName: null },
       remember: false,
     });
@@ -1350,6 +1364,27 @@ export function AhspImportPage() {
     const locked = curationBusy !== null || nameReviewBusy;
     const busyOn = (action: string) => curationBusy?.key === group.key && curationBusy.action === action;
     const blockedReasonId = 'ahsp-new-blocked-' + at;
+    const firstObservation = members[0];
+    const specDraft = newResourceEvidence[group.key] ?? { attribute: 'kapasitas', value: '', reason: '' };
+    const sourceDesignation = firstObservation?.rawName ?? '';
+    const evidenceIsVisible = specDraft.value.trim().length > 0 &&
+      sourceDesignation.toLocaleLowerCase('id-ID').includes(specDraft.value.trim().toLocaleLowerCase('id-ID'));
+    const positiveCandidateReview = !view.canProposeNew &&
+      view.candidateChoices.length > 0 && !!view.newUnitDefinitionId &&
+      firstObservation?.identityVerdict?.status === 'NEEDS_REVIEW' &&
+      !!firstObservation.identityVerdict.candidateContextDigest &&
+      (firstObservation.candidates?.length ?? 0) > 0 && !!firstObservation.sourceSha256;
+    const candidateRefusal = positiveCandidateReview && firstObservation
+      ? {
+          candidateIds: (firstObservation.candidates ?? []).map((item) => item.resourceCatalogId),
+          candidateContextDigest: firstObservation.identityVerdict?.candidateContextDigest ?? '',
+        }
+      : null;
+    const setEvidenceField = (field: 'attribute' | 'value' | 'reason', value: string) =>
+      setNewResourceEvidence((previous) => ({
+        ...previous,
+        [group.key]: { ...specDraft, [field]: value },
+      }));
     // CALM PAGE, CLEAR ACTIONS. Each question shows what it IS, the evidence a
     // decision needs, and the decisions themselves. Everything that explains
     // rather than decides — how the row was understood, what was ruled out, the
@@ -1378,25 +1413,30 @@ export function AhspImportPage() {
         </span>
         {/* Said plainly, because one click will answer for all of them. */}
         {repeated ? <span className="ahsp-line" style={{ color: MUTED }}>{repeated}</span> : null}
-        {/* Only append/read the correction of the addressed observation, not the group. */}
-        {group.ids.map((observationId) => (
-          <ObservedNameReviewPanel
-            key={observationId}
-            observationId={observationId}
-            onBusyChange={(busy) => {
-              nameReviewBusyOwners.current = nextBusyNameReviewOwners(
-                nameReviewBusyOwners.current,
-                observationId,
-                busy,
-              );
-              setNameReviewBusyCount(nameReviewBusyOwners.current.size);
-            }}
-            onSaved={async () => {
-              await loadObservations('REFRESH');
-              setNameReviewReceipt('Koreksi nama berhasil disimpan dan dibaca kembali. Daftar telah diminta diperbarui; keputusan identitas tetap terpisah.');
-            }}
-          />
-        ))}
+        {/* Corrections are PER observation, but not 22 primary controls for one
+            identity question. An optional disclosure retains every lawful action. */}
+        <details className="ahsp-observation-corrections">
+          <summary>Perbaiki ejaan sumber pada observasi tertentu ({group.ids.length}) — opsional</summary>
+          <p className="ahsp-line ahsp-line--abu">Gunakan hanya bila ada salah ketik pada baris sumber. Koreksi ejaan tidak menetapkan identitas atau mengubah spesifikasi, dan tidak menggantikan keputusan kelompok.</p>
+          {group.ids.map((observationId) => (
+            <ObservedNameReviewPanel
+              key={observationId}
+              observationId={observationId}
+              onBusyChange={(busy) => {
+                nameReviewBusyOwners.current = nextBusyNameReviewOwners(
+                  nameReviewBusyOwners.current,
+                  observationId,
+                  busy,
+                );
+                setNameReviewBusyCount(nameReviewBusyOwners.current.size);
+              }}
+              onSaved={async () => {
+                await loadObservations('REFRESH');
+                setNameReviewReceipt('Koreksi nama berhasil disimpan dan dibaca kembali. Daftar telah diminta diperbarui; keputusan identitas tetap terpisah.');
+              }}
+            />
+          ))}
+        </details>
         {view.candidateLine ? <span className="ahsp-line" style={{ color: MUTED }}>{view.candidateLine}</span> : null}
         {/* A decision already offered for learning is WAITING on someone else —
             that is this question's state, not an explanation, so it stays here. */}
@@ -1455,7 +1495,7 @@ export function AhspImportPage() {
             >
               {busyOn('new') ? 'Menyimpan…' : view.newResourceActionLabel}
             </button>
-          ) : view.newResourceBlockedLine ? (
+          ) : view.newResourceBlockedLine && !positiveCandidateReview ? (
             // A door that cannot open is shown shut and explained — never a refusal waiting to happen.
             <>
               <button type="button" className="ahsp-action ahsp-action--outline" disabled aria-describedby={blockedReasonId}>
@@ -1465,6 +1505,56 @@ export function AhspImportPage() {
             </>
           ) : null}
         </div>
+        {positiveCandidateReview && candidateRefusal ? (
+          <details className="ahsp-specific-new-review">
+            <summary>Padanan di atas berbeda? Periksa spesifikasi dan tetapkan item baru</summary>
+            <p className="ahsp-line">Ini adalah jalur penolakan kandidat dengan bukti sumber, bukan penggantian identitas otomatis. Kode yang sama dan nama yang berkerabat tidak membuktikan spesifikasi identik.</p>
+            <p className="ahsp-line">Nama asli pada dokumen: <strong>{sourceDesignation}</strong></p>
+            <label className="ahsp-specific-new-review__field">
+              Jenis spesifikasi yang tercantum
+              <select value={specDraft.attribute} disabled={locked} onChange={(event) => setEvidenceField('attribute', event.target.value)}>
+                <option value="kapasitas">Kapasitas / daya</option>
+                <option value="ukuran">Ukuran</option>
+                <option value="mutu">Mutu</option>
+                <option value="merek">Merek</option>
+                <option value="tipe">Tipe</option>
+                <option value="diameter">Diameter</option>
+              </select>
+            </label>
+            <label className="ahsp-specific-new-review__field">
+              Teks spesifikasi persis dari nama di dokumen
+              <input
+                type="text"
+                value={specDraft.value}
+                disabled={locked}
+                maxLength={240}
+                placeholder="Contoh: 40–60 HP"
+                onChange={(event) => setEvidenceField('value', event.target.value)}
+              />
+            </label>
+            <label className="ahsp-specific-new-review__field">
+              Alasan kandidat berbeda (dicatat pada keputusan)
+              <textarea value={specDraft.reason} disabled={locked} rows={2} maxLength={500}
+                onChange={(event) => setEvidenceField('reason', event.target.value)}
+                placeholder="Contoh: Katalog hanya menyebut Mini Excavator umum; dokumen ini membatasi daya 40–60 HP."
+              />
+            </label>
+            {!evidenceIsVisible && specDraft.value.trim().length > 0 ? (
+              <p className="ahsp-line ahsp-line--abu">Spesifikasi harus tertulis pada nama asli sumber. Bila hanya ada pada kolom lain, jangan mengarang bukti di sini.</p>
+            ) : null}
+            <button type="button" className="ahsp-action ahsp-action--outline"
+              disabled={locked || !evidenceIsVisible || specDraft.reason.trim().length === 0}
+              onClick={() => void curateNew(group, at, view.newUnitDefinitionId as string, {
+                attribute: specDraft.attribute,
+                value: specDraft.value.trim(),
+                reason: specDraft.reason.trim(),
+                refusal: candidateRefusal,
+              })}>
+              Bukan padanan yang sama — periksa & tetapkan sumber daya baru
+            </button>
+            <p className="ahsp-line ahsp-line--abu">Kernel identitas akan memeriksa lagi seluruh kandidat, satuan dan spesifikasi dalam transaksi. Jika bukti tidak cukup, keputusan ditahan tanpa membuat duplikat.</p>
+          </details>
+        ) : null}
         <div className="ahsp-action-row">
           <button
             type="button"

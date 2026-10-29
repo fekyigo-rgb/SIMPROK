@@ -35,6 +35,7 @@ import {
   selectionRefusal,
 } from './resource-identity-resolution.kernel';
 import { candidateContextDigest } from './ghx-candidate-context';
+import { sourceStatedSpecifications } from './resource-identity-specification.contract';
 import {
   GhxDecisionContextConfigurationError,
   GhxDecisionContextTokenService,
@@ -1591,6 +1592,8 @@ export class ResourceObservationService {
     unitDefinitionId: string;
     actorAccountId: string;
     reason?: string | null;
+    /** Source-visible, reviewer-confirmed qualifier; kernel remains the only identity authority. */
+    confirmedSpecifications?: Readonly<Record<string, string>> | null;
     /**
      * Branch (c): the nominations this person examined and refused, and the
      * candidate context they were shown. Re-proved by the admission authority
@@ -1609,6 +1612,19 @@ export class ResourceObservationService {
           params.observationId,
         );
         const reviewedName = reviewedNameForCuration(observation);
+        // An explicitly narrower source designation may be distinct from a
+        // previously recorded GENERIC catalog candidate, even with the same code.
+        // The reviewer does not mint by assertion: the qualifier must literally
+        // occur in the ORIGINAL imported designation (not a corrected spelling),
+        // and the SAME identity kernel re-proves the distinction under admission lock.
+        const reviewedSpecs = params.confirmedSpecifications == null
+          ? null
+          : sourceStatedSpecifications(
+              observation.rawName, params.confirmedSpecifications, params.reason,
+            );
+        if (params.confirmedSpecifications != null && !reviewedSpecs) {
+          throw new ConflictException('SOURCE_SPECIFICATION_EVIDENCE_REQUIRED');
+        }
 
         const unitDefinition = await tx.unitDefinition.findFirst({
           where: { id: params.unitDefinitionId, isActive: true },
@@ -1745,6 +1761,7 @@ export class ResourceObservationService {
           rawUnit: observation.rawUnit,
           resourceType: observation.resourceType,
           baseUnit: unitDefinition.code,
+          ...(reviewedSpecs ? { confirmedSpecifications: reviewedSpecs } : {}),
           provenance: {
             sourceSha256: observation.sourceSha256 ?? '',
             sourceFileName: observation.sourceFileName ?? '',

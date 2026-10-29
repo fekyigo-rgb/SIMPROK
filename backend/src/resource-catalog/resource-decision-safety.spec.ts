@@ -451,6 +451,26 @@ describe('ResourceObservationController — curate-new examination body', () => 
     expect(curateNew.mock.calls[1][0].examination).toBeNull();
   });
 
+  it('forwards source-visible confirmed specifications to the same admission service', async () => {
+    const { curateNew, controller } = make();
+    await controller.curateNew(request, 'obs-1', {
+      unitDefinitionId: 'u',
+      reason: 'Mini Excavator ini memiliki daya terbatas 40–60 HP',
+      confirmedSpecifications: { kapasitas: '40–60 HP' },
+      refusedCandidateIds: ['generic-mini'],
+      candidateContextDigest: 'current-digest',
+    });
+    expect(curateNew).toHaveBeenCalledTimes(1);
+    expect(curateNew.mock.calls[0][0]).toMatchObject({
+      workspaceId: 'ws-1', observationId: 'obs-1',
+      confirmedSpecifications: { kapasitas: '40–60 HP' },
+      examination: {
+        refusedCandidateIds: ['generic-mini'],
+        candidateContextDigest: 'current-digest',
+      },
+    });
+  });
+
   it.each([
     [{ refusedCandidateIds: ['a'] }, 'EXAMINATION_INCOMPLETE'],
     [{ candidateContextDigest: 'd' }, 'EXAMINATION_INCOMPLETE'],
