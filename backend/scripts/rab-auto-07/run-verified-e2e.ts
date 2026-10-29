@@ -18,6 +18,8 @@ const SUITES: Record<string, string> = {
   ahsp: 'test/acceptance/project-ahsp-occurrence.e2e-spec.ts',
   cost: 'test/acceptance/gate2a-rab-kernel-persistence.e2e-spec.ts',
   first: 'test/acceptance/rab-auto07-first-binding.e2e-spec.ts',
+  project: 'test/acceptance/rab-auto08-multi-line-project.e2e-spec.ts',
+  paginated: 'test/acceptance/rab-auto08-paginated-project.e2e-spec.ts',
 };
 
 async function run() {
