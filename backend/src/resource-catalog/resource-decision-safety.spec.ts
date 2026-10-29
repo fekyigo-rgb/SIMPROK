@@ -570,15 +570,36 @@ describe('P-2 — admission proves the chosen unit against the source unit', () 
       {} as never,
       {} as never,
     );
-    const call = () =>
+    const call = (extra: { confirmedSpecifications?: Record<string, string>; reason?: string } = {}) =>
       service.curateNew({
         workspaceId: 'ws-1',
         observationId: 'obs-1',
         unitDefinitionId: 'unit-kg',
         actorAccountId: 'acct-1',
+        ...extra,
       });
     return { admit, resolve, tx, call };
   };
+
+  it('sends positive source-visible specifications into the EXISTING admission writer', async () => {
+    const { resolve, admit, call } = build({ rawName: 'Mini Excavator 40–60 HP', rawUnit: 'Jam', rawCode: 'E10' });
+    resolve.mockResolvedValueOnce(RESOLVED()).mockResolvedValueOnce(RESOLVED());
+    await call({ confirmedSpecifications: { kapasitas: '40–60 HP' }, reason: 'Sumber ini terbatas 40–60 HP, bukan kategori umum' });
+    expect(admit).toHaveBeenCalledTimes(1);
+    expect(admit.mock.calls[0][1]).toMatchObject({
+      rawName: 'Mini Excavator 40–60 HP', rawCode: 'E10',
+      confirmedSpecifications: { kapasitas: '40–60 HP' },
+    });
+  });
+
+  it('refuses unsupported source specification before UNIT or catalog admission', async () => {
+    const { resolve, admit, tx, call } = build({ rawName: 'Mini Excavator 40–60 HP', rawUnit: 'Jam' });
+    await expect(call({ confirmedSpecifications: { kapasitas: '90 HP' }, reason: 'Minta 90 HP' }))
+      .rejects.toThrow('SOURCE_SPECIFICATION_EVIDENCE_REQUIRED');
+    expect(resolve).not.toHaveBeenCalled();
+    expect(admit).not.toHaveBeenCalled();
+    expect(tx.observedResource.update).not.toHaveBeenCalled();
+  });
 
   it('POSITIVE CONTROL — a source unit the kernel can reach still admits', async () => {
     const { resolve, admit, call } = build();
