@@ -1,13 +1,15 @@
 import { createHash } from 'crypto';
 import ExcelJS from 'exceljs';
 
-export const BOQ_PARSER_CONTRACT_VERSION = 'IMPORT_FIRST_01_V3';
-export const BOQ_READER_CONTRACT_VERSION = 'BOQ_XLSX_INTAKE_ADAPTER_V2';
+export const BOQ_PARSER_CONTRACT_VERSION = 'IMPORT_FIRST_01_V4';
+export const BOQ_READER_CONTRACT_VERSION = 'BOQ_XLSX_INTAKE_ADAPTER_V3';
 export const MAX_SOURCE_ROWS = 20_000;
 
 export interface BoqImportKnowledgeRow {
   sourceRowNumber: number;
   sourceCode: string | null;
+  /** From an explicitly labelled AHSP reference column; never inferred. */
+  sourceAhspCode?: string | null;
   description: string;
   quantityDecimalString: string | null;
   unitRaw: string | null;
@@ -51,12 +53,12 @@ function normalizeDecimal(raw: string): string | null {
 }
 
 
-type BoqHeader = { row: number; description: number; quantity: number; unit: number; code: number | null };
+type BoqHeader = { row: number; description: number; quantity: number; unit: number; code: number | null; ahspCode: number | null };
 
 function findBoqHeader(sheet: ExcelJS.Worksheet): BoqHeader | null {
   const headers: BoqHeader[] = [];
   sheet.eachRow((row, rowNumber) => {
-    const columns = { description: [] as number[], quantity: [] as number[], unit: [] as number[], code: [] as number[] };
+    const columns = { description: [] as number[], quantity: [] as number[], unit: [] as number[], code: [] as number[], ahspCode: [] as number[] };
     row.eachCell((cell, column) => {
       if (cell.isMerged && cell.master.address !== cell.address) return;
       const label = cellText(cell).toLowerCase().replace(/\s+/g, ' ').trim().replace(/[.:]$/, '');
@@ -64,12 +66,14 @@ function findBoqHeader(sheet: ExcelJS.Worksheet): BoqHeader | null {
       if (/^(volume|kuantitas|quantity)$/.test(label)) columns.quantity.push(column);
       if (/^(satuan|unit)$/.test(label)) columns.unit.push(column);
       if (/^(no|nomor|kode)$/.test(label)) columns.code.push(column);
+      if (/^(kode ahsp|ahsp code|referensi ahsp)$/.test(label)) columns.ahspCode.push(column);
     });
     if (!columns.description.length || !columns.quantity.length || !columns.unit.length) return;
     if (Object.values(columns).some((values) => values.length > 1)) throw new Error('BOQ_HEADER_AMBIGUOUS');
-    const { description: [description], quantity: [quantity], unit: [unit], code: [code] } = columns;
+    const { description: [description], quantity: [quantity], unit: [unit], code: [code], ahspCode: [ahspCode] } = columns;
     headers.push({ row: rowNumber, description, quantity, unit,
-      code: code ?? (![description, quantity, unit].includes(1) ? 1 : null) });
+      code: code ?? (![description, quantity, unit, ...(ahspCode ? [ahspCode] : [])].includes(1) ? 1 : null),
+      ahspCode: ahspCode ?? null });
   });
   if (headers.length > 1) throw new Error('BOQ_HEADER_AMBIGUOUS');
   return headers[0] ?? null;
@@ -90,7 +94,7 @@ export class BoqXlsxIntakeAdapter {
     const { sheet, header } = candidates[0];
     const meaningful: number[] = [];
     sheet.eachRow((row, rowNumber) => {
-      if ([header.description, header.quantity, header.unit, ...(header.code ? [header.code] : [])]
+      if ([header.description, header.quantity, header.unit, ...(header.code ? [header.code] : []), ...(header.ahspCode ? [header.ahspCode] : [])]
         .some((column) => cellText(row.getCell(column)) !== '')) meaningful.push(rowNumber);
     });
     if (meaningful.length > MAX_SOURCE_ROWS) throw new Error('SOURCE_ROW_LIMIT_EXCEEDED');
@@ -104,6 +108,7 @@ export class BoqXlsxIntakeAdapter {
     for (const sourceRowNumber of meaningful.filter((row) => row > header.row)) {
       const code = header.code ? cellText(sheet.getCell(sourceRowNumber, header.code)) : '';
       const description = cellText(sheet.getCell(sourceRowNumber, header.description));
+      const sourceAhspCode = header.ahspCode ? cellText(sheet.getCell(sourceRowNumber, header.ahspCode)) : '';
       const unit = cellText(sheet.getCell(sourceRowNumber, header.unit));
       const rawQuantity = cellText(sheet.getCell(sourceRowNumber, header.quantity));
       if (!description || SUMMARY.test(description.trim())) continue;
@@ -119,6 +124,7 @@ export class BoqXlsxIntakeAdapter {
       const itemType: BoqImportKnowledgeRow['itemType'] = isFolder ? 'FOLDER' : 'WORK_ITEM';
       if (!isFolder && normalizedQuantity === null) errors.push('INVALID_QUANTITY');
       if (!isFolder && !unit) errors.push('UNIT_REQUIRED');
+      if (sourceAhspCode.length > 128) errors.push('SOURCE_AHSP_REFERENCE_TOO_LONG');
 
       if (normalizedQuantity) {
         const scale = normalizedQuantity.includes('.') ? normalizedQuantity.split('.')[1].length : 0;
@@ -133,6 +139,7 @@ export class BoqXlsxIntakeAdapter {
       rows.push({
         sourceRowNumber,
         sourceCode: code || null,
+        sourceAhspCode: !isFolder && sourceAhspCode ? sourceAhspCode : null,
         description,
         quantityDecimalString: isFolder ? null : normalizedQuantity,
         unitRaw: isFolder ? null : unit || null,

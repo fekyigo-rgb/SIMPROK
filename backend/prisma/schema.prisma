@@ -3780,6 +3780,9 @@ model BoqItem {
   wbsNodeId           String?     @db.Uuid
   wbsCode             String
   name                String
+  /// BOQ source's EXPLICIT AHSP reference; NEVER infer from WBS code or name.
+  /// Null for historical/manual/unspecified source rows.
+  sourceAhspCode      String?     @db.VarChar(128)
   itemType            BoqItemType @default(WORK_ITEM)
   quantity            Decimal     @db.Decimal(18, 6)
   unit                String

@@ -849,9 +849,12 @@ test("UX-6. the drawer's explanatory text cannot be covered by its badge", () =>
   assert.match(frame, /position:\s*static/, "the badge still floats over the text");
   assert.doesNotMatch(frame, /position:\s*relative/);
   assert.match(frame, /flex-direction:\s*column/);
-  // The message itself is untouched.
-  assert.match(workspace, /\{costEngineStatus\.frameMessage\}/);
+  // The badge stays in normal flow, and both message branches remain
+  // visible inside the same frame: manual price uses original explanation;
+  // available AHSP status can add context but falls back to Cost Kernel.
   assert.match(workspace, /\{costEngineStatus\.frameBadge\}/);
+  assert.match(workspace, /\? costEngineStatus\.frameMessage/);
+  assert.match(workspace, /ahspAvailabilityNotice\?\.message \?\? costEngineStatus\.frameMessage/);
 });
 
 /**

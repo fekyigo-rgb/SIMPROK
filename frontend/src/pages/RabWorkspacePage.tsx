@@ -37,6 +37,11 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { apiFetch } from '../utils/apiClient';
+import {
+  parseRabAutoDraftPage,
+  summarizeRabAutoDraft,
+  type RabAutoDraftLine,
+} from '../utils/rabAutoDraftReadiness';
 import { appendBoqImportApprovalIdentity, dismissBoqImportPreview, requiresBoqImportConfirmation, type BoqImportDraftImpact } from '../utils/boqImportApproval';
 import {
   projectFieldContextView,
@@ -48,6 +53,14 @@ import {
   summariseAhspComposition,
   type AhspResolutionWire,
 } from '../utils/ahspCompositionDisplay';
+import {
+  ahspDiscoveryAnchor,
+  ahspDiscoveryEvidence,
+  describeAhspAvailability,
+  describeAhspBasicPriceGaps,
+  hasNoEligibleAhspInUnfilteredSearch,
+  type AhspSearchEvidence,
+} from '../utils/rabAvailabilityNotice';
 import {
   availableInsertPositions,
   descendantIdsOf,
@@ -536,6 +549,7 @@ export function RabWorkspacePage() {
   const [volumes, setVolumes] = useState<Record<string, number>>(recovery?.volumes ?? {});
   const [unitPrices, setUnitPrices] = useState<Record<string, number>>(recovery?.unitPrices ?? {});
   const [costRowStatuses, setCostRowStatuses] = useState<Record<string, CostRowStatus>>({});
+  const [workingDraftLoaded, setWorkingDraftLoaded] = useState(false);
   const costLoadGenerationRef = useRef(0);
   /**
    * RM-03 — the read-only re-proof of the selected persisted line. Null means
@@ -639,6 +653,11 @@ export function RabWorkspacePage() {
   const [selectedAhspVersionId, setSelectedAhspVersionId] = useState('');
   const [selectedRegionId, setSelectedRegionId] = useState('');
   const [isSelectingAhsp, setIsSelectingAhsp] = useState(false);
+  const [isAutoPricing, setIsAutoPricing] = useState(false);
+  const [isReusingProven, setIsReusingProven] = useState(false);
+  const [autoReuseNotice, setAutoReuseNotice] = useState<{
+    projectId: string; date: string; message: string;
+  } | null>(null);
   // The analysis remains primary; the editor is opened only by explicit user intent.
   const [showAhspSelection, setShowAhspSelection] = useState(false);
   const persistGenerationRef = useRef(0);
@@ -864,6 +883,7 @@ export function RabWorkspacePage() {
     }
 
     if (!projectId) {
+      setWorkingDraftLoaded(false);
       if (isProvisional) {
         // New RAB is local-only; no Project, BOQ or RabDocument DB calls yet.
         setCapabilityState({ kind: 'ready', canEditDraft: true });
@@ -886,6 +906,7 @@ export function RabWorkspacePage() {
 
     let cancelled = false;
     setCapabilityState({ kind: 'loading' });
+    setWorkingDraftLoaded(false);
     setStatusMessage('Memuat draft...');
 
     const run = async () => {
@@ -936,6 +957,7 @@ export function RabWorkspacePage() {
       applyRecap(data.recap);
       if (data.items.length > 0) {
         applyRows(data.items, 'WORKING_DRAFT');
+        setWorkingDraftLoaded(!frozen);
         loadCostCalculations(data.items);
         setStatusMessage(frozen ? 'RAB terkunci dimuat. Mode baca.' : 'Draft tersimpan dimuat. Ruang kerja siap.');
         return;
@@ -1041,6 +1063,144 @@ export function RabWorkspacePage() {
   }, [projectId, selectedItem?.id]);
   const preferenceBoqItemId =
     selectedItem && !selectedItem.id.startsWith('local-') ? selectedItem.id : '';
+  // First-page candidate discovery runs silently for one SAVED, unlinked BOQ
+  // line; its key prevents stale responses from crossing rows/projects/dates.
+  // This is an eligibility SEARCH, not authority to auto-attach an AHSP.
+  const automaticDiscoveryKey = projectId && preferenceBoqItemId && selectedItem &&
+    !selectedItem.ahspVersionId && !draftDirty && ahspDiscoveryAnchor(selectedItem.name)
+    ? [projectId, preferenceBoqItemId, calculationAsOfDate, selectedItem.name].join('|')
+    : '';
+  const [automaticDiscovery, setAutomaticDiscovery] = useState<{
+    key: string;
+    evidence: AhspSearchEvidence;
+  }>({ key: '', evidence: { kind: 'idle' } });
+  useEffect(() => {
+    if (!automaticDiscoveryKey || !projectId || !selectedItem || showAhspSelection) return;
+    const q = ahspDiscoveryAnchor(selectedItem.name);
+    if (!q) return;
+    let cancelled = false;
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      setAutomaticDiscovery({ key: automaticDiscoveryKey, evidence: { kind: 'loading' } });
+      const params = new URLSearchParams({
+        businessPricingAsOfDate: calculationAsOfDate,
+        boqItemId: selectedItem.id,
+        q, page: '1', limit: '25',
+      });
+      // Reuse EXACTLY the existing tenant-aware, date-aware and paginated
+      // AHSP candidate endpoint; do not add a matcher/price resolver.
+      apiFetch(`/projects/${projectId}/ahsp-occurrences/eligible-versions/search?${params}`)
+        .then(async (response) => {
+          if (!response.ok) throw new Error('ahsp-discovery-unavailable');
+          const payload: unknown = await response.json();
+          const evidence = ahspDiscoveryEvidence(payload, q);
+          if (!evidence) throw new Error('ahsp-discovery-invalid-response');
+          let verifiedEvidence: AhspSearchEvidence = evidence;
+          if (evidence.kind === 'ready' && evidence.fetchedCount === 0 &&
+            !evidence.hasNext && !cancelled) {
+            // A filtered zero-result cannot prove catalogue-wide ineligibility.
+            // Only the same canonical endpoint with NO query and an empty first
+            // page (confirmed by its response metadata) may say that no AHSP
+            // is presently eligible for this project/workspace/date.
+            const unfiltered = new URLSearchParams({
+              businessPricingAsOfDate: calculationAsOfDate,
+              boqItemId: selectedItem.id,
+              page: '1', limit: '1',
+            });
+            try {
+              const fullResponse = await apiFetch(
+                `/projects/${projectId}/ahsp-occurrences/eligible-versions/search?${unfiltered}`,
+              );
+              if (fullResponse.ok &&
+                hasNoEligibleAhspInUnfilteredSearch(await fullResponse.json())) {
+                verifiedEvidence = { kind: 'eligible_catalog_empty' };
+              }
+            } catch {
+              // Fail closed: a failed universal check leaves only the
+              // narrower, search-scoped zero-result as evidence.
+            }
+          }
+          if (!cancelled) setAutomaticDiscovery({
+            key: automaticDiscoveryKey,
+            evidence: verifiedEvidence,
+          });
+        })
+        .catch(() => {
+          if (!cancelled) setAutomaticDiscovery({ key: automaticDiscoveryKey, evidence: { kind: 'error' } });
+        });
+    }, 320);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [automaticDiscoveryKey, projectId, selectedItem,
+    calculationAsOfDate, showAhspSelection]);
+  // RAB-AUTO-02 — automatic, read-only assessment of the SAVED Working Draft.
+  // Its backend shares one AHSP eligibility truth; no frontend matcher exists.
+  const persistedWorkIds = useMemo(
+    () => rows.filter((r) => r.type === 'item' && !r.id.startsWith('local-'))
+      .map((r) => r.id).join('|'),
+    [rows],
+  );
+  const draftAssessmentKey = projectId && workingDraftLoaded && !draftDirty &&
+    persistedWorkIds.length > 0
+    ? [projectId, calculationAsOfDate, persistedWorkIds, retryToken].join('|')
+    : '';
+  const [draftAssessment, setDraftAssessment] = useState<{
+    key: string;
+    state: 'loading' | 'ready' | 'partial' | 'error';
+    lines: readonly RabAutoDraftLine[];
+  }>({ key: '', state: 'loading', lines: [] });
+  useEffect(() => {
+    if (!draftAssessmentKey || !projectId) return;
+    let cancelled = false;
+    const project = projectId;
+    const contextKey = draftAssessmentKey;
+    // Maximum 20 pages / 500 lines per opening. A larger draft is explicitly
+    // PARTIAL, never represented as exhaustively checked.
+    const run = async () => {
+      const seen = new Set<string>();
+      const lines: RabAutoDraftLine[] = [];
+      try {
+        for (let page = 1; page <= 20; page++) {
+          const query = new URLSearchParams({
+            businessPricingAsOfDate: calculationAsOfDate,
+            page: String(page), limit: '25',
+          });
+          const response = await apiFetch(
+            `/projects/${project}/ahsp-occurrences/boq-items/working-draft/automation-readiness?${query}`,
+          );
+          if (!response.ok) throw new Error('READINESS_ENDPOINT_UNAVAILABLE');
+          const payload: unknown = await response.json();
+          const parsed = parseRabAutoDraftPage(payload, project, page);
+          if (!parsed) throw new Error('INVALID_READINESS_PROOF');
+          for (const line of parsed.results) {
+            if (seen.has(line.boqItemId)) throw new Error('DUPLICATE_READINESS_ROW');
+            seen.add(line.boqItemId);
+            lines.push(line);
+          }
+          if (cancelled) return;
+          if (!parsed.hasNext) {
+            setDraftAssessment({ key: contextKey, state: 'ready', lines });
+            return;
+          }
+          if (parsed.results.length === 0) throw new Error('EMPTY_PAGINATION');
+        }
+        if (!cancelled) setDraftAssessment({ key: contextKey, state: 'partial', lines });
+      } catch {
+        // Never present a partial failed result as authoritative completion.
+        if (!cancelled) setDraftAssessment({ key: contextKey, state: 'error', lines: [] });
+      }
+    };
+    const timer = window.setTimeout(() => {
+      if (cancelled) return;
+      setDraftAssessment({ key: contextKey, state: 'loading', lines: [] });
+      void run();
+    }, 350);
+    return () => { cancelled = true; window.clearTimeout(timer); };
+  }, [draftAssessmentKey, projectId, calculationAsOfDate]);
+  const draftAssessmentDisplay = draftAssessmentKey &&
+    draftAssessment.key === draftAssessmentKey &&
+    (draftAssessment.state === 'ready' || draftAssessment.state === 'partial')
+    ? summarizeRabAutoDraft(draftAssessment.lines)
+    : null;
   const selectedAhspPreference = eligibleAhspVersions.find(
     (version) => version.id === selectedAhspVersionId,
   )?.preference;
@@ -1214,6 +1374,36 @@ export function RabWorkspacePage() {
   const ahspTrustSummary = useMemo(
     () => summariseAhspComposition(ahspComponentGroups),
     [ahspComponentGroups],
+  );
+  // RAB-AUTO-01 — read only. The stored occurrence's own reason codes are the
+  // sole authority for saying a specific AHSP component lacks a lawful price.
+  const basicPriceGapNotice = describeAhspBasicPriceGaps(
+    Boolean(selectedItem?.ahspVersionId),
+    ahspComposition,
+  );
+  // The picker is a bounded, lexical SEARCH, not a catalogue-wide matcher.
+  // Never turn its '0 results' or top recommendation into a false identity proof.
+  const ahspSearchEvidence: AhspSearchEvidence =
+    !showAhspSelection || ahspListLoad.kind === 'idle' ||
+    ahspQuery.trim() !== debouncedAhspQuery
+      ? { kind: 'idle' }
+      : ahspListLoad.kind === 'loading'
+        ? { kind: 'loading' }
+        : ahspListLoad.kind === 'error'
+          ? { kind: 'error' }
+          : {
+              kind: 'ready',
+              query: debouncedAhspQuery,
+              fetchedCount: eligibleAhspVersions.length,
+              hasNext: ahspHasNext,
+              recommendedCount: eligibleAhspVersions.filter((v) => v.preference?.recommended).length,
+            };
+  const automaticAhspEvidence: AhspSearchEvidence = automaticDiscoveryKey &&
+    automaticDiscovery.key === automaticDiscoveryKey
+    ? automaticDiscovery.evidence : { kind: 'idle' };
+  const ahspAvailabilityNotice = describeAhspAvailability(
+    Boolean(selectedItem?.ahspVersionId),
+    showAhspSelection ? ahspSearchEvidence : automaticAhspEvidence,
   );
 
   const persistedProofDisplay = useMemo(
@@ -1546,6 +1736,174 @@ export function RabWorkspacePage() {
     setSelectedRegionId('');
     setRegionQuery('');
     setRegionLevel('PROVINCE');
+  };
+
+  const handleAutoPriceReady = async () => {
+    if (!projectId || !canEditDraft || !workingDraftLoaded || draftDirty || isAutoPricing) return;
+    setIsAutoPricing(true);
+    // A concurrent local edit/project switch must never be overwritten by a
+    // completion-triggered reload. The canonical server may have committed
+    // some rows; ask for an explicit reconciliation instead.
+    const startedRevision = draftRevisionRef.current;
+    const startedProject = projectId;
+    let priced = 0;
+    let unpriced = 0;
+    try {
+      for (let page = 1; page <= 20; page++) {
+        const query = new URLSearchParams({ page: String(page), limit: '25' });
+        const response = await apiFetch(
+          `/projects/${projectId}/rab/auto-price-ready?${query}`,
+          { method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ calculationAsOfDate }) },
+        );
+        if (!response.ok) throw new Error('AUTO_PRICE_REQUEST_FAILED');
+        const payload: unknown = await response.json();
+        if (!payload || typeof payload !== 'object' ||
+          !('projectId' in payload) || payload.projectId !== projectId ||
+          !('hasNext' in payload) || typeof payload.hasNext !== 'boolean' ||
+          !('counts' in payload) || !payload.counts || typeof payload.counts !== 'object' ||
+          !('calculatedAndPersisted' in payload.counts) ||
+          typeof payload.counts.calculatedAndPersisted !== 'number' ||
+          !('unpriced' in payload.counts) || typeof payload.counts.unpriced !== 'number') {
+          throw new Error('AUTO_PRICE_INVALID_RESULT');
+        }
+        priced += payload.counts.calculatedAndPersisted;
+        unpriced += payload.counts.unpriced;
+        if (!payload.hasNext) {
+          if (draftRevisionRef.current !== startedRevision || currentProjectIdRef.current !== startedProject) {
+            setStatusMessage('Perhitungan selesai pada server, tetapi draft berubah selama proses. Simpan perubahan lokal sebelum memuat ulang hasil.');
+            return;
+          }
+          setStatusMessage(`${priced} baris dihitung dan disimpan otomatis. ${unpriced} baris belum memenuhi syarat harga. Pemeriksaan tetap menggunakan Cost Kernel.`);
+          setRetryToken((value) => value + 1);
+          return;
+        }
+      }
+      throw new Error('AUTO_PRICE_INCOMPLETE_PAGINATION');
+    } catch {
+      // Some pages may have committed before a later failure. Never announce
+      // full success or retry without reloading the server's canonical truth.
+      setStatusMessage('Hasil perhitungan otomatis belum pasti lengkap. Periksa kembali data tersimpan; jangan menganggap seluruh baris berhasil.');
+      if (draftRevisionRef.current === startedRevision && currentProjectIdRef.current === startedProject) {
+        setRetryToken((value) => value + 1);
+      }
+    } finally {
+      setIsAutoPricing(false);
+    }
+  };
+
+  /**
+   * One RAB-level, provenance-gated work action. Reuse only an existing human
+   * decision for the SAME canonical WBS source fact; the server revalidates
+   * within the existing selectForBoqItem transaction. Nothing inferred from
+   * lexical AHSP recommendations can enter this path.
+   */
+  const handleReuseProvenAhsp = async () => {
+    if (!projectId || !workingDraftLoaded || !canEditDraft ||
+        draftDirty || isReusingProven || isAutoPricing) return;
+    const startedRevision = draftRevisionRef.current;
+    const startedProject = projectId;
+    setIsReusingProven(true);
+    setAutoReuseNotice(null);
+    let firstBound = 0;
+    let reused = 0;
+    let reviewed = 0;
+    try {
+      // First use the Owner-approved BOQ's EXPLICIT AHSP reference where
+      // the server proves code, full specification, unit, region and version.
+      // Existing BOQs without such source evidence remain unchanged.
+      for (let page = 1; page <= 20; page++) {
+        const query = new URLSearchParams({ page: String(page), limit: '25' });
+        const response = await apiFetch(
+          `/projects/${projectId}/ahsp-occurrences/boq-items/working-draft/auto-bind-explicit-references?${query}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ businessPricingAsOfDate: calculationAsOfDate }),
+          },
+        );
+        if (!response.ok) throw new Error('FIRST_AHSP_ASSOCIATION_UNAVAILABLE');
+        const payload: unknown = await response.json();
+        if (!payload || typeof payload !== 'object' ||
+            !('projectId' in payload) || payload.projectId !== projectId ||
+            !('page' in payload) || payload.page !== page ||
+            !('hasNext' in payload) || typeof payload.hasNext !== 'boolean' ||
+            !('results' in payload) || !Array.isArray(payload.results) ||
+            payload.results.length > 25 ||
+            !payload.results.every((row: unknown) => row && typeof row === 'object' &&
+              'boqItemId' in row && typeof row.boqItemId === 'string' &&
+              'kind' in row && typeof row.kind === 'string')) {
+          throw new Error('FIRST_AHSP_ASSOCIATION_INVALID_PROOF');
+        }
+        firstBound += payload.results.filter((row: { kind: string }) =>
+          row.kind === 'FIRST_ASSOCIATION_PROVEN_AND_LINKED').length;
+        if (draftRevisionRef.current !== startedRevision ||
+            currentProjectIdRef.current !== startedProject) {
+          setStatusMessage('Draft berubah selama pemeriksaan. Simpan perubahan lokal sebelum memuat ulang hasil server.');
+          return;
+        }
+        if (!payload.hasNext) break;
+        if (page === 20) throw new Error('FIRST_AHSP_ASSOCIATION_PAGINATION_INCOMPLETE');
+      }
+      // Next reuse ONLY previous, original governed BOQ association facts,
+      // never inferred matches or recursively reused automated decisions.
+      for (let page = 1; page <= 20; page++) {
+        const query = new URLSearchParams({ page: String(page), limit: '25' });
+        const response = await apiFetch(
+          `/projects/${projectId}/ahsp-occurrences/boq-items/working-draft/auto-reuse-proven?${query}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ businessPricingAsOfDate: calculationAsOfDate }),
+          },
+        );
+        if (!response.ok) throw new Error('AUTO_REUSE_NOT_AVAILABLE');
+        const payload: unknown = await response.json();
+        if (!payload || typeof payload !== 'object' ||
+            !('projectId' in payload) || payload.projectId !== projectId ||
+            !('hasNext' in payload) || typeof payload.hasNext !== 'boolean' ||
+            !('results' in payload) || !Array.isArray(payload.results) ||
+            payload.results.length > 25 ||
+            !payload.results.every((row: unknown) => row && typeof row === 'object' &&
+              'boqItemId' in row && typeof row.boqItemId === 'string' &&
+              'kind' in row && typeof row.kind === 'string')) {
+          throw new Error('AUTO_REUSE_INVALID_RESULT');
+        }
+        reviewed += payload.results.length;
+        reused += payload.results.filter((row: { kind: string }) =>
+          row.kind === 'PROVEN_ASSOCIATION_REUSED').length;
+        if (draftRevisionRef.current !== startedRevision ||
+            currentProjectIdRef.current !== startedProject) {
+          setStatusMessage('Draft berubah selama pemeriksaan otomatis. Muat ulang secara aman setelah menyimpan perubahan lokal.');
+          return;
+        }
+        if (!payload.hasNext) {
+          const totalLinked = firstBound + reused;
+          const message = totalLinked > 0
+            ? `${firstBound} hubungan AHSP terbukti dari referensi BOQ yang disetujui, ${reused} keputusan terdahulu dipakai ulang. Harga selanjutnya diperiksa oleh Cost Kernel; sisanya tetap menunggu bukti.`
+            : `${reviewed} baris diperiksa. Belum ada referensi AHSP atau keputusan sebelumnya yang cukup terbukti. SIMPROK tidak menebak pasangan atau harga.`;
+          setAutoReuseNotice({ projectId: startedProject, date: calculationAsOfDate, message });
+          setStatusMessage(message);
+          if (totalLinked > 0) {
+            await handleAutoPriceReady();
+          } else {
+            setRetryToken((n) => n + 1);
+          }
+          return;
+        }
+      }
+      throw new Error('AUTO_REUSE_INCOMPLETE_PAGINATION');
+    } catch {
+      const message = 'Pemeriksaan otomatis tidak selesai seluruhnya. Periksa kembali hasil tersimpan; keberhasilan sebagian tidak dianggap selesai.';
+      setAutoReuseNotice({ projectId: startedProject, date: calculationAsOfDate, message });
+      setStatusMessage(message);
+      if (draftRevisionRef.current === startedRevision &&
+          currentProjectIdRef.current === startedProject) {
+        setRetryToken((n) => n + 1);
+      }
+    } finally {
+      setIsReusingProven(false);
+    }
   };
 
   const handlePickAhsp = () => {
@@ -2816,6 +3174,26 @@ export function RabWorkspacePage() {
                 ? 'Tersimpan di server — dapat dibaca dan ditelusuri, tidak dapat diubah'
                 : 'Draft tersimpan di server — edit bebas, simpan kapan saja'}
             </span>
+            {autoReuseNotice?.projectId === projectId &&
+              autoReuseNotice.date === calculationAsOfDate ? (
+                <small role="status" aria-label="Hasil terakhir RAB Otomatis"
+                  style={{ display: 'block', color: 'var(--simprok-catatan-muted)', maxWidth: '68ch' }}>
+                  {autoReuseNotice.message}
+                </small>
+              ) : null}
+            {draftAssessmentDisplay ? (
+              <small role="status" aria-label="Pemeriksaan AHSP otomatis"
+                style={{ display: 'block', color: 'var(--simprok-catatan-muted)', maxWidth: '68ch' }}>
+                {draftAssessmentDisplay.label}
+                {draftAssessment.state === 'partial' ? ' Pemeriksaan belum mencakup semua baris.' : ''}
+              </small>
+            ) : null}
+            {draftAssessmentKey && draftAssessment.key === draftAssessmentKey &&
+              draftAssessment.state === 'error' ? (
+                <small role="status" style={{ color: 'var(--simprok-catatan-muted)' }}>
+                  Pemeriksaan kesiapan AHSP belum dapat dibaca. RAB tetap aman; tidak ada harga yang diubah.
+                </small>
+              ) : null}
             <div className="simprok-rab-sheet__tools">
               {/* THE CREATION DOOR, BACK WHERE IT IS ALWAYS REACHABLE.
                   `addChild` never stopped working — but its only visible doors
@@ -2823,6 +3201,26 @@ export function RabWorkspacePage() {
                   draft that already had rows and no sub-heading offered no way
                   to add anything at all. Same function, same row types, same
                   design language; only the door is restored. */}
+              {canEditDraft && workingDraftLoaded && draftAssessmentDisplay &&
+                draftAssessmentDisplay.checked > draftAssessmentDisplay.linked +
+                  draftAssessmentDisplay.persisted + draftAssessmentDisplay.manual ? (
+                <button type="button" className="simprok-rab-add-item"
+                  disabled={draftDirty || isReusingProven || isAutoPricing}
+                  onClick={() => { void handleReuseProvenAhsp(); }}
+                  title="Gunakan kembali keputusan AHSP yang sudah terbukti untuk identitas WBS dan sumber BOQ yang sama; kandidat belum terbukti tidak dihubungkan"
+                  aria-label="Lengkapi otomatis hubungan AHSP yang sudah terbukti">
+                  {isReusingProven ? 'Memeriksa bukti...' : 'Lengkapi Otomatis'}
+                </button>
+              ) : null}
+              {canEditDraft && draftAssessmentDisplay && draftAssessmentDisplay.linked > 0 ? (
+                <button type="button" className="simprok-rab-add-item"
+                  disabled={draftDirty || isAutoPricing || !workingDraftLoaded}
+                  onClick={() => { void handleAutoPriceReady(); }}
+                  title="Hitung hanya item yang telah mempunyai AHSP dan harga terbukti; item lain tetap belum dihitung"
+                  aria-label="Hitung otomatis baris RAB yang sudah siap">
+                  {isAutoPricing ? 'Sedang menghitung...' : 'Hitung yang Siap'}
+                </button>
+              ) : null}
               {rabLocked ? null : (
                 <>
                   <button
@@ -3538,6 +3936,19 @@ export function RabWorkspacePage() {
                 badly. */}
             <div className="simprok-ahsp-composition" aria-label="Komponen penyusun AHSP">
               <h3>Komponen Penyusun AHSP</h3>
+              {basicPriceGapNotice ? (
+                <div className="simprok-rab-recap__incomplete-note" role="status" aria-label="Ketersediaan Basic Price">
+                  <strong>{basicPriceGapNotice.title}</strong>
+                  <p>{basicPriceGapNotice.message}</p>
+                  <ul>
+                    {basicPriceGapNotice.missing.map((resource, index) => (
+                      <li key={`${resource.component}-${index}`}>
+                        <strong>{resource.component}</strong> — {resource.explanation}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
               {ahspComposition === undefined ? (
                 <p className="simprok-ahsp-composition__empty">Memuat komponen AHSP...</p>
               ) : ahspComposition === null ? (
@@ -3633,7 +4044,9 @@ export function RabWorkspacePage() {
             </div>
             <div className="simprok-ahsp-drawer__frame">
               <span className="simprok-honest-frame__badge">{costEngineStatus.frameBadge}</span>
-              <p>{costEngineStatus.frameMessage}</p>
+              <p>{(selectedItem.manualUnitPrice || selectedItem.priceOrigin === 'MANUAL_CLIENT')
+                ? costEngineStatus.frameMessage
+                : ahspAvailabilityNotice?.message ?? costEngineStatus.frameMessage}</p>
             </div>
             <button className="simprok-execution-factor" onClick={() => openPlaceholder('Atur Execution Factor')} title="Atur Execution Factor - engine belum aktif" aria-label="Atur Execution Factor - engine belum aktif" data-route="/?ruang=execution-factor">
               <Sparkles size={18} />
@@ -3849,7 +4262,7 @@ export function RabWorkspacePage() {
                       ))}
                       {ahspListLoad.kind === 'loading' ? <p className="simprok-ahsp-combobox__message">Mencari AHSP…</p> : null}
                       {ahspListLoad.kind === 'ready' && eligibleAhspVersions.length === 0
-                        ? <p className="simprok-ahsp-combobox__message">AHSP tidak ditemukan. Coba kode atau nama lain.</p>
+                        ? <p className="simprok-ahsp-combobox__message">Tidak ada hasil untuk pencarian ini. Coba kode atau nama lain; katalog belum terbukti kosong.</p>
                         : null}
                       {ahspListLoad.kind === 'idle' && ahspQuery.trim().length === 1
                         ? <p className="simprok-ahsp-combobox__message">Ketik minimal 2 karakter.</p>
@@ -3872,11 +4285,8 @@ export function RabWorkspacePage() {
               <div id="simprok-ahsp-list-status" className="simprok-rab-recap__incomplete-note" role={ahspListLoad.kind === 'error' ? 'alert' : 'status'}>
                 {ahspListLoad.kind === 'idle' ? 'Ketik kode/nama (min. 2 karakter) atau buka daftar AHSP.' : null}
                 {ahspListLoad.kind === 'loading' ? 'Mencari AHSP pada katalog…' : null}
-                {ahspListLoad.kind === 'ready' && eligibleAhspVersions.length > 0
-                  ? `${eligibleAhspVersions.length} AHSP tersedia${ahspHasNext ? ' · Ada hasil berikutnya' : ''}.`
-                  : null}
-                {ahspListLoad.kind === 'ready' && eligibleAhspVersions.length === 0
-                  ? 'Tidak ada AHSP yang cocok.'
+                {ahspListLoad.kind === 'ready'
+                  ? ahspAvailabilityNotice?.message ?? `${eligibleAhspVersions.length} AHSP tersedia${ahspHasNext ? ' · Ada hasil berikutnya' : ''}.`
                   : null}
                 {ahspListLoad.kind === 'error' ? (
                   <>

@@ -31,6 +31,8 @@ import {
 import { UNIT_REASON } from '../unit-kernel/unit-kernel.contracts';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
+import { sameProvenBoqSourceFact } from './rab-auto-source-proof';
+import { explicitAhspSourceProof } from './rab-auto-first-source-reference';
 import {
   AhspResourceResolutionOrchestrator,
   E1A_RESOLUTION_POLICY_VERSION,
@@ -38,6 +40,7 @@ import {
 import {
   classificationPathsFromLeaves,
   rankAhspPreference,
+  type AhspPreference,
   type ClassificationNodeLink,
 } from './ahsp-preference';
 
@@ -54,6 +57,10 @@ export interface SelectAhspForBoqItemInput {
   businessPricingAsOfDate: string;
   referenceRegionId: string;
   idempotencyKey: string;
+  /** RAB-AUTO-04: strictly proven same-project source row; absent for manual selection. */
+  reuseSourceBoqItemId?: string;
+  /** Exact, approved BOQ document's source AHSP code (not WBS). */
+  firstSourceAhspCode?: string;
 }
 
 type ResolutionCreate =
@@ -267,14 +274,14 @@ export class ProjectAhspService {
    * classification is read and never rewritten. Versions that failed the
    * eligibility query are not added here.
    */
-  private async attachProjectPreference(
+  private async attachProjectPreference<T extends {
+    outputUnit: string | null;
+    ahsp: { id: string; workType: string; methodName: string };
+  }>(
     projectId: string,
     item: { name: string; unit: string },
-    listed: Array<{
-      outputUnit: string | null;
-      ahsp: { id: string; workType: string; methodName: string };
-    }>,
-  ) {
+    listed: T[],
+  ): Promise<Array<T & { preference: AhspPreference }>> {
     const selections = await this.prisma.projectClassificationSelection.findMany({
       where: { projectId },
       select: {
@@ -318,6 +325,7 @@ export class ProjectAhspService {
         const monetary = monetaryUnitIdentity(item.unit, version.outputUnit);
         return {
           ...version,
+          sourceVersion: version,
           workType: version.ahsp.workType,
           methodName: version.ahsp.methodName,
           unitCompatible:
@@ -331,7 +339,7 @@ export class ProjectAhspService {
       selectedKategoriIds,
       selectedSubkategoriIds,
       boqName: item.name,
-    }).map(({ workType: _workType, methodName: _methodName, unitCompatible: _unitCompatible, paths: _paths, ...version }) => version);
+    }).map(({ sourceVersion, preference }) => ({ ...sourceVersion, preference }));
   }
 
   listActiveRegions() {
@@ -356,6 +364,8 @@ export class ProjectAhspService {
       businessPricingAsOfDate: input.businessPricingAsOfDate,
       referenceRegionId: input.referenceRegionId,
       resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
+      ...(input.reuseSourceBoqItemId ? { reuseSourceBoqItemId: input.reuseSourceBoqItemId } : {}),
+      ...(input.firstSourceAhspCode ? { firstSourceAhspCode: input.firstSourceAhspCode } : {}),
     });
 
     try {
@@ -409,7 +419,99 @@ export class ProjectAhspService {
         throw new ConflictException('BOQ_ITEM_NOT_WORK_ITEM');
       }
 
-      const region = await tx.region.findFirst({
+      // RAB-AUTO-04: a prior human-governed decision can be inherited only
+          // for the same canonical BOQ source fact, re-proven AFTER the project
+          // lock. Manual selection has no reuseSourceBoqItemId and is unchanged.
+          if (input.reuseSourceBoqItemId) {
+            if (
+              item.ahspVersionId ||
+              item.workingOccurrenceId ||
+              item.calculationOccurrenceId ||
+              item.priceOrigin
+            ) {
+              throw new ConflictException('RAB_AUTO_TARGET_ALREADY_DECIDED');
+            }
+            const source = await tx.boqItem.findFirst({
+              where: {
+                id: input.reuseSourceBoqItemId,
+                boqStructureId: structure.id,
+                itemType: 'WORK_ITEM',
+              },
+              include: {
+                workingOccurrence: true,
+                calculationOccurrence: true,
+              },
+            });
+            if (
+              !source ||
+              source.id === item.id ||
+              !sameProvenBoqSourceFact(source, item) ||
+              source.ahspVersionId !== input.ahspVersionId ||
+              source.priceOrigin === 'MANUAL_CLIENT'
+            ) {
+              throw new ConflictException('RAB_AUTO_SOURCE_FACT_NOT_PROVEN');
+            }
+            const provenOccurrence =
+              source.workingOccurrence ?? source.calculationOccurrence;
+            if (
+              !provenOccurrence ||
+              provenOccurrence.projectId !== input.projectId ||
+              provenOccurrence.workspaceId !== input.workspaceId ||
+              provenOccurrence.createdByAccountId == null ||
+              provenOccurrence.idempotencyKey.startsWith('rab-auto-04-') ||
+              provenOccurrence.ahspVersionId !== input.ahspVersionId ||
+              provenOccurrence.referenceRegionId !== input.referenceRegionId ||
+              provenOccurrence.businessPricingAsOfDate?.getTime() !==
+                asOf.getTime()
+            ) {
+              throw new ConflictException('RAB_AUTO_SOURCE_CONTEXT_NOT_PROVEN');
+            }
+            // Project's own selected region, not geolocation or AI inference.
+            const regionSelection = await tx.projectRegionSelection.findFirst({
+              where: {
+                projectId: input.projectId,
+                regionId: input.referenceRegionId,
+              },
+              select: { id: true },
+            });
+            if (!regionSelection) {
+              throw new ConflictException('RAB_AUTO_REGION_NOT_AUTHORIZED');
+            }
+          }
+
+      // RAB-AUTO-05 — first-time binding: independent explicit BOQ evidence
+      // is rechecked under the existing project lock/transaction. A
+      // recommendation alone cannot authorize the binding.
+      if (input.firstSourceAhspCode) {
+        if (item.ahspVersionId || item.workingOccurrenceId ||
+            item.calculationOccurrenceId || item.priceOrigin ||
+            item.sourceAhspCode !== input.firstSourceAhspCode) {
+          throw new ConflictException('FIRST_ASSOCIATION_SOURCE_NOT_CURRENT');
+        }
+        const approvedSource = await tx.boqBusinessUseEvent.findFirst({
+          where: {
+            workspaceId: input.workspaceId,
+            projectId: input.projectId,
+            boqStructureId: structure.id,
+          },
+          orderBy: { usedAt: 'desc' },
+          select: { usedAt: true },
+        });
+        if (!approvedSource || item.updatedAt > approvedSource.usedAt) {
+          throw new ConflictException('FIRST_ASSOCIATION_SOURCE_NOT_APPROVED');
+        }
+        const chosenRegions = await tx.projectRegionSelection.findMany({
+          where: { projectId: input.projectId },
+          select: { regionId: true },
+          take: 2,
+        });
+        if (chosenRegions.length !== 1 ||
+            chosenRegions[0].regionId !== input.referenceRegionId) {
+          throw new ConflictException('FIRST_ASSOCIATION_REGION_NOT_UNIQUE');
+        }
+      }
+
+          const region = await tx.region.findFirst({
         where: { id: input.referenceRegionId, isActive: true },
       });
       if (!region) throw new NotFoundException('REFERENCE_REGION_NOT_FOUND');
@@ -428,12 +530,19 @@ export class ProjectAhspService {
           // same transaction that freezes this calculation context, so the
           // occurrence records the authority that actually formed it.
           ahsp: {
-            select: { ownershipType: true, workType: true, methodName: true },
+            select: { ownershipType: true, workType: true, methodName: true, code: true },
           },
         },
       });
       if (!version || version.resources.length === 0) {
         throw new NotFoundException('ELIGIBLE_AHSP_VERSION_NOT_FOUND');
+      }
+      if (input.firstSourceAhspCode && !explicitAhspSourceProof(
+        { sourceAhspCode: item.sourceAhspCode, name: item.name },
+        { code: version.ahsp.code, workType: version.ahsp.workType,
+          methodName: version.ahsp.methodName },
+      )) {
+        throw new ConflictException('FIRST_ASSOCIATION_REFERENCE_MISMATCH');
       }
 
       const newerApplicable = await tx.aHSPVersion.findFirst({

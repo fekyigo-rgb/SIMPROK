@@ -8,6 +8,8 @@ import { RabIntelligenceProposalService } from './rab-intelligence-proposal.serv
 import { IntelligenceModule } from '../intelligence/intelligence.module';
 import { AuthModule } from '../auth/auth.module';
 import { CostKernelService } from './cost-kernel.service';
+import { RabAutoPriceReadyController } from './rab-auto-price-ready.controller';
+import { RabAutoPriceReadyService } from './rab-auto-price-ready.service';
 import { BoqImportService } from './boq-import.service';
 import { RabLifecyclePolicyService } from './rab-lifecycle-policy.service';
 import { RabEditableLifecycleGuard } from './rab-editable-lifecycle.guard';
@@ -25,8 +27,36 @@ import { RealityIntakeModule } from '../reality-intake/reality-intake.module';
 
 @Module({
   // Keep main's RealityIntakeModule and RI-01's canonical reference services together.
-  imports: [PrismaModule, IntelligenceModule, AuthModule, BasicPriceModule, ConstructionClassificationModule, UnitKernelModule, ProgressModule, RealityIntakeModule],
-  controllers: [ProjectController, ProjectIntakeReferenceController],
-  providers: [ProjectService, DeviationService, RabIntelligenceProposalService, CostKernelService, BoqImportService, RabLifecyclePolicyService, RabEditableLifecycleGuard, RabKernelPersistenceService, PersistedCalculationService, RabLockService, RabApprovalService, AhspResourceResolutionOrchestrator, ResourceIdentityResolutionService],
+  imports: [
+    PrismaModule,
+    IntelligenceModule,
+    AuthModule,
+    BasicPriceModule,
+    ConstructionClassificationModule,
+    UnitKernelModule,
+    ProgressModule,
+    RealityIntakeModule,
+  ],
+  controllers: [
+    ProjectController,
+    ProjectIntakeReferenceController,
+    RabAutoPriceReadyController,
+  ],
+  providers: [
+    ProjectService,
+    DeviationService,
+    RabIntelligenceProposalService,
+    RabAutoPriceReadyService,
+    CostKernelService,
+    BoqImportService,
+    RabLifecyclePolicyService,
+    RabEditableLifecycleGuard,
+    RabKernelPersistenceService,
+    PersistedCalculationService,
+    RabLockService,
+    RabApprovalService,
+    AhspResourceResolutionOrchestrator,
+    ResourceIdentityResolutionService,
+  ],
 })
 export class ProjectModule {}
