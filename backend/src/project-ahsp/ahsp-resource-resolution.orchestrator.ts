@@ -21,9 +21,8 @@ import { isResourceCatalogIdShape } from '../resource-catalog/resource-identity-
 import { identicalQuestionKey } from '../resource-catalog/identical-question-key';
 import { sumResolvedResourceCosts } from '../project/cost-kernel.kernel';
 import {
-  approvedAuxiliaryPolicyIsGoverned,
-  auxiliaryPolicyGovernanceInclude,
   normalizedAuxiliaryName,
+  selectAuxiliaryEstimatePolicy,
 } from './auxiliary-equipment-estimate.policy';
 
 /**
@@ -561,30 +560,17 @@ for (const resource of version.resources) {
     const target = resolutions[auxiliary.index];
     if (!new Prisma.Decimal(auxiliary.resource.coefficient).equals(1)) return resolutions;
 
-    const policy = await tx.auxiliaryEquipmentEstimatePolicy?.findFirst?.({
-      where: {
-        workspaceId: input.workspaceId,
-        ahspVersionId: version.id,
-        effectiveFrom: { lte: asOf },
-        OR: [{ effectiveUntil: null }, { effectiveUntil: { gte: asOf } }],
-      },
-      orderBy: { version: 'desc' },
-      include: auxiliaryPolicyGovernanceInclude,
-    });
-    if (!policy) {
-      this.holdEstimate(target, 'AUXILIARY_ESTIMATE_POLICY_MISSING',
-        'Estimasi sementara ditahan: kebijakan persentase untuk versi AHSP ini tidak tersedia.');
-      return resolutions;
-    }
-    if (!approvedAuxiliaryPolicyIsGoverned(policy, {
+    const selection = await selectAuxiliaryEstimatePolicy(tx, {
       workspaceId: input.workspaceId,
       ahspVersionId: version.id,
       asOf,
-    })) {
-      this.holdEstimate(target, 'AUXILIARY_ESTIMATE_POLICY_UNAUTHORIZED',
-        'Estimasi sementara ditahan: kebijakan tidak memiliki bukti otoritas yang lengkap dan berlaku.');
+    });
+    if (selection.status !== 'SELECTED') {
+      this.holdEstimate(target, selection.reasonCode,
+        'Estimasi sementara ditahan: tidak ada kebijakan terpilih yang sah dan tidak berkonflik.');
       return resolutions;
     }
+    const policy = selection.policy;
 
     const basis = sumResolvedResourceCosts(version.id, resolutions
       .map((resolution, index) => ({ resolution, index }))

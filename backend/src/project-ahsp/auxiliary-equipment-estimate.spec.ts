@@ -95,7 +95,15 @@ function makeHarness(options: {
       findFirst: jest.fn(async ({ where }: any) => prices.find((row) => row.id === where.id) ?? null),
     },
     auxiliaryEquipmentEstimatePolicy: {
-      findFirst: jest.fn().mockResolvedValue(options.policy === undefined ? governedPolicy() : options.policy),
+      findMany: jest.fn().mockResolvedValue(
+        options.policy === undefined ? [governedPolicy()] : options.policy ? [options.policy] : [],
+      ),
+    },
+    aHSPVersion: {
+      findUnique: jest.fn().mockResolvedValue({
+        id: 'version-1', workspaceId: 'workspace-1',
+        ahsp: { classificationAssignments: [] },
+      }),
     },
   };
   const orchestrator = new AhspResourceResolutionOrchestrator(

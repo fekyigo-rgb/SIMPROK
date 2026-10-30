@@ -2596,6 +2596,7 @@ model ConstructionClassificationNode {
   ahspClassificationAssignments     AhspClassificationAssignment[]
   snapshotClassificationAssignments AhspSnapshotClassificationAssignment[]
   projectClassificationSelections   ProjectClassificationSelection[]
+  auxiliaryEquipmentEstimatePolicies AuxiliaryEquipmentEstimatePolicy[]
 
   @@index([parentId])
   @@index([workspaceId])
@@ -3592,13 +3593,21 @@ enum AuxiliaryEquipmentEstimatePolicyDecision {
   REVOKED
 }
 
+enum AuxiliaryEquipmentEstimatePolicyScopeKind {
+  AHSP_VERSION
+  CLASSIFICATION_NODE
+  WORKSPACE_FALLBACK
+}
+
 /// Append-only, AHSP-version-scoped authority for a temporary Alat Bantu LS
 /// estimate. No percentage default exists; APPROVED rows are valid only after
 /// the application and database governance proofs succeed.
 model AuxiliaryEquipmentEstimatePolicy {
   id                             String                                   @id @default(uuid()) @db.Uuid
   workspaceId                    String                                   @db.Uuid
-  ahspVersionId                  String                                   @db.Uuid
+  scopeKind                      AuxiliaryEquipmentEstimatePolicyScopeKind @default(AHSP_VERSION)
+  ahspVersionId                  String?                                  @db.Uuid
+  classificationNodeId          String?                                  @db.Uuid
   version                        Int
   decision                       AuxiliaryEquipmentEstimatePolicyDecision
   percent                        Decimal?                                 @db.Decimal(9, 6)
@@ -3615,15 +3624,16 @@ model AuxiliaryEquipmentEstimatePolicy {
   createdAt                      DateTime                                 @default(now())
 
   workspace                    Workspace                       @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  ahspVersion                  AHSPVersion                     @relation(fields: [ahspVersionId], references: [id], onDelete: Restrict)
+  ahspVersion                  AHSPVersion?                    @relation(fields: [ahspVersionId], references: [id], onDelete: Restrict)
+  classificationNode          ConstructionClassificationNode? @relation(fields: [classificationNodeId], references: [id], onDelete: Restrict)
   approvedByAccount            Account?                        @relation("AuxiliaryEstimatePolicyApprover", fields: [approvedByAccountId], references: [id], onDelete: Restrict)
   approvedByPosition           Position?                       @relation("AuxiliaryEstimatePolicyPosition", fields: [approvedByPositionId], references: [id], onDelete: Restrict)
   approvedByPositionAssignment PositionAssignment?             @relation("AuxiliaryEstimatePolicyAssignment", fields: [approvedByPositionAssignmentId], references: [id], onDelete: Restrict)
   approvedByPositionAuthority  PositionAuthority?              @relation("AuxiliaryEstimatePolicyAuthority", fields: [approvedByPositionAuthorityId], references: [id], onDelete: Restrict)
   frozenResolutions            ProjectAhspResourceResolution[]
 
-  @@unique([workspaceId, ahspVersionId, version], map: "aeep_scope_version_key")
   @@index([workspaceId, ahspVersionId, effectiveFrom])
+  @@index([workspaceId, classificationNodeId, effectiveFrom])
   @@map("auxiliary_equipment_estimate_policies")
 }
 

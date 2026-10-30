@@ -21,10 +21,7 @@ import {
 } from './rab-kernel-persistence.contracts';
 import { calculateCostKernel, sumResolvedResourceCosts } from './cost-kernel.kernel';
 import { frozenKernelAdaptedPrice } from './cost-kernel-resolution-price';
-import {
-  approvedAuxiliaryPolicyIsGoverned,
-  auxiliaryPolicyGovernanceInclude,
-} from '../project-ahsp/auxiliary-equipment-estimate.policy';
+import { selectAuxiliaryEstimatePolicy } from '../project-ahsp/auxiliary-equipment-estimate.policy';
 import {
   COST_CALCULATION_REASON,
   COST_CALCULATION_STATUS,
@@ -249,24 +246,17 @@ export class RabKernelPersistenceService {
           ) {
             throw new ConflictException('AUXILIARY_ESTIMATE_FROZEN_PROVENANCE_INVALID');
           }
-          const currentPolicy = await tx.auxiliaryEquipmentEstimatePolicy.findFirst({
-            where: {
-              workspaceId: params.workspaceId,
-              ahspVersionId: item.ahspVersionId,
-              effectiveFrom: { lte: calculationAsOfDate },
-              OR: [{ effectiveUntil: null }, { effectiveUntil: { gte: calculationAsOfDate } }],
-            },
-            orderBy: { version: 'desc' },
-            include: auxiliaryPolicyGovernanceInclude,
+          const policySelection = await selectAuxiliaryEstimatePolicy(tx, {
+            workspaceId: params.workspaceId,
+            ahspVersionId: item.ahspVersionId,
+            asOf: calculationAsOfDate,
           });
+          const currentPolicy = policySelection.status === 'SELECTED'
+            ? policySelection.policy
+            : null;
           if (
             !currentPolicy || currentPolicy.id !== resolution.estimatePolicyId ||
             currentPolicy.version !== resolution.estimatePolicyVersion ||
-            !approvedAuxiliaryPolicyIsGoverned(currentPolicy, {
-              workspaceId: params.workspaceId,
-              ahspVersionId: item.ahspVersionId,
-              asOf: calculationAsOfDate,
-            }) ||
             !new Prisma.Decimal(currentPolicy.percent!).equals(resolution.estimatePercent) ||
             currentPolicy.approvalReference !== resolution.estimateApprovalReference ||
             currentPolicy.approvedByAccountId !== resolution.estimateApprovedByAccountId ||
