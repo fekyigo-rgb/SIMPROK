@@ -13,6 +13,7 @@ import {
   type TemporalContext,
 } from '../../utils/basicPriceFreshness';
 import { useBasicPriceDetail } from './useBasicPriceDetail';
+import { formatExplorerPrice, formatPriceEventDate } from '../../utils/basicPriceExplorerDisplay';
 
 interface FreshnessChipProps {
   facts: FreshnessFacts;
@@ -129,6 +130,9 @@ export function FreshnessChip({
    */
   const meaning = open ? freshnessMeaning(facts, temporal, formatDate) : null;
   const corrections = detail.kind === 'ready' ? detail.detail.corrections : null;
+  // Same canonical Backend price history as Detail > Riwayat. No pairing or
+  // event classification in the browser; render only the latest three facts.
+  const priceHistory = detail.kind === 'ready' ? detail.detail.priceHistory : null;
   const rows = corrections
     ? correctionHistoryRows(corrections.entries, formatDate)
     : [anchorCorrectionRow(facts, formatDate)];
@@ -159,7 +163,7 @@ export function FreshnessChip({
           id={panelId}
           role="dialog"
           aria-label={`Status harga ${resourceName}`}
-          className="bp-pop__panel"
+          className="bp-pop__panel bp-pop__panel--freshness"
         >
           <p className="bp-pop__title">{meaning.headline}</p>
           <p className="bp-pop__body">{meaning.body}</p>
@@ -171,6 +175,42 @@ export function FreshnessChip({
               ))}
             </ul>
           ) : null}
+
+          <div className="bp-pop__section">
+            <span className="bp-pop__label">Riwayat harga singkat</span>
+            {priceHistory && priceHistory.entries.length > 0 ? (
+              <div className="bp-pop__price-events">
+                {priceHistory.entries.slice(0, 3).map((entry, index) => (
+                  <div className="bp-pop__price-event" key={`verified-price-${index}`}>
+                    <div className="bp-pop__price-event-head">
+                      <span className="bp-history__price">{formatExplorerPrice(entry.price)}</span>
+                      <span className="bp-history__tag">{entry.changeLabel}</span>
+                    </div>
+                    <span className="bp-history__date">
+                      {entry.actionLabel === 'Harga Awal'
+                        ? 'Harga Awal'
+                        : entry.actionLabel
+                          ? `${entry.actionLabel} · ${formatPriceEventDate(entry.recordedAt)}`
+                          : 'Riwayat belum lengkap'}
+                      {' · '}Sumber: {entry.sourceName ?? 'Belum tercatat'}
+                    </span>
+                  </div>
+                ))}
+                {priceHistory.entries.length > 3 ? (
+                  <p className="bp-pop__body bp-muted">Riwayat selebihnya tersedia di Detail.</p>
+                ) : null}
+                {priceHistory.truncated ? (
+                  <p className="bp-pop__body bp-muted">Sebagian riwayat belum terbukti lengkap.</p>
+                ) : null}
+              </div>
+            ) : (
+              <p className="bp-pop__body bp-muted">
+                {detail.kind === 'loading'
+                  ? 'Memuat riwayat harga...'
+                  : 'Riwayat harga belum tersedia dari sumber canonical.'}
+              </p>
+            )}
+          </div>
 
           <div className="bp-pop__section">
             {/*

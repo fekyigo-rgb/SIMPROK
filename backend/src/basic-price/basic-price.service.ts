@@ -56,6 +56,11 @@ import { toDecimalString2 } from '../common/money';
 const EXPLORER_ROW_SELECT = {
   id: true,
   workspaceId: true,
+  // Read-only exact context for a price's proven denominator inheritance.
+  resourceId: true,
+  regionId: true,
+  regionCoverageSetId: true,
+  recordsNewObservation: true,
   // Exact correction lineage is needed solely when older audit names were
   // absent; never synthesize a source from a similar title or price.
   supersedesBasicPriceId: true,
@@ -1329,6 +1334,83 @@ export class BasicPriceService {
       const importRow = row.sourceImportRow ?? row.sourceSubmission?.importRow;
       if (importRow) sourceUnitIds.set(row.id, importRow.unitDefinitionId ?? null);
     }
+    // BP-HISTORY-UX-02A: a price-only correction or a later SAME-SOURCE
+    // observation has no new import-row pointer. Follow ONLY its exact
+    // persisted correction / NEW_OBSERVATION edge to the earlier proven
+    // denominator. Never borrow ResourceCatalog.baseUnit, a similar item,
+    // or a different-source offer. No DB writes or monetary conversions.
+    type UnitCursor = Pick<ExplorerRowSource,
+      'id' | 'workspaceId' | 'assetScope' | 'resourceId' | 'regionId' |
+      'regionCoverageSetId' | 'recordsNewObservation' | 'supersedesBasicPriceId' |
+      'sourceType' | 'sourceOrigin' | 'provenanceCorrections'
+    >;
+    const pending = new Map<string, { cursor: UnitCursor; visited: Set<string> }>();
+    for (const row of rows) {
+      if (sourceUnitIds.has(row.id) || row.assetScope !== 'WORKSPACE_PRIVATE' ||
+          !row.workspaceId || !row.resourceId || row.regionId === undefined ||
+          row.regionCoverageSetId === undefined || row.recordsNewObservation === undefined)
+        continue;
+      pending.set(row.id, { cursor: row, visited: new Set([row.id]) });
+    }
+    const maxHops = Math.min(BASIC_PRICE_HISTORY_MAX_GENERATIONS, 32);
+    for (let depth = 0; depth < maxHops && pending.size; depth++) {
+      const requests = new Map<string, { child: UnitCursor; parentId: string }>();
+      for (const [rootId, state] of pending) {
+        const child = state.cursor;
+        const correctionParent = child.recordsNewObservation ? null : child.supersedesBasicPriceId;
+        const observationParent = child.recordsNewObservation
+          ? sameSourceObservationPredecessorId(child.provenanceCorrections?.[0])
+          : null;
+        const parentId = correctionParent ?? observationParent;
+        if (!parentId || state.visited.has(parentId)) { pending.delete(rootId); continue; }
+        state.visited.add(parentId);
+        requests.set(rootId, { child, parentId });
+      }
+      if (!requests.size) break;
+      const parents = await this.prisma.basicPrice.findMany({
+        where: {
+          id: { in: [...new Set([...requests.values()].map((r) => r.parentId))] },
+          workspaceId: { in: [...new Set([...requests.values()].map((r) => r.child.workspaceId as string))] },
+          assetScope: 'WORKSPACE_PRIVATE',
+        },
+        select: {
+          id: true, workspaceId: true, assetScope: true, resourceId: true,
+          regionId: true, regionCoverageSetId: true, recordsNewObservation: true,
+          supersedesBasicPriceId: true, sourceType: true, sourceOrigin: true,
+          sourceImportRow: { select: { unitDefinitionId: true } },
+          sourceSubmission: { select: { importRow: { select: { unitDefinitionId: true } } } },
+          provenanceCorrections: {
+            orderBy: { createdAt: 'asc' }, take: 1,
+            select: { before: true, after: true },
+          },
+        },
+      });
+      const byParentId = new Map(parents.map((r) => [r.id, r]));
+      for (const [rootId, { child, parentId }] of requests) {
+        const parent = byParentId.get(parentId);
+        if (!parent ||
+            child.assetScope !== 'WORKSPACE_PRIVATE' ||
+            parent.workspaceId !== child.workspaceId ||
+            parent.resourceId !== child.resourceId ||
+            parent.regionId !== child.regionId ||
+            parent.regionCoverageSetId !== child.regionCoverageSetId ||
+            // Corrections retain the same source; a new observation is only
+            // eligible when its birth audit explicitly states SAME SOURCE.
+            (!child.recordsNewObservation &&
+             (parent.sourceType !== child.sourceType || parent.sourceOrigin !== child.sourceOrigin))) {
+          pending.delete(rootId);
+          continue;
+        }
+        const direct = parent.sourceImportRow ?? parent.sourceSubmission?.importRow;
+        if (direct) {
+          sourceUnitIds.set(rootId, direct.unitDefinitionId ?? null);
+          pending.delete(rootId);
+        } else {
+          pending.get(rootId)!.cursor = parent;
+        }
+      }
+    }
+
     const ids = [...new Set([...sourceUnitIds.values()].filter(
       (id): id is string => !!id,
     ))];

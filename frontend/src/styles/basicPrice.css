@@ -576,6 +576,12 @@
   white-space: normal;
 }
 
+/* The richer status history stays a compact scrollable layer, not a second page. */
+.bp-pop__panel--freshness {
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+}
+
 /* The combobox result list reuses the panel, at control width. */
 .bp-pop__panel--list {
   width: 260px;
@@ -687,6 +693,28 @@
   color: var(--bp-uncertain);
 }
 
+/* BP-HISTORY-UX-02B: bounded summary only; canonical Detail still owns full history. */
+.bp-pop__price-events {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+.bp-pop__price-event {
+  display: grid;
+  gap: 2px;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--simprok-bright-sky-blue-100);
+}
+.bp-pop__price-event-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 10px;
+}
+.bp-pop__price-event .bp-history__date {
+  font-size: 11px;
+}
+
 .bp-history {
   margin-top: 6px;
   display: flex;
@@ -723,16 +751,37 @@
 /* BP-HISTORY-ONE-TRUTH: additive Detail-only layout; retain the existing
  * three-column history styles for already-PASS legacy consumers. */
 .bp-history__row.bp-history__row--events {
-  grid-template-columns: minmax(0, 1fr) auto;
-  gap: 3px 8px;
+  grid-template-columns: max-content minmax(0, 1fr) auto;
+  gap: 8px 20px;
+  align-items: center;
   padding: 10px 6px;
   border-bottom: 1px solid var(--simprok-bright-sky-blue-100);
 }
 .bp-history__row--events .bp-history__price {
   font-size: var(--text-sm);
 }
-.bp-history__row--events .bp-history__date {
-  grid-column: 1 / -1;
+.bp-history__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 3px 18px;
+  min-width: 0;
+}
+.bp-history__row--events .bp-history__tag {
+  justify-self: end;
+}
+@media (max-width: 720px) {
+  .bp-history__row.bp-history__row--events {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .bp-history__row--events .bp-history__meta {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+  .bp-history__row--events .bp-history__tag {
+    grid-column: 2;
+    grid-row: 1;
+  }
 }
 
 /* ── Detail panel ──────────────────────────────────────────────────────── */
