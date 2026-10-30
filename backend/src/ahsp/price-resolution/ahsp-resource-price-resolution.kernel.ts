@@ -27,7 +27,11 @@
  * - Applies ONLY the price adaptation the UnitKernel itself proved for the
  *   direction actually needed. It never inverts a factor, never multiplies by
  *   one it was not given, and never invents a rounding policy for a quotient.
+ * - A non-cent-representable quotient stays NEEDS_REVIEW until money law is
+ *   separately established; source price and existing exact-unit paths remain.
  */
+
+import { adaptPriceWithProvenUnitVerdict, type ProvenUnitPriceOperation } from './proven-unit-price-adaptation';
 
 // ============================================================
 // INPUT TYPES
@@ -90,6 +94,11 @@ export interface AhspResourceResolutionInput {
     readonly quantityFactor: string | null;
     readonly rawSourceUnit: string;
     readonly rawTargetUnit: string;
+  };
+  /** Optional additive verdict: explicitly certified PRICE UNIT -> AHSP UNIT.
+   * Only UnitKernel may assert this; the resolver never reverses an opposite rule. */
+  readonly directPriceUnitResolution?: ProvenUnitPriceOperation & {
+    readonly canonicalTargetUnitCode: string | null;
   };
   /**
    * RM-03D1 identity slice, OPTIONAL and additive.
@@ -192,6 +201,7 @@ export type ReasonCode =
    * stops and asks for a human instead of guessing.
    */
   | 'UNIT_CONVERSION_UNPROVED'
+  | 'PROVEN_DIRECTIONAL_PRICE_CONVERSION'
   | 'SINGLE_ELIGIBLE_BASIC_PRICE'
   | 'NO_CATALOG_CANDIDATE'
   | 'MULTIPLE_CATALOG_CANDIDATES'
@@ -222,14 +232,9 @@ export interface ResolvedResolution {
    * rather than a fact about this resource.
    */
   readonly canonicalUnit: string;
-  /**
-   * The quantity factor the UnitKernel proved. Always "1" today, because a
-   * RESOLVED result is only ever produced for exact unit identity — but it is
-   * echoed from the verdict rather than written as a literal, so it can never
-   * claim a factor the evidence did not contain.
-   */
+  /** The exact identity factor or directly certified price -> AHSP factor. */
   readonly conversionFactor: string;
-  /** Same exact decimal string as sourcePriceValue — factor 1 means no numeric change. */
+  /** Original string for exact-unit, or cent-exact converted price for a proven directional rule. */
   readonly adaptedPriceValue: string;
   readonly selectionStatus: 'AUTO_SELECTED';
   readonly reasonCodes: ReadonlyArray<ReasonCode>;
@@ -312,9 +317,9 @@ function normalizeResourceName(raw: string): string {
  *   equivalence (a differently-spelled source name proven by an existing
  *   ResourceSourceIdentity or a reviewed import mapping) is NOT decided here
  *   and is deliberately out of this slice.
- * - Only a proven exact unit identity reaches RESOLVED. A commensurable pair
- *   needing a real conversion returns UNIT_CONVERSION_UNPROVED rather than
- *   inverting a one-way factor.
+ * - Existing exact-unit path is unchanged. A non-identity pair requires the
+ *   optional, directly certified PRICE -> AHSP verdict and exact cents; absent
+ *   evidence still returns UNIT_CONVERSION_UNPROVED.
  * - Multi-price ranking is not implemented; multiple candidates → NEEDS_REVIEW.
  */
 export function resolveAhspResourcePrice(
@@ -445,13 +450,25 @@ function priceAgainstCatalog(
   // never be replayed into this one.
   const ahspUnitCanonicalCode = validatedUnitResolution.canonicalUnitCode;
   const ahspUnitQuantityFactor = validatedUnitResolution.quantityFactor;
+  // Optional, directly certified SOURCE PRICE UNIT -> AHSP UNIT. The old
+  // exact-unit path remains untouched; never invert the AHSP -> catalog proof.
+  const directUnit = input.directPriceUnitResolution;
+  const legacyUnitIdentity = validatedUnitResolution.status === 'RESOLVED' &&
+    validatedUnitResolution.rawSourceUnit === ahspUnit &&
+    validatedUnitResolution.rawTargetUnit === resolvedCatalog.baseUnit &&
+    ahspUnitCanonicalCode !== null && ahspUnitQuantityFactor === '1';
+  const useDirectPriceUnit = !legacyUnitIdentity &&
+    directUnit?.status === 'RESOLVED' &&
+    directUnit.rawSourceUnit === resolvedCatalog.baseUnit &&
+    directUnit.rawTargetUnit === ahspUnit &&
+    directUnit.canonicalTargetUnitCode !== null;
 
-  if (
+  if (!useDirectPriceUnit && (
     validatedUnitResolution.status !== 'RESOLVED' ||
     validatedUnitResolution.rawSourceUnit !== ahspUnit ||
     validatedUnitResolution.rawTargetUnit !== resolvedCatalog.baseUnit ||
     ahspUnitCanonicalCode === null
-  ) {
+  )) {
     return {
       ...baseContext,
       status: 'UNRESOLVED',
@@ -468,7 +485,7 @@ function priceAgainstCatalog(
   // unit — carrying the price across would need the inverse of a factor that
   // was only proved one way round. Inventing that inverse is exactly what this
   // kernel must never do, so it hands the decision to a human instead.
-  if (ahspUnitQuantityFactor !== '1') {
+  if (!useDirectPriceUnit && ahspUnitQuantityFactor !== '1') {
     return {
       ...baseContext,
       status: 'NEEDS_REVIEW',
@@ -482,12 +499,12 @@ function priceAgainstCatalog(
     };
   }
 
-  // From here on the AHSP unit and the catalog unit ARE the same canonical
-  // unit, so "price per catalog unit" and "price per AHSP unit" are the same
-  // quantity and the price leg below needs no inversion either.
-  const unitReason: ReasonCode =
-    resourceType.toUpperCase() === 'LABOR' &&
-    ahspUnitCanonicalCode === 'PERSON_DAY'
+  // Here the legacy branch has an identical canonical unit; the optional
+  // direct branch must still adapt the price only after selecting one lawful
+  // candidate, with a forward UnitKernel proof and no factor inversion.
+  const unitReason: ReasonCode = useDirectPriceUnit
+    ? 'PROVEN_DIRECTIONAL_PRICE_CONVERSION'
+    : resourceType.toUpperCase() === 'LABOR' && ahspUnitCanonicalCode === 'PERSON_DAY'
       ? 'LABOR_DAY_UNIT_EQUIVALENT'
       : 'EXACT_UNIT_IDENTITY';
 
@@ -629,6 +646,29 @@ function priceAgainstCatalog(
   }
 
   const selectedPrice = compatiblePrices[0];
+  // Price source stays per catalog unit. Only the UnitKernel's DIRECT
+  // source -> AHSP proof may adapt it; unproved direction and fractional
+  // cents hold, never become invented money or a different Basic Price.
+  const adapted = useDirectPriceUnit
+    ? adaptPriceWithProvenUnitVerdict(
+        selectedPrice.value, selectedPrice.unit, ahspUnit, directUnit!,
+      )
+    : null;
+  if (adapted?.status === 'NEEDS_REVIEW') {
+    return {
+      ...baseContext,
+      status: 'NEEDS_REVIEW',
+      reasonCodes: [identityReason, 'RESOURCE_TYPE_MATCH', 'UNIT_CONVERSION_UNPROVED'],
+      explanation: `Konversi harga ke satuan AHSP ditahan: ${adapted.reason}. ` +
+        'Harga sumber dan identitas resource tidak diubah.',
+    };
+  }
+  const effectivePrice = adapted?.status === 'RESOLVED'
+    ? adapted.adaptedPrice : selectedPrice.value;
+  const effectiveUnitCode = useDirectPriceUnit
+    ? directUnit!.canonicalTargetUnitCode! : ahspUnitCanonicalCode!;
+  const effectiveFactor = useDirectPriceUnit
+    ? directUnit!.quantityFactor! : ahspUnitQuantityFactor!;
 
   // The success explanation used to hardcode "melalui kecocokan nama tepat".
   // That was true while an exact name match was the only reachable authority,
@@ -662,11 +702,11 @@ function priceAgainstCatalog(
     sourceUnit: selectedPrice.unit,
     ahspUnit,
     // Echoed from the UnitKernel verdict, never asserted as a constant.
-    canonicalUnit: ahspUnitCanonicalCode,
-    conversionFactor: ahspUnitQuantityFactor,
-    // IDENTITY → the adapted price IS the source price: the same string is
-    // handed back, so no arithmetic and no rounding can touch the money here.
-    adaptedPriceValue: selectedPrice.value,
+    canonicalUnit: effectiveUnitCode,
+    conversionFactor: effectiveFactor,
+    // The identical-unit path remains byte-exact; a directional price proof
+    // produces an exact, cent-representable adapted rate.
+    adaptedPriceValue: effectivePrice,
     selectionStatus: 'AUTO_SELECTED',
     reasonCodes: [
       identityReason,
@@ -678,12 +718,15 @@ function priceAgainstCatalog(
       `Sumber daya AHSP "${rawResourceRef}" (${resourceType}, unit: ${ahspUnit}) ` +
       `berhasil dipetakan ke ResourceCatalog "${resolvedCatalog.name}" ` +
       `(${resolvedCatalog.id}, baseUnit: ${resolvedCatalog.baseUnit}) ` +
-      `${identityPhrase}, dan Kamus Unit membuktikan kedua unit ` +
-      `menunjuk identitas canonical yang sama (${ahspUnitCanonicalCode}, faktor: ` +
-      `${ahspUnitQuantityFactor}). ` +
+      `${identityPhrase}. ` +
+      (useDirectPriceUnit
+        ? `Unit Kernel membuktikan konversi harga searah ` +
+          `${selectedPrice.unit} → ${ahspUnit} (faktor ${effectiveFactor}). `
+        : `Kamus Unit membuktikan kedua unit menunjuk identitas canonical ` +
+          `yang sama (${ahspUnitCanonicalCode}, faktor: ${ahspUnitQuantityFactor}). `) +
       `Basic Price dipilih otomatis: ${selectedPrice.value} per ${selectedPrice.unit} ` +
       `dari sumber ${selectedPrice.sourceOrigin} (ID: ${selectedPrice.id}). ` +
-      `Harga yang diadaptasi ke unit AHSP: ${selectedPrice.value} per ${ahspUnit}. ` +
+      `Harga yang diadaptasi ke unit AHSP: ${effectivePrice} per ${ahspUnit}. ` +
       `SIMPROK menghitung, manusia memutuskan.`,
   };
 }
