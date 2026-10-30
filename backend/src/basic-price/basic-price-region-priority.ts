@@ -101,3 +101,32 @@ export function firstEligiblePriceRegionTier<T>(
     ? { kind: 'NOT_FOUND' }
     : { kind: 'HIERARCHY_INCOMPLETE', reason: ladder.reason };
 }
+
+/**
+ * Read the canonical ancestry from the same Prisma transaction as pricing.
+ * Never maintain a second hierarchy or infer geography from textual codes.
+ */
+export async function loadCanonicalPriceRegionContext(
+  tx: Pick<import('@prisma/client').Prisma.TransactionClient, 'region'>,
+  originRegionId: string,
+): Promise<{
+  ladder: PriceRegionLadder;
+  facts: readonly (PriceRegionFact & { name: string; code: string })[];
+}> {
+  const facts: Array<PriceRegionFact & { name: string; code: string }> = [];
+  let cursor: string | null = originRegionId;
+  for (let depth = 0; depth < 4 && cursor !== null; depth++) {
+    const region: (PriceRegionFact & { name: string; code: string }) | null =
+      await tx.region.findUnique({
+        where: { id: cursor },
+        select: {
+          id: true, parentId: true, administrativeLevel: true, isActive: true,
+          name: true, code: true,
+        },
+      });
+    if (!region) break;
+    facts.push(region);
+    cursor = region.parentId;
+  }
+  return { ladder: projectPriceRegionLadder(originRegionId, facts), facts };
+}

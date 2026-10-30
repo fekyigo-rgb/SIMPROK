@@ -308,6 +308,7 @@ function world() {
     // BP-ONE-TRUTH-01: the real AHSP price orchestrator now checks proven
     // source-observation lineage inside the existing transaction. This fixture
     // intentionally has no Basic Price rows or observation lineage.
+    region: { findUnique: async ({ where }: any) => ({ id: where.id, parentId: null, administrativeLevel: 'PROVINCE', isActive: true }) },
     $queryRaw: () => Promise.resolve([]),
     basicPrice: {
       findMany: () => Promise.resolve([]),

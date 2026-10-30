@@ -69,6 +69,7 @@ const CATALOG = {
 const price = (id: string, resourceId: string, value: string, baseUnit: string) => ({
   id,
   resourceId,
+  regionId: 'region-fixture', regionCoverageSetId: null,
   value: { toString: () => value },
   sourceOrigin: 'FIELD_REPORTED',
   freshnessStatus: 'CURRENT',
@@ -98,6 +99,7 @@ function makeTx(prices: typeof PRICES = PRICES) {
   return {
     unitAliasFindMany,
     tx: {
+      region: { findUnique: async ({ where }: any) => ({ id: where.id, parentId: null, administrativeLevel: 'PROVINCE', isActive: true }) },
       $queryRaw: jest.fn().mockResolvedValue([]),
       unitAlias: { findMany: unitAliasFindMany },
       resourceCatalog: { findMany: async () => Object.values(CATALOG) },

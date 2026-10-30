@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import {
   Prisma,
   ProjectAhspPriceMode,
@@ -10,7 +10,8 @@ import { resolveAhspResourcePrice } from '../ahsp/price-resolution/ahsp-resource
 import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
 import { BasicPriceService } from '../basic-price/basic-price.service';
 import { promotionLineagePrecedenceWhere } from '../basic-price/basic-price-promotion-precedence';
-import { basicPriceRegionApplicabilityWhere } from '../basic-price/basic-price-region-applicability';
+import { basicPriceRegionApplicabilityWhere, basicPriceRegionMatches } from '../basic-price/basic-price-region-applicability';
+import { firstEligiblePriceRegionTier, loadCanonicalPriceRegionContext } from '../basic-price/basic-price-region-priority';
 import {
   basicPriceCurrentnessWhere,
   mergeCurrentnessAnd,
@@ -198,6 +199,17 @@ export class AhspResourceResolutionOrchestrator {
         asOf,
         precedence,
       );
+    // RAB-36B: reuse the canonical Region hierarchy; never derive a parent
+    // from place names or code prefixes. All reads use the caller's transaction.
+    const { ladder: regionalLadder, facts: regionFacts } =
+      await loadCanonicalPriceRegionContext(tx, input.referenceRegionId);
+    if (regionalLadder.status !== 'COMPLETE') {
+      throw new ConflictException('RAB_PRICE_REGION_HIERARCHY_UNPROVEN');
+    }
+    const regionalWhere: Prisma.BasicPriceWhereInput = {
+      OR: regionalLadder.tiers.map((tier) =>
+        basicPriceRegionApplicabilityWhere(tier.regionId)),
+    };
     const priceRows = await tx.basicPrice.findMany({
       where: {
         ...this.eligibility.usableWhere(input.workspaceId),
@@ -220,11 +232,14 @@ export class AhspResourceResolutionOrchestrator {
         // proves its provenance. Selection changed; history did not.
         ...mergeCurrentnessAnd(basicPriceCurrentnessWhere({ asOf }), [
           { OR: [{ validUntil: null }, { validUntil: { gte: asOf } }] },
-          basicPriceRegionApplicabilityWhere(input.referenceRegionId),
+          regionalWhere,
         ]),
         effectiveDate: { lte: asOf },
       },
-      include: { resource: true },
+      include: {
+        resource: true,
+        regionCoverageSet: { include: { members: { select: { regionId: true } } } },
+      },
     });
 
 const resolutions: ResolutionCreate[] = [];
@@ -381,7 +396,7 @@ for (const resource of version.resources) {
         identifiedCatalog.id, trustedUnitContext,
       );
   const candidates = await Promise.all(
-    priceRows.map(async (price) => {
+    priceRows.filter((price) => price.resourceId === identifiedCatalog.id).map(async (price) => {
       const resolved =
         price.resourceId === identifiedCatalog.id
           ? await this.units.resolve(
@@ -394,6 +409,9 @@ for (const resource of version.resources) {
       return {
         id: price.id,
         resourceId: price.resourceId,
+        regionId: price.regionId,
+        regionCoverageSetId: price.regionCoverageSetId,
+        regionCoverageSet: price.regionCoverageSet,
         value: price.value.toString(),
         sourceOrigin: price.sourceOrigin,
         unit: price.resource.baseUnit,
@@ -409,6 +427,19 @@ for (const resource of version.resources) {
       } as const;
     }),
   );
+  // Only ALREADY eligible offers of the nearest lawful tier may be priced.
+  // The existing price kernel still decides multiplicity, source/unit proof,
+  // currentness and value; this does not introduce a second price selector.
+  const regionChoice = firstEligiblePriceRegionTier(
+    regionalLadder,
+    candidates,
+    (price, tierId) => basicPriceRegionMatches(price, tierId) &&
+      price.unitResolution.status === 'RESOLVED' &&
+      (price.unitResolution.quantityFactor === '1' ||
+        directlyPricedUnit?.status === 'RESOLVED'),
+  );
+  const regionalCandidates = regionChoice.kind === 'FOUND'
+    ? regionChoice.candidates : [];
   const result = resolveAhspResourcePrice({
     projectId: input.projectId,
     ahspVersionId: version.id,
@@ -417,7 +448,7 @@ for (const resource of version.resources) {
     resourceType: resource.resourceType,
     ahspUnit: resource.baseUnit,
     resourceCatalogCandidates: matches,
-    eligibleBasicPriceCandidates: candidates,
+    eligibleBasicPriceCandidates: regionalCandidates,
     // Identity already settled above, by its own authority. The price
     // kernel consumes that verdict exactly as it consumes the UnitKernel's
     // instead of re-deriving it from the name — which is the only way a
@@ -479,7 +510,11 @@ for (const resource of version.resources) {
                 { validUntil: { gte: asOf } },
               ],
             },
-            basicPriceRegionApplicabilityWhere(input.referenceRegionId),
+            // Re-proof EXACTLY the region tier that admitted the price.
+            basicPriceRegionApplicabilityWhere(
+              regionChoice.kind === 'FOUND'
+                ? regionChoice.tier.regionId : input.referenceRegionId,
+            ),
           ],
         },
         include: { resource: true },
@@ -502,7 +537,20 @@ for (const resource of version.resources) {
   // identity first, by its own authority, then pricing. Neither kernel gains the
   // other's job — the price kernel still knows nothing about representation
   // ties, and the identity kernel still knows nothing about money.
+  const selectedRegion = regionChoice.kind === 'FOUND'
+    ? regionFacts.find((region) => region.id === regionChoice.tier.regionId)
+    : null;
+  const regionProvenance =
+    result.status === 'RESOLVED' && regionChoice.kind === 'FOUND'
+      ? ' Sumber harga: tier ' + regionChoice.tier.level +
+        ', wilayah ' + (selectedRegion?.name ?? regionChoice.tier.regionId) +
+        (selectedRegion?.code ? ' (' + selectedRegion.code + ')' : '') +
+        ', region ID ' + regionChoice.tier.regionId +
+        ', Basic Price ID ' + result.selectedBasicPriceId +
+        '; lokasi awal ' + input.referenceRegionId + '.'
+      : '';
   const explanation = `${identity.explanation} ${result.explanation}` +
+    regionProvenance +
     (result.status === 'RESOLVED' ? '' : workContextNote);
   const resolved =
     result.status === 'RESOLVED' &&

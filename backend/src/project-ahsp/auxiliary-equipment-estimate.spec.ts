@@ -58,13 +58,13 @@ function makeHarness(options: {
   const catalogs = options.catalogs ?? [auxCatalog, materialCatalog];
   const prices = [
     options.materialPrice === null ? null : {
-      id: 'price-material', resourceId: materialCatalog.id,
+      id: 'price-material', resourceId: materialCatalog.id, regionId: 'region-1', regionCoverageSetId: null,
       value: new Prisma.Decimal(options.materialPrice ?? '100.00'),
       sourceOrigin: 'FIELD_REPORTED', freshnessStatus: 'CURRENT', effectiveDate: asOf,
       resource: { baseUnit: 'kg' },
     },
     options.auxPrice == null ? null : {
-      id: 'price-aux', resourceId: auxCatalog.id, value: new Prisma.Decimal(options.auxPrice),
+      id: 'price-aux', resourceId: auxCatalog.id, regionId: 'region-1', regionCoverageSetId: null, value: new Prisma.Decimal(options.auxPrice),
       sourceOrigin: 'FIELD_REPORTED', freshnessStatus: 'CURRENT', effectiveDate: asOf,
       resource: { baseUnit: 'LS' },
     },
@@ -89,6 +89,7 @@ function makeHarness(options: {
       : { status: 'NEEDS_REVIEW' },
   };
   const tx = {
+    region: { findUnique: async ({ where }: any) => ({ id: where.id, parentId: null, administrativeLevel: 'PROVINCE', isActive: true }) },
     $queryRaw: jest.fn().mockResolvedValue([]),
     basicPrice: {
       findMany: jest.fn().mockResolvedValue(prices),

@@ -12,6 +12,7 @@ import {
 } from './rab-lifecycle-policy.service';
 import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
 import { basicPriceRegionMatches } from '../basic-price/basic-price-region-applicability';
+import { loadCanonicalPriceRegionContext } from '../basic-price/basic-price-region-priority';
 import { parseDateOnlyUtc } from '../common/date-only.util';
 import { toMoneyDecimal2 } from '../common/money';
 import { buildDraftRecap } from './rab-draft-recap';
@@ -337,8 +338,18 @@ export class RabKernelPersistenceService {
             RAB_KERNEL_PERSISTENCE_REASON.SELECTED_BASIC_PRICE_NOT_ELIGIBLE,
           );
         }
+        // RAB-36B: preserve the exact-region rule first. For an ancestral
+        // fallback, re-prove the canonical parent chain in THIS transaction.
+        // A sibling district or matching NAME can never authorize a price.
         if (!basicPriceRegionMatches(basicPrice, occurrence.referenceRegionId)) {
-          throw new ConflictException('BASIC_PRICE_REGION_MISMATCH');
+          const { ladder } = await loadCanonicalPriceRegionContext(
+            tx, occurrence.referenceRegionId,
+          );
+          if (ladder.status !== 'COMPLETE' ||
+              !ladder.tiers.some((tier) =>
+                basicPriceRegionMatches(basicPrice, tier.regionId))) {
+            throw new ConflictException('BASIC_PRICE_REGION_MISMATCH');
+          }
         }
         // §PR57 Gap A: exact id equality only — never a name/fuzzy match,
         // never a remap. A resolution may only ever consume a price

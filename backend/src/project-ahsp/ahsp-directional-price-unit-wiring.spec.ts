@@ -19,6 +19,7 @@ const catalog = {
 const makePrice = (value: string) => ({
   id: 'price-zak',
   resourceId: catalog.id,
+  regionId: 'region-1', regionCoverageSetId: null,
   resource: { baseUnit: 'zak' },
   value: { toString: () => value },
   sourceOrigin: 'FIELD_REPORT',
@@ -81,6 +82,7 @@ async function resolvePrice(input: {
     identity as never,
   );
   const tx = {
+    region: { findUnique: async ({ where }: any) => ({ id: where.id, parentId: null, administrativeLevel: 'PROVINCE', isActive: true }) },
     $queryRaw: async () => [],
     basicPrice: {
       findMany: async () => [price],
