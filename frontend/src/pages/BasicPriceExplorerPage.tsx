@@ -691,8 +691,8 @@ export function BasicPriceExplorerPage() {
           />
         </div>
 
-        <div className="bp-field bp-field--date">
-          <label className="bp-field__label" htmlFor="bp-f-date">
+        <div className="bp-field bp-field--date bp-date-help">
+          <label className="bp-field__label bp-date-help__trigger" htmlFor="bp-f-date" title={EFFECTIVE_ON_DATE_HELP}>
             Berlaku pada
           </label>
           <input
@@ -700,10 +700,11 @@ export function BasicPriceExplorerPage() {
             className="bp-input"
             type="date"
             value={draft.effectiveOn}
+            title={EFFECTIVE_ON_DATE_HELP}
             aria-describedby="bp-f-date-help"
             onChange={(event) => updateDraft('effectiveOn', event.target.value)}
           />
-          <span id="bp-f-date-help" className="bp-field__help">
+          <span id="bp-f-date-help" className="bp-date-help__tooltip" role="tooltip">
             {EFFECTIVE_ON_DATE_HELP}
           </span>
         </div>
