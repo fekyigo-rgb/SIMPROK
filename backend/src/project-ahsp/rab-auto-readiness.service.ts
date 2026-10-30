@@ -109,14 +109,15 @@ export class RabAutoReadinessService {
       { projectId: input.projectId, boqItemId: item.id },
       { q: '', page: '1', limit: '50' },
     );
-    const recommendedCount = catalog.items.filter(
+    const recommended = catalog.items.filter(
       (v) =>
         'preference' in v &&
         v.preference != null &&
         typeof v.preference === 'object' &&
         'recommended' in v.preference &&
         v.preference.recommended === true,
-    ).length;
+    );
+    const recommendedCount = recommended.length;
 
     let kind:
       | 'NO_ELIGIBLE_AHSP'
@@ -141,6 +142,21 @@ export class RabAutoReadinessService {
       searched: { query: '', firstPageSize: 50, hasNext: catalog.hasNext },
       eligibleSeen: catalog.items.length,
       recommendedCount,
+      // RAB-AUTO-08: evidence read-through from the EXISTING eligible
+      // AHSP/preference service. Not a new matcher or an automatic binding.
+      // A candidate from a truncated or ambiguous universe is never
+      // presented as the one recommended AHSP.
+      candidatePreview:
+        !catalog.hasNext && recommendedCount === 1 && recommended[0].ahsp
+          ? {
+              ahspVersionId: recommended[0].id,
+              code: recommended[0].ahsp.code,
+              workType: recommended[0].ahsp.workType,
+              methodName: recommended[0].ahsp.methodName,
+              outputUnit: recommended[0].outputUnit,
+              bindingAuthorized: false as const,
+            }
+          : null,
       requiredBeforeAutomaticBind: [
         'CANONICAL_AHSP_BOQ_ASSOCIATION_PROOF',
         'AUTHORIZED_PRICE_REGION',
@@ -196,6 +212,14 @@ export class RabAutoReadinessService {
       boqItemId: string;
       kind: string;
       mutationPerformed: false;
+      candidatePreview?: {
+        ahspVersionId: string;
+        code: string | null;
+        workType: string;
+        methodName: string;
+        outputUnit: string | null;
+        bindingAuthorized: false;
+      } | null;
     }> = [];
     // Limit parallel project/resource reads; no speculative transactions.
     for (let start = 0; start < items.length; start += 3) {
@@ -207,6 +231,9 @@ export class RabAutoReadinessService {
               boqItemId: row.id,
               kind: verdict.kind,
               mutationPerformed: false as const,
+              ...('candidatePreview' in verdict
+                ? { candidatePreview: verdict.candidatePreview }
+                : {}),
             };
           } catch {
             return {

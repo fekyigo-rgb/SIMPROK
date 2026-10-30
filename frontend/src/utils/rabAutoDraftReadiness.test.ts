@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { parseRabAutoDraftPage, summarizeRabAutoDraft } from './rabAutoDraftReadiness.ts';
+import { describeRabAutoItemReadiness, parseRabAutoDraftPage, summarizeRabAutoDraft } from './rabAutoDraftReadiness.ts';
 
 const projectId = 'project-1';
 const line = (boqItemId: string, kind: string) => ({
@@ -62,4 +62,50 @@ test('does not equate candidate recommendations with linked or priced BOQ', () =
   });
   assert.match(result.label, /tautan kerja AHSP aktif/);
   assert.match(result.label, /Harga tidak ditentukan dari rekomendasi/);
+});
+
+test('RAB-AUTO-08: accepts ONLY an explicit nonbinding unique preview from existing readiness', () => {
+  const preview = {
+    ahspVersionId: 'version-B25',
+    code: 'B.25',
+    workType: 'B.25',
+    methodName: 'Gorong-gorong Pipa Baja Bergelombang',
+    outputUnit: 'm',
+    bindingAuthorized: false,
+  };
+  const valid = page({
+    results: [{
+      boqItemId: 'boq-B25', kind: 'CANDIDATE_REQUIRES_IDENTITY_PROOF',
+      mutationPerformed: false, candidatePreview: preview,
+    }],
+  });
+  const parsed = parseRabAutoDraftPage(valid, projectId, 1);
+  assert.deepEqual(parsed?.results[0]?.candidatePreview, preview);
+  assert.match(describeRabAutoItemReadiness(parsed?.results[0]) ?? '', /Tinjau kode, uraian, satuan/);
+  for (const candidate of [
+    { ...preview, bindingAuthorized: true },
+    { ...preview, ahspVersionId: '' },
+    { ...preview, code: 13 },
+    { ...preview, outputUnit: 4 },
+  ]) {
+    assert.equal(parseRabAutoDraftPage(page({
+      results: [{
+        boqItemId: 'boq-B25', kind: 'CANDIDATE_REQUIRES_IDENTITY_PROOF',
+        mutationPerformed: false, candidatePreview: candidate,
+      }],
+    }), projectId, 1), null);
+  }
+  assert.equal(parseRabAutoDraftPage(page({
+    results: [{
+      boqItemId: 'boq-B25', kind: 'MULTIPLE_RECOMMENDATIONS',
+      mutationPerformed: false, candidatePreview: preview,
+    }],
+  }), projectId, 1), null);
+});
+
+test('RAB-AUTO-08: communicates no eligible AHSP, ambiguity, and frozen state distinctly', () => {
+  assert.match(describeRabAutoItemReadiness(line('a', 'NO_ELIGIBLE_AHSP')) ?? '', /Belum ada AHSP/);
+  assert.match(describeRabAutoItemReadiness(line('b', 'MULTIPLE_RECOMMENDATIONS')) ?? '', /lebih dari satu/);
+  assert.match(describeRabAutoItemReadiness(line('c', 'PERSISTED_CALCULATION_REPROOF_REQUIRED')) ?? '', /jangan mengikat ulang/);
+  assert.equal(describeRabAutoItemReadiness(null), null);
 });
