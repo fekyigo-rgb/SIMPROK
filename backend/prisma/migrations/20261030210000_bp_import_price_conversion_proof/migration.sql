@@ -23,8 +23,10 @@ ALTER TABLE "basic_price_import_row_resource_mappings"
     (
       "conversionSourcePriceValue" IS NOT NULL AND
       "conversionAdaptedPriceValue" IS NOT NULL AND
+      "conversionQuantityFactor" IS NOT NULL AND
       "conversionQuantityFactor" > 0 AND
       "conversionRuleId" IS NOT NULL AND
+      "conversionRuleVersion" IS NOT NULL AND
       "conversionRuleVersion" > 0 AND
       "conversionPolicyVersion" IS NOT NULL AND
       length(btrim("conversionPolicyVersion")) > 0 AND

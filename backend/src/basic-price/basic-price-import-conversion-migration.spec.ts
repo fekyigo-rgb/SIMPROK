@@ -20,6 +20,10 @@ describe('SCOPE-03B1 additive immutable price-evidence SQL contract', () => {
     expect(SQL).toContain('bp_mapping_conversion_atomic_evidence_check');
     expect(SQL).toContain('"conversionSourcePriceValue" IS NULL');
     expect(SQL).toContain('"conversionSourcePriceValue" IS NOT NULL');
+    // PostgreSQL CHECK considers UNKNOWN (NULL) a pass unless each field is
+    // explicitly non-null. A partial fixture once slipped through this hole.
+    expect(SQL).toContain('"conversionQuantityFactor" IS NOT NULL');
+    expect(SQL).toContain('"conversionRuleVersion" IS NOT NULL');
     expect(SQL).toContain('"conversionQuantityFactor" > 0');
     expect(SQL).toContain('"conversionRuleVersion" > 0');
     expect(SQL).toContain('FOREIGN KEY ("conversionRuleId") REFERENCES "unit_conversion_rules"("id")');
