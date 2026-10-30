@@ -21,6 +21,9 @@ import {
 } from './rab-kernel-persistence.contracts';
 import { calculateCostKernel, sumResolvedResourceCosts } from './cost-kernel.kernel';
 import { frozenKernelAdaptedPrice } from './cost-kernel-resolution-price';
+import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import { trustedUnitContext } from '../unit-kernel/unit-kernel.contracts';
+import { adaptPriceWithProvenUnitVerdict } from '../ahsp/price-resolution/proven-unit-price-adaptation';
 import { selectAuxiliaryEstimatePolicy } from '../project-ahsp/auxiliary-equipment-estimate.policy';
 import {
   COST_CALCULATION_REASON,
@@ -318,6 +321,8 @@ export class RabKernelPersistenceService {
             // from this column too.
             promotedFromBasicPriceId: true,
             resourceId: true,
+            // The price basis is the live catalog unit, not the source label.
+            resource: { select: { baseUnit: true, type: true } },
             workspaceId: true,
             organizationId: true,
             regionId: true,
@@ -363,6 +368,66 @@ export class RabKernelPersistenceService {
         }
 
         await this.assertTraceableProvenance(tx, basicPrice, params.workspaceId);
+
+        // SCOPE-02: the selected source amount has been re-read above. For a
+        // directional-price occurrence, ALSO re-prove the frozen adapted
+        // amount through the EXISTING Unit Kernel in this same transaction.
+        // This is a writer integrity gate, not a second unit/money engine.
+        // Historical exact-unit occurrences are deliberately unchanged.
+        if (resolution.policyVersion === 'E1A_PRICE_DIRECTIONAL_V1') {
+          const INVALID =
+            RAB_KERNEL_PERSISTENCE_REASON.BASIC_PRICE_CONVERSION_PROVENANCE_INVALID;
+          if (
+            resolution.priceMode !== 'BASIC_PRICE' ||
+            !resolution.sourceUnit ||
+            !resolution.ahspUnit ||
+            !resolution.canonicalUnit ||
+            !resolution.unitConversionRuleId ||
+            !resolution.unitConversionRuleVersion ||
+            !resolution.sourceUnitDefinitionId ||
+            !resolution.targetUnitDefinitionId ||
+            resolution.quantityFactor === null ||
+            basicPrice.resource.baseUnit !== resolution.sourceUnit ||
+            resolution.originalResource.baseUnit !== resolution.ahspUnit ||
+            basicPrice.resource.type !== resolution.originalResource.resourceType ||
+            !trustedUnitContext(basicPrice.resource.type)
+          ) {
+            throw new ConflictException(INVALID);
+          }
+          const proof = await new UnitKernelService(
+            tx as unknown as PrismaService,
+          ).resolve(
+            resolution.sourceUnit,
+            resolution.ahspUnit,
+            resolution.resourceCatalogId,
+            trustedUnitContext(basicPrice.resource.type),
+          );
+          if (
+            proof.status !== 'RESOLVED' ||
+            proof.priceOperation !== 'DIVIDE_SOURCE_UNIT_PRICE_BY_QUANTITY_FACTOR' ||
+            proof.conversionRuleId !== resolution.unitConversionRuleId ||
+            proof.conversionRuleVersion !== resolution.unitConversionRuleVersion ||
+            proof.sourceUnitDefinition?.id !== resolution.sourceUnitDefinitionId ||
+            proof.targetUnitDefinition?.id !== resolution.targetUnitDefinitionId ||
+            proof.targetUnitDefinition?.code !== resolution.canonicalUnit ||
+            proof.quantityFactor === null ||
+            !new Prisma.Decimal(proof.quantityFactor).equals(resolution.quantityFactor)
+          ) {
+            throw new ConflictException(INVALID);
+          }
+          const checked = adaptPriceWithProvenUnitVerdict(
+            basicPrice.value.toString(),
+            resolution.sourceUnit,
+            resolution.ahspUnit,
+            proof,
+          );
+          if (
+            checked.status !== 'RESOLVED' ||
+            !new Prisma.Decimal(checked.adaptedPrice).equals(resolution.adaptedPriceValue)
+          ) {
+            throw new ConflictException(INVALID);
+          }
+        }
 
         resources.push({
           ahspResourceId: resolution.ahspResourceId,

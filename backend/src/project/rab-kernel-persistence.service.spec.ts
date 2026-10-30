@@ -873,4 +873,92 @@ describe('RabKernelPersistenceService', () => {
       expect(priv).not.toHaveProperty('OR');
     });
   });
+  describe('SCOPE-02 — reproof of a frozen directional Unit Kernel price before RAB write', () => {
+    const unitZak = { id: 'unit-zak', code: 'PACKAGE_ZAK', dimension: 'PACKAGE' };
+    const unitKg = { id: 'unit-kg', code: 'MASS_KG', dimension: 'MASS' };
+    function directionalHarness(adapted: string, factor = '40') {
+      const occurrence = buildOccurrence([buildResolution({
+        sourcePriceValue: new Prisma.Decimal('80000.00'),
+        adaptedPriceValue: new Prisma.Decimal(adapted),
+        sourceUnit: 'zak',
+        ahspUnit: 'kg',
+        canonicalUnit: unitKg.code,
+        priceMode: 'BASIC_PRICE',
+        originalResource: { ahspVersionId: AHSP_VERSION_ID, baseUnit: 'kg', resourceType: 'MATERIAL' },
+        policyVersion: 'E1A_PRICE_DIRECTIONAL_V1',
+        sourceUnitDefinitionId: unitZak.id,
+        targetUnitDefinitionId: unitKg.id,
+        unitConversionRuleId: 'rule-40kg',
+        unitConversionRuleVersion: 1,
+        quantityFactor: new Prisma.Decimal('40'),
+      })]);
+      const h = createHarness(withNoOtherItems({
+        occurrence,
+        basicPrice: buildBasicPrice({ value: new Prisma.Decimal('80000.00'), resource: { baseUnit: 'zak', type: 'MATERIAL' } }),
+      }));
+      (h.tx as any).unitAlias = {
+        findMany: jest.fn(async ({ where }: any) =>
+          where.normalizedAlias === 'zak'
+            ? [{ id: 'alias-zak', context: null, unitDefinition: unitZak }]
+            : where.normalizedAlias === 'kg'
+              ? [{ id: 'alias-kg', context: null, unitDefinition: unitKg }] : [],
+        ),
+      };
+      (h.tx as any).unitConversionRule = {
+        findMany: jest.fn(async () => [{
+          id: 'rule-40kg', sourceUnitId: unitZak.id, targetUnitId: unitKg.id,
+          version: 1, quantityFactor: factor, conversionType: 'PACKAGE_CONTENT',
+          evidenceReference: 'source-stated-net-mass', evidenceHash: null,
+          evidencePayload: null,
+        }]),
+      };
+      return h;
+    }
+
+    it('uses the existing Cost Kernel to write cent-exact converted AHSP money', async () => {
+      const { service, boqItemUpdate } = directionalHarness('2000.00');
+      const result = await call(service);
+      expect(result.unitPrice).toBe('4000.00');
+      expect(result.lineTotal).toBe('20000.00');
+      expect(boqItemUpdate).toHaveBeenCalledTimes(1);
+    });
+
+    it('refuses a tampered adapted price even when original Basic Price is unchanged', async () => {
+      const { service, boqItemUpdate } = directionalHarness('3000.00');
+      await expect(call(service)).rejects.toMatchObject({
+        message: 'BASIC_PRICE_CONVERSION_PROVENANCE_INVALID',
+      });
+      expect(boqItemUpdate).not.toHaveBeenCalled();
+    });
+
+    it('refuses a rule whose now-proven factor differs from frozen occurrence', async () => {
+      const { service, boqItemUpdate } = directionalHarness('2000.00', '50');
+      await expect(call(service)).rejects.toMatchObject({
+        message: 'BASIC_PRICE_CONVERSION_PROVENANCE_INVALID',
+      });
+      expect(boqItemUpdate).not.toHaveBeenCalled();
+    });
+
+    it('refuses a missing active rule instead of borrowing an opposite direction', async () => {
+      const { service, tx, boqItemUpdate } = directionalHarness('2000.00');
+      (tx as any).unitConversionRule.findMany.mockResolvedValue([]);
+      await expect(call(service)).rejects.toMatchObject({
+        message: 'BASIC_PRICE_CONVERSION_PROVENANCE_INVALID',
+      });
+      expect(boqItemUpdate).not.toHaveBeenCalled();
+    });
+
+    it('refuses an unproved package content rule even if the factor looks correct', async () => {
+      const { service, tx, boqItemUpdate } = directionalHarness('2000.00');
+      (tx as any).unitConversionRule.findMany.mockResolvedValue([{
+        id: 'rule-40kg', version: 1, quantityFactor: '40',
+        conversionType: 'PACKAGE_CONTENT',
+        evidenceReference: null, evidenceHash: null, evidencePayload: null,
+      }]);
+      await expect(call(service)).rejects.toMatchObject({
+        message: 'BASIC_PRICE_CONVERSION_PROVENANCE_INVALID',
+      });
+      expect(boqItemUpdate).not.toHaveBeenCalled();
+    });
+  });
 });

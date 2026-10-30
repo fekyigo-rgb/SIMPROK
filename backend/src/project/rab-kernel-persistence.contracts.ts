@@ -20,6 +20,8 @@ export const RAB_KERNEL_PERSISTENCE_REASON = {
   BASIC_PRICE_NOT_YET_EFFECTIVE: 'BASIC_PRICE_NOT_YET_EFFECTIVE',
   BASIC_PRICE_EXPIRED: 'BASIC_PRICE_EXPIRED',
   BASIC_PRICE_VALUE_DRIFTED: 'BASIC_PRICE_VALUE_DRIFTED',
+  /** A newly certified price conversion cannot be re-proven before freezing RAB money. */
+  BASIC_PRICE_CONVERSION_PROVENANCE_INVALID: 'BASIC_PRICE_CONVERSION_PROVENANCE_INVALID',
   /**
    * §PR57 Gap A: the resolution's own resourceCatalogId is null, or the
    * freshly re-read BasicPrice's resourceId does not equal it. A RESOLVED
