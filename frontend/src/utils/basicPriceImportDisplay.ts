@@ -1532,8 +1532,39 @@ export const rowNonStaleConflictMessage = (sourceRowNumber: number, rawBody: str
   switch (namedCodeOf(rawBody)) {
     case 'UNIT_SELECTION_INCOMPATIBLE_WITH_SOURCE':
       return prefix + 'Satuan pilihan belum dapat dibuktikan dari satuan Excel. Penginput boleh mengoreksi satuan, tetapi satuan harga harus diverifikasi; data sumber tetap dicatat.';
-    case 'UNIT_SELECTION_REQUIRES_PRICE_CONVERSION':
-      return prefix + 'Perubahan satuan memerlukan konversi harga yang belum tersedia pada jalur ini. Jangan menggunakan nilai harga lama dengan satuan berbeda.';
+    case 'UNIT_SELECTION_REQUIRES_PRICE_CONVERSION': {
+      // The existing Unit Kernel may have proved the exact price already.
+      // Show its REAL read-only arithmetic, never imply the row was saved.
+      // An absent, ambiguous or non-cent-exact proof retains the old refusal.
+      try {
+        const body = JSON.parse(rawBody) as {
+          unitResolution?: {
+            priceAdaptation?: Record<string, unknown>;
+          };
+        };
+        const proof = body.unitResolution?.priceAdaptation;
+        const decimal = (v: unknown): v is string =>
+          typeof v === 'string' && /^(?:0|[1-9]\d*)(?:\.\d{1,2})?$/u.test(v);
+        const word = (v: unknown): v is string =>
+          typeof v === 'string' && v.length > 0 && v.length <= 64;
+        if (
+          proof?.status === 'CALCULATED_NOT_PERSISTED' &&
+          proof.persistable === false &&
+          decimal(proof.sourcePriceValue) &&
+          decimal(proof.adaptedPriceValue) &&
+          word(proof.sourceUnit) &&
+          word(proof.targetUnit) &&
+          typeof proof.quantityFactor === 'string' &&
+          /^(?:0|[1-9]\d*)(?:\.\d+)?$/u.test(proof.quantityFactor)
+        ) {
+          return prefix + `Unit Kernel membuktikan harga ${proof.sourcePriceValue} per ${proof.sourceUnit} → ${proof.adaptedPriceValue} per ${proof.targetUnit} (faktor ${proof.quantityFactor}). ` +
+            'Ini hasil pemeriksaan, BUKAN harga yang sudah tersimpan. SIMPROK tetap menahan penyimpanan sampai bukti konversi dapat dicatat bersama harga canonical.';
+        }
+      } catch {
+        // A malformed response must never invent a price or bypass the refusal.
+      }
+      return prefix + 'Perubahan satuan memerlukan konversi harga yang belum tersedia pada jalur penyimpanan ini. Jangan menggunakan nilai harga lama dengan satuan berbeda.';
+    }
     case 'UNIT_NOT_REPRESENTABLE_BY_UNIT_AUTHORITY':
       return prefix + 'Satuan pilihan belum dikenali oleh otoritas satuan SIMPROK.';
     case 'ROW_SOURCE_SECTION_UNRESOLVED':

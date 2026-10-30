@@ -377,6 +377,42 @@ test("CONFLICT-UX: business-rule 409 does not claim another editor changed the r
   assert.match(review, /rowNonStaleConflictMessage\(row\.sourceRowNumber, error\.detail\)/u);
 });
 
+test("SCOPE-03A: exact UnitKernel conversion is visible but clearly NOT saved", () => {
+  const body = JSON.stringify({
+    message: "UNIT_SELECTION_REQUIRES_PRICE_CONVERSION",
+    unitResolution: {
+      priceAdaptation: {
+        status: "CALCULATED_NOT_PERSISTED",
+        sourcePriceValue: "80000.00",
+        sourceUnit: "Zak",
+        targetUnit: "KG",
+        adaptedPriceValue: "2000.00",
+        quantityFactor: "40",
+        persistable: false,
+      },
+    },
+  });
+  const displayed = rowNonStaleConflictMessage(7, body);
+  assert.match(displayed, /^Baris 7 belum disimpan/u);
+  assert.match(displayed, /80000\.00 per Zak.*2000\.00 per KG/u);
+  assert.match(displayed, /BUKAN harga yang sudah tersimpan/u);
+  assert.match(displayed, /menahan penyimpanan/u);
+
+  const fake = JSON.parse(body) as {
+    unitResolution: { priceAdaptation: Record<string, unknown> };
+  };
+  fake.unitResolution.priceAdaptation.persistable = true;
+  assert.doesNotMatch(
+    rowNonStaleConflictMessage(7, JSON.stringify(fake)),
+    /Unit Kernel membuktikan harga/u,
+  );
+  const unproven = rowNonStaleConflictMessage(7, JSON.stringify({
+    message: "UNIT_SELECTION_REQUIRES_PRICE_CONVERSION",
+    unitResolution: { priceAdaptation: { status: "NOT_ADMITTED", reason: "FRACTIONAL_CENT_NOT_ADMITTED", persistable: false } },
+  }));
+  assert.match(unproven, /Jangan menggunakan nilai harga lama/u);
+});
+
 test("ADMISSION-RECOVERY: candidate refusal reloads evidence, clears stale refusals, keeps draft, never auto-writes", () => {
   assert.equal(isAdmissionCandidateRefreshRequired('{"message":"RESOURCE_ADMISSION_REVIEW_STALE"}'), true);
   assert.equal(isAdmissionCandidateRefreshRequired('{"message":"RESOURCE_ADMISSION_REFUSALS_INVALID"}'), true);
