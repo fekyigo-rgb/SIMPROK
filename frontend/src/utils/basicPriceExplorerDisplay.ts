@@ -200,12 +200,29 @@ export interface BasicPriceDomesticContent {
   kdnPercent: string | null;
 }
 
+export interface BasicPriceProvenHistoryEntry {
+  price: string;
+  /** Server-authored language; the Frontend must never classify events. */
+  changeLabel: 'Terkini' | 'Diperbarui' | 'Dikoreksi' | 'Harga Awal' | 'Belum terverifikasi';
+  actionLabel: 'Diperbarui' | 'Dikoreksi' | 'Harga Awal' | null;
+  recordedAt: string;
+  sourceName: string | null;
+  isCurrent: boolean;
+}
+
+export interface BasicPriceProvenHistory {
+  entries: BasicPriceProvenHistoryEntry[];
+  truncated: boolean;
+}
+
 export interface BasicPriceDetail {
   price: BasicPriceExplorerItem;
   /** Status from the existing workspace-scoped submission, never guessed. */
   proposalStatus?: string | null;
   evidence: BasicPriceEvidenceFacts;
   corrections: BasicPriceCorrectionHistory;
+  /** Additive canonical observation + correction readback. */
+  priceHistory: BasicPriceProvenHistory;
   domesticContent: BasicPriceDomesticContent;
 }
 

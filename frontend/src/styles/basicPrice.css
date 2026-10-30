@@ -720,6 +720,21 @@
   letter-spacing: 0.04em;
 }
 
+/* BP-HISTORY-ONE-TRUTH: additive Detail-only layout; retain the existing
+ * three-column history styles for already-PASS legacy consumers. */
+.bp-history__row.bp-history__row--events {
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 3px 8px;
+  padding: 10px 6px;
+  border-bottom: 1px solid var(--simprok-bright-sky-blue-100);
+}
+.bp-history__row--events .bp-history__price {
+  font-size: var(--text-sm);
+}
+.bp-history__row--events .bp-history__date {
+  grid-column: 1 / -1;
+}
+
 /* ── Detail panel ──────────────────────────────────────────────────────── */
 
 .bp-detail {

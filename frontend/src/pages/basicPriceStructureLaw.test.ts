@@ -175,45 +175,31 @@ test("E-c. linkage alone never produces a sentence about stored bytes", () => {
 
 /* ── GAP-A — the lineage is named for what it is ───────────────────────── */
 
-test("K. the Riwayat section names CORRECTIONS, never a complete price history", () => {
+test("K. Riwayat Detail now presents proven updates AND corrections from Backend", () => {
   const body = renderable(panel);
-  // The heading comes from the shared helper, which chooses between "Riwayat
-  // Koreksi" and "Riwayat Koreksi Terbaru" on the server's `truncated` fact —
-  // never a literal typed into the panel.
-  assert.match(body, /correctionHistoryLabel\(/u);
-  assert.match(body, /corrections\?\.truncated/u);
-  assert.doesNotMatch(body, /Riwayat harga/u);
-  assert.doesNotMatch(body, /riwayat harga/u);
+  // Owner 2026-10-30: the original correction-only helper is preserved for
+  // its existing consumer, while Detail reads a NEW additive backend projection.
+  assert.match(body, /Riwayat Harga/u);
+  assert.match(body, /priceHistory\.entries/u);
+  assert.match(body, /entry\.actionLabel/u);
+  assert.doesNotMatch(body, /supersedesBasicPriceId\s*===/u);
 });
 
-test("K-b. the empty state no longer claims that no earlier price exists", () => {
+test("K-b. the empty state never claims an absence it cannot prove", () => {
   const body = renderable(panel);
-  // The deleted sentence. A resource may have been priced a dozen times and
-  // corrected never; this declared those dozen observations non-existent.
   assert.doesNotMatch(body, /Tidak ada harga sebelumnya yang tercatat/u);
-  // What remains is the provable half, from the one shared constant.
-  assert.match(body, /NO_CORRECTION_RECORDED/u);
+  // Missing history is a server-readback gap, not absence of a prior price.
+  assert.match(body, /Riwayat harga lengkap belum tersedia dari Backend/u);
 });
 
-test("K-c. a truncated lineage says so on BOTH surfaces, from one constant", () => {
-  // The heading alone does not convey a limit. Each surface that renders the
-  // lineage also renders the note, and both read the same exported string.
-  for (const [name, source] of [
-    ["panel", panel],
-    ["chip", chip],
-  ] as const) {
-    const body = renderable(source);
-    assert.match(
-      body,
-      /corrections\?\.truncated/u,
-      `${name} must gate the note on the server's own fact`,
-    );
-    assert.match(
-      body,
-      /CORRECTION_HISTORY_PARTIAL_NOTE/u,
-      `${name} must state the limit, not only re-title the heading`,
-    );
-  }
+test("K-c. each history surface admits the scope of its OWN Backend projection", () => {
+  const panelBody = renderable(panel);
+  assert.match(panelBody, /priceHistory\.truncated/u);
+  assert.match(panelBody, /Sebagian riwayat belum dapat dibuktikan lengkap/u);
+  // The already-PASS correction-only chip retains its own narrower contract.
+  const chipBody = renderable(chip);
+  assert.match(chipBody, /corrections\?\.truncated/u);
+  assert.match(chipBody, /CORRECTION_HISTORY_PARTIAL_NOTE/u);
 });
 
 /* ── 01D §5.4 — ONE TEMPORAL LENS, THREADED, NEVER RE-RESOLVED ─────────── */
