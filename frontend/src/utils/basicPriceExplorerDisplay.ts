@@ -279,7 +279,7 @@ export interface ExplorerFilters {
   resourceType?: string;
   page?: number;
   limit?: number;
-  sortBy?: 'effectiveDate' | 'createdAt' | 'updatedAt';
+  sortBy?: 'effectiveDate' | 'createdAt' | 'updatedAt' | 'resourceName' | 'price';
   sortOrder?: 'asc' | 'desc';
 }
 

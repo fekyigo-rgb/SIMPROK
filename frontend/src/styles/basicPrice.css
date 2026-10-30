@@ -457,6 +457,35 @@
   color: var(--simprok-white);
 }
 
+/* BP-EXPLORER-SORT50: real, keyboard-accessible server sort indicators.
+   No arrows on provenance/derived columns we cannot sort truthfully. */
+.bp-table--explorer .bp-table__sortbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.bp-table--explorer .bp-table__sortbtn--price {
+  margin-left: 5px;
+}
+.bp-table--explorer .bp-table__sortbtn:hover {
+  text-decoration: underline;
+}
+.bp-table--explorer .bp-table__sortbtn:focus-visible {
+  outline: 2px solid var(--simprok-white);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
 .bp-table tbody td {
   padding: 8px var(--space-3);
   border-bottom: 1px solid var(--simprok-engineering-blue-100);

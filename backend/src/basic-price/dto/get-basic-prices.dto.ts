@@ -160,6 +160,6 @@ export class GetBasicPricesDto {
   sortOrder?: 'asc' | 'desc' = 'desc';
 
   @IsOptional()
-  @IsIn(['effectiveDate', 'createdAt', 'updatedAt'])
-  sortBy?: 'effectiveDate' | 'createdAt' | 'updatedAt' = 'effectiveDate';
+  @IsIn(['effectiveDate', 'createdAt', 'updatedAt', 'resourceName', 'price'])
+  sortBy?: 'effectiveDate' | 'createdAt' | 'updatedAt' | 'resourceName' | 'price' = 'effectiveDate';
 }
