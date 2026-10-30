@@ -1,5 +1,5 @@
 import { Transform } from 'class-transformer';
-import { ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
+import { ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsIn, IsOptional, IsString, IsUUID, Matches, MaxLength } from 'class-validator';
 
 const DECIMAL_18_2_NON_NEGATIVE = /^(?:0|[1-9]\d{0,15})(?:\.\d{1,2})?$/;
 
@@ -37,4 +37,15 @@ export class UpdateProjectIntakeContextDto {
   @MaxLength(5000)
   @IsOptional()
   mainMaterialSpec?: string | null;
+
+  // F03A: explicitly stated preference, NOT authority to choose a price yet.
+  // Null clears the preference; omitted leaves prior Project truth untouched.
+  @IsOptional()
+  @IsIn(['LOWEST', 'MIDDLE', 'HIGHEST'])
+  priceSelectionPreferenceMode?: 'LOWEST' | 'MIDDLE' | 'HIGHEST' | null;
+
+  // Required compare-and-swap for any preference write, including clearing.
+  @IsOptional()
+  @IsIn(['LOWEST', 'MIDDLE', 'HIGHEST'])
+  expectedPriceSelectionPreferenceMode?: 'LOWEST' | 'MIDDLE' | 'HIGHEST' | null;
 }

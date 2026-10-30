@@ -372,6 +372,10 @@ model Project {
   name             String
   description      String?       @db.Text
   mainMaterialSpec String?       @db.Text
+  /// F03A — project-owned price preference INTENT. Null never authorizes
+  /// picking a multiple-price winner. F03B owns the later selection gate.
+  priceSelectionPreferenceMode          String? @db.VarChar(24)
+  priceSelectionPreferencePolicyVersion String? @db.VarChar(64)
   location         String?
   clientName       String?
   type             ProjectType   @default(GENERAL)

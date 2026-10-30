@@ -949,6 +949,72 @@ export class ProjectService {
       );
     }
 
+    // F03A: store only a governed Project-owned PREFERENCE INTENT. This
+    // does not activate multiple-price selection. Compare-and-swap under
+    // the SAME Project row lock and draft lifecycle used by Preparation.
+    // Existing RAB-37 region edits remain an independent unchanged path.
+    const hasPriceIntent = Object.prototype.hasOwnProperty.call(
+      dto, 'priceSelectionPreferenceMode',
+    );
+    const hasExpectedPriceIntent = Object.prototype.hasOwnProperty.call(
+      dto, 'expectedPriceSelectionPreferenceMode',
+    );
+    if (hasExpectedPriceIntent && !hasPriceIntent) {
+      throw new BadRequestException('PROJECT_PRICE_PREFERENCE_CHANGE_REQUIRED');
+    }
+    if (hasPriceIntent) {
+      if (!hasExpectedPriceIntent ||
+          dto.expectedPriceSelectionPreferenceMode === undefined ||
+          dto.priceSelectionPreferenceMode === undefined) {
+        throw new BadRequestException('PROJECT_PRICE_PREFERENCE_EXPECTED_REQUIRED');
+      }
+      if (dto.locationRegionIds !== undefined ||
+          dto.expectedLocationRegionIds !== undefined) {
+        throw new BadRequestException('PROJECT_PRICE_PREFERENCE_CHANGE_SEPARATE_FROM_REGION');
+      }
+      return this.prisma.$transaction(async (tx) => {
+        const locked = await tx.$queryRaw<Array<{
+          id: string;
+          status: ProjectStatus;
+          priceSelectionPreferenceMode: string | null;
+        }>>`
+          SELECT "id", "status", "priceSelectionPreferenceMode"
+          FROM "projects" WHERE "id" = ${projectId}::uuid FOR UPDATE
+        `;
+        if (locked.length !== 1) throw new NotFoundException('Project not found');
+        const lifecycle = await this.rabLifecyclePolicy.evaluateInTransaction(
+          tx, projectId, locked[0].status,
+        );
+        if (!lifecycle.canEditDraft) {
+          throw new ConflictException(
+            'PROJECT_PRICE_PREFERENCE_LIFECYCLE_LOCKED: ' +
+            (lifecycle.reasonCode ?? 'UNKNOWN'),
+          );
+        }
+        const prior = locked[0].priceSelectionPreferenceMode;
+        if (prior !== dto.expectedPriceSelectionPreferenceMode) {
+          throw new ConflictException('PROJECT_PRICE_PREFERENCE_CHANGED_RELOAD');
+        }
+        const next = dto.priceSelectionPreferenceMode ?? null;
+        const data: Prisma.ProjectUpdateInput = {};
+        if (next !== prior) {
+          data.priceSelectionPreferenceMode = next;
+          data.priceSelectionPreferencePolicyVersion = next
+            ? 'F03A_PROJECT_PRICE_INTENT_V1' : null;
+        }
+        if (Object.prototype.hasOwnProperty.call(dto, 'budgetBaseline')) {
+          data.budgetBaseline = dto.budgetBaseline == null
+            ? null : new Prisma.Decimal(dto.budgetBaseline);
+        }
+        if (Object.prototype.hasOwnProperty.call(dto, 'mainMaterialSpec')) {
+          data.mainMaterialSpec = this.normalizeOptionalText(dto.mainMaterialSpec) ?? null;
+        }
+        return Object.keys(data).length > 0
+          ? tx.project.update({ where: { id: projectId }, data })
+          : tx.project.findUniqueOrThrow({ where: { id: projectId } });
+      });
+    }
+
     // RAB-37: extend the EXISTING intake-context PATCH for saved draft
     // geography, preserving the same canonical Region verifier used on create.
     // Every existing BOQ, frozen occurrence, and prior price remains untouched.
@@ -1038,6 +1104,8 @@ export class ProjectService {
       select: {
         budgetBaseline: true,
         mainMaterialSpec: true,
+        priceSelectionPreferenceMode: true,
+        priceSelectionPreferencePolicyVersion: true,
         classificationSelections: {
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
           select: {
@@ -1074,6 +1142,10 @@ export class ProjectService {
     return {
       budgetBaseline: project.budgetBaseline,
       mainMaterialSpec: project.mainMaterialSpec,
+      priceSelectionPreferenceMode: project.priceSelectionPreferenceMode,
+      priceSelectionPreferencePolicyVersion: project.priceSelectionPreferencePolicyVersion,
+      // F03A is only a saved intent. No competing price may be auto-selected.
+      priceSelectionAuthority: 'INTENT_ONLY_NOT_ACTIVE' as const,
       classificationSelections: project.classificationSelections.map(
         (selection) => selection.classificationNode,
       ),
