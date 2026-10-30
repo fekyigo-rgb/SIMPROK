@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { Download, FileInput, RefreshCw, Send, Trash2 } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Download, FileInput, RefreshCw, Send, Trash2 } from 'lucide-react';
 import { submitPrivateBasicPrice, reconcileImportedPrivateCorrection, ImportRequestError } from '../api/basicPriceImport';
 import {
   BasicPriceExplorerError,
@@ -185,7 +185,12 @@ export function BasicPriceExplorerPage() {
    * Sorting is NOT part of the filter draft, deliberately: it narrows nothing,
    * so it must not make "Hapus filter" appear or suggest the list is filtered.
    */
-  const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  // One sortable choice shared by dropdown, header arrows and fetch effect.
+  type SortKey = 'effectiveDate' | 'resourceName' | 'price';
+  type SortDirection = 'asc' | 'desc';
+  type SortChoice = `${SortKey}:${SortDirection}`;
+  const [sortOrder, setSortOrder] = useState<SortChoice>('effectiveDate:desc');
+  const [sortBy, sortDirection] = sortOrder.split(':') as [SortKey, SortDirection];
   // Collection is table-scoped, as is sorting. Empty = unchanged combined list.
   const [collection, setCollection] = useState<'' | 'WORKSPACE_PRIVATE' | 'SIMPROK_CATALOG'>('');
   const [page, setPage] = useState(1);
@@ -251,9 +256,9 @@ export function BasicPriceExplorerPage() {
         sourceName: draft.sourceName || undefined,
         collection: collection || undefined,
         page,
-        limit: 20,
-        sortBy: 'effectiveDate',
-        sortOrder,
+        limit: 50,
+        sortBy,
+        sortOrder: sortDirection,
       };
 
       /*
@@ -330,6 +335,20 @@ export function BasicPriceExplorerPage() {
   const reload = () => {
     replaceSelectedIds(new Set());
     setReloadNonce((n) => n + 1);
+  };
+
+  // One canonical server sort for BOTH the table arrows and Urutkan.
+  // A sort switch invalidates the old page's selection and open detail.
+  const chooseSort = (
+    nextBy: SortKey,
+    nextOrder: SortDirection,
+  ) => {
+    setSortOrder(`${nextBy}:${nextOrder}`);
+    replaceSelectedIds(new Set());
+    setSelectionNotice(null);
+    setPage(1);
+    setOpenDetailId(null);
+    setDetailNotice(null);
   };
 
   const openDetailItem =
@@ -750,10 +769,10 @@ export function BasicPriceExplorerPage() {
               : ''}
         </span>
         {/*
-          SORTING LIVES WITH THE TABLE (§5), and offers only what the API can
-          actually order by: `sortBy` is fixed to `effectiveDate` server-side,
-          and resource name and price are NOT sortable columns — so no header
-          here pretends to be clickable.
+          Sort is server-side before pagination. The existing date presets
+          remain; only price (numeric) and item name have verified sortable
+          canonical fields. Source/status/unit are derived and keep static
+          headers rather than advertise sorting that could mislead users.
         */}
         <div className="bp-tablebar__controls">
           <label className="bp-tablebar__sort">
@@ -777,21 +796,28 @@ export function BasicPriceExplorerPage() {
             </select>
           </label>
           <label className="bp-tablebar__sort">
-          Urutkan
-          <select
-            className="bp-select bp-select--inline"
-            value={sortOrder}
-            onChange={(event) => {
-               setSortOrder(event.target.value as 'asc' | 'desc');
-               replaceSelectedIds(new Set());
-               setSelectionNotice(null);
-               setPage(1);
-            }}
-            aria-label="Urutkan berdasarkan tanggal berlaku"
-          >
-            <option value="desc">Tanggal berlaku terbaru</option>
-            <option value="asc">Tanggal berlaku terlama</option>
-          </select>
+            Urutkan
+            <select
+              className="bp-select bp-select--inline"
+              value={sortOrder}
+              onChange={(event) => {
+                const [nextBy, nextOrder] = event.target.value.split(':');
+                if (
+                  (nextBy === 'effectiveDate' || nextBy === 'resourceName' || nextBy === 'price') &&
+                  (nextOrder === 'asc' || nextOrder === 'desc')
+                ) {
+                  chooseSort(nextBy, nextOrder);
+                }
+              }}
+              aria-label="Urutkan daftar harga"
+            >
+              <option value="effectiveDate:desc">Tanggal berlaku terbaru</option>
+              <option value="effectiveDate:asc">Tanggal berlaku terlama</option>
+              <option value="resourceName:asc">Item A–Z</option>
+              <option value="resourceName:desc">Item Z–A</option>
+              <option value="price:asc">Harga terendah</option>
+              <option value="price:desc">Harga tertinggi</option>
+            </select>
           </label>
         </div>
       </div>
@@ -944,9 +970,29 @@ onClick={() => { replaceSelectedIds(new Set()); setPage(1); }}
                       ref={(node) => { if (node) node.indeterminate = selectedRows.length > 0 && !allPageSelected; }}
                       onChange={togglePage} />
                   </th>
-                  <th scope="col" className="bp-col-item">Item</th>
-                  <th scope="col" className="bp-th-right bp-col-price">
+                  <th scope="col" className="bp-col-item" aria-sort={sortBy === 'resourceName' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}>
+                    Item
+                    <button
+                      type="button"
+                      className="bp-table__sortbtn"
+                      title="Urutkan item berdasarkan nama"
+                      aria-label="Urutkan item A sampai Z atau Z sampai A"
+                      onClick={() => chooseSort('resourceName', sortBy === 'resourceName' && sortDirection === 'asc' ? 'desc' : 'asc')}
+                    >
+                      {sortBy !== 'resourceName' ? <ArrowUpDown size={12} aria-hidden /> : sortDirection === 'asc' ? <ArrowUp size={12} aria-hidden /> : <ArrowDown size={12} aria-hidden />}
+                    </button>
+                  </th>
+                  <th scope="col" className="bp-th-right bp-col-price" aria-sort={sortBy === 'price' ? (sortDirection === 'asc' ? 'ascending' : 'descending') : 'none'}>
                     Harga
+                    <button
+                      type="button"
+                      className="bp-table__sortbtn bp-table__sortbtn--price"
+                      title="Urutkan harga terendah atau tertinggi"
+                      aria-label="Urutkan harga terendah atau tertinggi"
+                      onClick={() => chooseSort('price', sortBy === 'price' && sortDirection === 'desc' ? 'asc' : 'desc')}
+                    >
+                      {sortBy !== 'price' ? <ArrowUpDown size={12} aria-hidden /> : sortDirection === 'asc' ? <ArrowUp size={12} aria-hidden /> : <ArrowDown size={12} aria-hidden />}
+                    </button>
                   </th>
                   <th scope="col" className="bp-col-unit">Satuan</th>
                   <th scope="col" className="bp-col-region">Wilayah</th>

@@ -1241,6 +1241,14 @@ export class BasicPriceService {
       where.freshnessStatus = freshnessStatus;
     }
 
+    // BP-EXPLORER-SORT50: server orders the full eligible set BEFORE
+    // pagination. Keep original canonical value and resource identity.
+    const sortHead: Prisma.BasicPriceOrderByWithRelationInput =
+      sortBy === 'resourceName'
+        ? { resource: { name: sortOrder } }
+        : sortBy === 'price'
+          ? { value: sortOrder }
+          : { [sortBy]: sortOrder };
     const skip = (page - 1) * limit;
 
     const [total, rows] = await Promise.all([
@@ -1249,7 +1257,7 @@ export class BasicPriceService {
         where,
         select: EXPLORER_ROW_SELECT,
         orderBy: [
-          { [sortBy]: sortOrder },
+          sortHead,
           { id: 'asc' }, // deterministic sorting tie-breaker
         ],
         skip,
