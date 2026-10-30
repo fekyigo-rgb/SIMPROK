@@ -1,0 +1,37 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+import { readFileSync } from 'node:fs';
+
+const routes = readFileSync('src/App.tsx', 'utf8');
+const workspace = readFileSync('src/pages/RabWorkspacePage.tsx', 'utf8');
+const preparation = readFileSync('src/pages/ProjectSetupPage.tsx', 'utf8');
+
+test('saved RAB has one canonical Preparation route behind Project permissions', () => {
+  assert.match(routes, /project\/:projectId\/rab\/preparation/);
+  assert.match(routes, /permission="PROJECT_VIEW"><PermissionRoute permission="PROJECT_CREATE"><ProjectSetupPage/);
+  assert.match(routes, /project\/:projectId\/rab\/workspace/);
+});
+
+test('saved RAB navigation targets its own project and reuses unsaved blocker', () => {
+  assert.match(workspace, /navigate\(\x60\/project\/\$\{projectId\}\/rab\/preparation\x60\)/);
+  assert.match(workspace, /const blocker = useBlocker/);
+  assert.match(workspace, /draftDirty, saving: isSaving/);
+  assert.match(workspace, /isSaving \|\| isPersistBusy/);
+});
+
+test('Preparation uses the existing region picker and never creates another project', () => {
+  assert.match(preparation, /function SavedRabPreparation/);
+  assert.match(preparation, /<ProjectIntakeLocationFields/);
+  assert.match(preparation, /expectedLocationRegionIds = initialRegionIds/);
+  assert.match(preparation, /apiFetch\(\x60\/projects\/\$\{projectId\}\/intake-context\x60/);
+  assert.match(preparation, /method: 'PATCH'/);
+  assert.match(preparation, /const verified = await loadContext\(\)/);
+  assert.match(preparation, /returnPath = \x60\/project\/\$\{projectId\}\/rab\/workspace\x60/);
+  assert.match(preparation, /<LocalProjectSetupPage \/>/);
+});
+
+test('saving requires explicit confirmation and declines to reprice frozen occurrences', () => {
+  assert.match(preparation, /!changed \|\| !confirmationOpen/);
+  assert.match(preparation, /Keputusan occurrence, harga, dan BOQ yang sudah tersimpan tidak dihitung ulang otomatis/);
+  assert.match(preparation, /locationRegionIds = selectedLocationRegionIds/);
+});

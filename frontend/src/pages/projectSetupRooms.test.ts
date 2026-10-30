@@ -5,7 +5,7 @@ import test from 'node:test';
 const source = readFileSync(
   new URL('./ProjectSetupPage.tsx', import.meta.url),
   'utf8',
-);
+).split('/**\n * RAB-37: same canonical Preparation page')[0];
 
 test('Persiapan RAB keeps the five owner rooms in order', () => {
   const labels = [
