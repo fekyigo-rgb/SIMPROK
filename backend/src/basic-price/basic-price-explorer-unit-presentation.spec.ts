@@ -167,3 +167,129 @@ describe('BP-UNIT-DISPLAY - independent audit regressions', () => {
     });
   });
 });
+
+
+describe('BP-HISTORY-UX-02A: exact same-source price refresh keeps proven denominator', () => {
+  const examples = [
+    ['Beton fc 30 MPa', 'M3', 'm³'],
+    ['Cat dasar beton', 'LITER', 'liter'],
+    ['Pasir Halus', 'M3', 'm³'],
+  ] as const;
+  const parentId = '11111111-1111-4111-8111-111111111111';
+  const resource = {
+    id: 'resource-a', name: 'Material', code: null, type: 'MATERIAL', baseUnit: 'M3',
+  };
+  const context = {
+    workspaceId: 'workspace-one', assetScope: 'WORKSPACE_PRIVATE',
+    resourceId: 'resource-a', regionId: 'region-one', regionCoverageSetId: null,
+    sourceType: 'MARKET_SURVEY', sourceOrigin: 'FIELD_SURVEY',
+  };
+  const observation = (sameSourceIdentity: boolean) => ({
+    ...context, id: 'new-price', resource, recordsNewObservation: true,
+    supersedesBasicPriceId: null, sourceImportRow: null,
+    provenanceCorrections: [{
+      before: { semantic: 'NEW_OBSERVATION', observedAfterBasicPriceId: parentId },
+      after: { semantic: 'NEW_OBSERVATION', sameSourceIdentity },
+    }],
+  });
+  const predecessor = (unitId: string) => ({
+    ...context, id: parentId, recordsNewObservation: false,
+    supersedesBasicPriceId: null, sourceImportRow: { unitDefinitionId: unitId },
+    sourceSubmission: null, provenanceCorrections: [],
+  });
+  it.each(examples)('%s retains canonical %s as %s', async (_, code, expected) => {
+    const parent = predecessor(code);
+    const prisma = {
+      basicPrice: { findMany: jest.fn().mockResolvedValue([parent]) },
+      unitDefinition: { findMany: jest.fn().mockResolvedValue([
+        { id: code, code, symbol: code === 'M3' ? 'm3' : 'liter',
+          dimension: code === 'M3' ? 'VOLUME' : 'VOLUME' },
+      ]) },
+    };
+    const service = new BasicPriceService(prisma as never, {} as never);
+    const result = await (service as unknown as {
+      explorerVerifiedPriceUnitDisplays: (rows: unknown[]) => Promise<Map<string, string | null>>
+    }).explorerVerifiedPriceUnitDisplays([observation(true)]);
+    expect(result.get('new-price')).toBe(expected);
+    expect(prisma.basicPrice.findMany).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses to inherit another source or another resource', async () => {
+    const prisma = {
+      basicPrice: { findMany: jest.fn().mockResolvedValue([
+        { ...predecessor('M3'), resourceId: 'unrelated-resource' },
+      ]) },
+      unitDefinition: { findMany: jest.fn().mockResolvedValue([]) },
+    };
+    const service = new BasicPriceService(prisma as never, {} as never);
+    const fn = (service as unknown as {
+      explorerVerifiedPriceUnitDisplays: (rows: unknown[]) => Promise<Map<string, string | null>>
+    }).explorerVerifiedPriceUnitDisplays.bind(service);
+    expect((await fn([observation(false)])).get('new-price')).toBeNull();
+    expect(prisma.basicPrice.findMany).not.toHaveBeenCalled();
+    expect((await fn([observation(true)])).get('new-price')).toBeNull();
+  });
+
+  it('keeps a correction denominator only through a matching exact pointer', async () => {
+    const prisma = {
+      basicPrice: { findMany: jest.fn().mockResolvedValue([predecessor('M3')]) },
+      unitDefinition: { findMany: jest.fn().mockResolvedValue([
+        { id: 'M3', code: 'M3', symbol: 'm3', dimension: 'VOLUME' },
+      ]) },
+    };
+    const service = new BasicPriceService(prisma as never, {} as never);
+    const row = {
+      ...context, id: 'correction', resource, recordsNewObservation: false,
+      supersedesBasicPriceId: parentId, sourceImportRow: null, provenanceCorrections: [],
+    };
+    const result = await (service as unknown as {
+      explorerVerifiedPriceUnitDisplays: (rows: unknown[]) => Promise<Map<string, string | null>>
+    }).explorerVerifiedPriceUnitDisplays([row]);
+    expect(result.get('correction')).toBe('m³');
+  });
+});
+
+
+describe('BP-HISTORY-UX-02A: repeated price refresh follows only exact recorded lineage', () => {
+  it('preserves denominator through two successive SAME-SOURCE observations without rewriting prices', async () => {
+    const rootId = '22222222-2222-4222-8222-222222222222';
+    const middleId = '33333333-3333-4333-8333-333333333333';
+    const fields = {
+      workspaceId: 'w1', assetScope: 'WORKSPACE_PRIVATE', resourceId: 'r1',
+      regionId: null, regionCoverageSetId: null, sourceType: 'MARKET_SURVEY',
+      sourceOrigin: 'FIELD_SURVEY', recordsNewObservation: true,
+      supersedesBasicPriceId: null,
+    };
+    const audit = (id: string) => [{
+      before: { semantic: 'NEW_OBSERVATION', observedAfterBasicPriceId: id },
+      after: { semantic: 'NEW_OBSERVATION', sameSourceIdentity: true },
+    }];
+    const middle = {
+      ...fields, id: middleId, provenanceCorrections: audit(rootId),
+      sourceImportRow: null, sourceSubmission: null,
+    };
+    const oldest = {
+      ...fields, id: rootId, recordsNewObservation: false,
+      provenanceCorrections: [], sourceImportRow: { unitDefinitionId: 'M3' },
+      sourceSubmission: null,
+    };
+    const db = {
+      basicPrice: { findMany: jest.fn(async (args: { where: { id: { in: string[] } } }) =>
+        args.where.id.in.includes(middleId) ? [middle] : [oldest]) },
+      unitDefinition: { findMany: jest.fn().mockResolvedValue([
+        { id: 'M3', code: 'M3', symbol: 'm3', dimension: 'VOLUME' },
+      ]) },
+    };
+    const newest = {
+      ...fields, id: 'newest', provenanceCorrections: audit(middleId),
+      resource: { id: 'r1', name: 'Pasir Halus', code: null, type: 'MATERIAL', baseUnit: 'M3' },
+      sourceImportRow: null, sourceSubmission: null,
+    };
+    const service = new BasicPriceService(db as never, {} as never);
+    const labels = await (service as unknown as {
+      explorerVerifiedPriceUnitDisplays: (rows: unknown[]) => Promise<Map<string, string | null>>
+    }).explorerVerifiedPriceUnitDisplays([newest]);
+    expect(labels.get('newest')).toBe('m³');
+    expect(db.basicPrice.findMany).toHaveBeenCalledTimes(2);
+  });
+});

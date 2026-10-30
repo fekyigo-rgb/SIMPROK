@@ -2426,6 +2426,64 @@ describe('BasicPriceRowResolutionService', () => {
       nothingWasWritten();
     });
 
+    it('SCOPE-03A: shows the existing Unit Kernel exact price math, but saves nothing', async () => {
+      rowIs({ proposedCanonicalPrice: new Prisma.Decimal('80000.00') });
+      tx.unitDefinition.findFirst.mockResolvedValue({ id: 'unit-01', code: 'KG' });
+      kernelAnswers({
+        status: 'RESOLVED',
+        priceOperation: 'DIVIDE_SOURCE_UNIT_PRICE_BY_QUANTITY_FACTOR',
+        quantityFactor: '40',
+        conversionRuleId: 'proven-zak-40kg',
+        conversionRuleVersion: 2,
+        conversionType: 'PACKAGE_CONTENT',
+        reasonCodes: ['UNIQUE_EVIDENCE_BOUND_RULE'],
+      });
+
+      expect(await refusalOf()).toMatchObject({
+        message: 'UNIT_SELECTION_REQUIRES_PRICE_CONVERSION',
+        unitResolution: {
+          status: 'RESOLVED',
+          priceAdaptation: {
+            status: 'CALCULATED_NOT_PERSISTED',
+            sourcePriceValue: '80000',
+            sourceUnit: 'Zak',
+            targetUnit: 'KG',
+            adaptedPriceValue: '2000.00',
+            quantityFactor: '40',
+            conversionRuleId: 'proven-zak-40kg',
+            conversionRuleVersion: 2,
+            persistable: false,
+          },
+        },
+      });
+      nothingWasWritten();
+    });
+
+    it('SCOPE-03A: a fractional-cent quotient remains held, with no invented adapted price', async () => {
+      rowIs({ proposedCanonicalPrice: new Prisma.Decimal('100.00') });
+      tx.unitDefinition.findFirst.mockResolvedValue({ id: 'unit-01', code: 'KG' });
+      kernelAnswers({
+        status: 'RESOLVED',
+        priceOperation: 'DIVIDE_SOURCE_UNIT_PRICE_BY_QUANTITY_FACTOR',
+        quantityFactor: '3',
+        conversionRuleId: 'proven-package-three',
+        conversionRuleVersion: 1,
+        reasonCodes: ['UNIQUE_EVIDENCE_BOUND_RULE'],
+      });
+
+      expect(await refusalOf()).toMatchObject({
+        message: 'UNIT_SELECTION_REQUIRES_PRICE_CONVERSION',
+        unitResolution: {
+          priceAdaptation: {
+            status: 'NOT_ADMITTED',
+            reason: 'FRACTIONAL_CENT_NOT_ADMITTED',
+            persistable: false,
+          },
+        },
+      });
+      nothingWasWritten();
+    });
+
     it('T5 — the trusted context is the row’s own sourceSection, for a LABOR row', async () => {
       rowIs({ sourceSection: 'LABOR', rawUnitText: 'jam' });
       tx.resourceCatalog.findFirst.mockResolvedValue({

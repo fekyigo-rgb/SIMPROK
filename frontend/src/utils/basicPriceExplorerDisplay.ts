@@ -586,3 +586,16 @@ export const correctionConsentMatchesPair = (
     consentPairKey === currentPairKey &&
     currentBasicPriceIds.includes(winnerId);
 };
+
+
+/** Backend recordedAt is an instant, not a UTC-sliced business date. */
+export function formatPriceEventDate(iso: string | null): string {
+  if (!iso) return 'Tanggal tindakan belum tercatat';
+  const recordedAt = new Date(iso);
+  if (Number.isNaN(recordedAt.getTime())) return 'Tanggal belum tersedia';
+  return new Intl.DateTimeFormat('id-ID', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(recordedAt);
+}

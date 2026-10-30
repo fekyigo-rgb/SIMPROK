@@ -42,6 +42,7 @@ import {
   SOURCE_SPECIFICATION_UNVERIFIED,
 } from './basic-price-source-specification-gate';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import { adaptPriceWithProvenUnitVerdict } from '../ahsp/price-resolution/proven-unit-price-adaptation';
 import {
   UNIT_KERNEL_POLICY_VERSION,
   UNIT_PRICE_OPERATION,
@@ -747,7 +748,11 @@ export class BasicPriceRowResolutionService {
    * SIMPROK does not manufacture a fact it was never given.
    */
   private async assertSelectedUnitProvenBySourceUnit(
-    row: { rawUnitText: string | null; sourceSection: ResourceType },
+    row: {
+      rawUnitText: string | null;
+      sourceSection: ResourceType;
+      proposedCanonicalPrice?: Prisma.Decimal | null;
+    },
     unitDefinition: { id: string; code: string },
     resourceCatalogId?: string,
     humanDecisionReason?: string,
@@ -880,13 +885,48 @@ export class BasicPriceRowResolutionService {
     if (
       !humanInterpretedUnknownSource &&
       proof.priceOperation !== UNIT_PRICE_OPERATION.IDENTITY
-    )
+    ) {
+      // SCOPE-03A: EXPOSE the existing UnitKernel -> exact money adapter to
+      // the current review refusal. The source price is never modified and
+      // the canonical row remains blocked: no import/publish provenance has
+      // yet been built to store this converted price lawfully.
+      const preview =
+        row.proposedCanonicalPrice != null &&
+        proof.status === UNIT_RESOLUTION_STATUS.RESOLVED
+          ? adaptPriceWithProvenUnitVerdict(
+              row.proposedCanonicalPrice.toString(),
+              rawSourceUnit,
+              unitDefinition.code,
+              proof,
+            )
+          : null;
+      const priceAdaptation =
+        preview?.status === 'RESOLVED'
+          ? {
+              status: 'CALCULATED_NOT_PERSISTED' as const,
+              sourcePriceValue: preview.sourcePrice,
+              sourceUnit: rawSourceUnit,
+              targetUnit: unitDefinition.code,
+              adaptedPriceValue: preview.adaptedPrice,
+              quantityFactor: preview.factor,
+              conversionRuleId: preview.conversionRuleId,
+              conversionRuleVersion: preview.conversionRuleVersion,
+              persistable: false as const,
+            }
+          : {
+              status: 'NOT_ADMITTED' as const,
+              reason: preview?.status === 'NEEDS_REVIEW'
+                ? preview.reason
+                : 'SOURCE_PRICE_OR_PROOF_MISSING',
+              persistable: false as const,
+            };
       throw new ConflictException({
         statusCode: 409,
         error: 'Conflict',
         message: 'UNIT_SELECTION_REQUIRES_PRICE_CONVERSION',
-        unitResolution,
+        unitResolution: { ...unitResolution, priceAdaptation },
       });
+    }
   }
 
   /**
