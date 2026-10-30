@@ -456,7 +456,11 @@ test("AFF-D. the table row offers no AHSP write affordance at all", () => {
     "the table must not invite an AHSP change",
   );
   assert.match(workspace, /Pilih \/ Ganti AHSP/, "the drawer keeps the capability");
-  const drawerPick = openingTagAt(workspace, workspace.lastIndexOf("<button", workspace.indexOf("Pilih / Ganti AHSP")));
+  // A read-only candidate hint also mentions the picker by name. Locate
+  // the ACTION by its exact aria-label, not arbitrary descriptive prose.
+  const pickerAction = workspace.indexOf('aria-label="Pilih / Ganti AHSP"');
+  assert.ok(pickerAction >= 0, 'AHSP chooser action must remain available');
+  const drawerPick = openingTagAt(workspace, workspace.lastIndexOf("<button", pickerAction));
   // A provisional RAB cannot search project-bound AHSP until its first explicit save.
   assert.match(drawerPick, /disabled=\{!projectId \|\| !canEditDraft/);
 });
