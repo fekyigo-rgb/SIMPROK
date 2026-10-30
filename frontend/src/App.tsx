@@ -45,6 +45,8 @@ const router = createBrowserRouter(
               <Route index element={<RoleRoute allowedRoles={['DIRECTOR', 'FOREMAN', 'OWNER', 'MANDOR']}><ObservatoryPage /></RoleRoute>} />
               <Route path="proyek" element={<ProjectListPage />} />
               <Route path="project/new" element={<PermissionRoute permission="PROJECT_CREATE"><ProjectSetupPage /></PermissionRoute>} />
+              {/* RAB-37: the SAME Preparation page, now bound to an existing Project. */}
+              <Route path="project/:projectId/rab/preparation" element={<PermissionRoute permission="PROJECT_VIEW"><ProjectSetupPage /></PermissionRoute>} />
               <Route path="project/new/rab/workspace" element={<PermissionRoute permission="PROJECT_CREATE"><PermissionRoute permission="RAB_DRAFT_EDIT"><RabWorkspacePage /></PermissionRoute></PermissionRoute>} />
               <Route path="project/:projectId/rab" element={<PermissionRoute permission="RAB_VIEW"><ProjectRabDoorPage /></PermissionRoute>} />
               <Route path="project/:projectId/rab/workspace" element={<PermissionRoute permission="RAB_DRAFT_EDIT"><RabWorkspacePage /></PermissionRoute>} />

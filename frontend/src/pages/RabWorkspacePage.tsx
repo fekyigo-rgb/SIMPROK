@@ -1984,6 +1984,16 @@ export function RabWorkspacePage() {
   };
 
   const handleReturnToPreparation = () => {
+    // RAB-37: saved project backflow uses its own canonical Project ID and
+    // existing unsaved-draft blocker. Do NOT send saved BOQ to Project/new.
+    if (projectId) {
+      if (isSaving || isPersistBusy) {
+        setStatusMessage('Penyimpanan sedang berjalan. Selesaikan dahulu sebelum membuka Persiapan RAB.');
+        return;
+      }
+      navigate(`/project/${projectId}/rab/preparation`);
+      return;
+    }
     if (!isProvisional || !pendingProject || isSaving || firstSaveUncertainRef.current) {
       setShowBackflowWarning(true);
       setStatusMessage('Perubahan data persiapan hanya tersedia untuk RAB lokal yang aman; draft tersimpan menggunakan tata kelola proyek.');
@@ -2733,7 +2743,11 @@ export function RabWorkspacePage() {
       */}
       {focusMode ? null : (
         <div className="simprok-rab-focus-nav" aria-label="Navigasi Ruang Kerja RAB">
-          <button onClick={() => navigate('/')} title="Kembali ke Beranda" aria-label="Kembali ke Beranda" data-route="/">
+          <button
+            onClick={projectId || isProvisional ? handleReturnToPreparation : () => navigate('/')}
+            title={projectId || isProvisional ? 'Kembali ke Persiapan RAB' : 'Kembali ke Beranda'}
+            aria-label={projectId || isProvisional ? 'Kembali ke Persiapan RAB' : 'Kembali ke Beranda'}
+          >
             <ArrowLeft size={17} /> Kembali
           </button>
           <button onClick={handleReturnToPreparation} title="Kembali ke Persiapan RAB tanpa kehilangan pekerjaan lokal" aria-label="Ubah Data Pekerjaan" className="simprok-rab-nav-secondary">
