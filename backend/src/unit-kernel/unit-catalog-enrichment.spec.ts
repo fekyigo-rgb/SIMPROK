@@ -17,6 +17,7 @@ const FILES = [
   '20260813090000_equipment_hour_source_vocabulary/migration.sql',
   '20260908120000_person_hour_orang_jam_vocabulary/migration.sql',
   '20261002140000_unit_catalog_enrichment_01/migration.sql',
+  '20261030180000_bp_unit_display_alias_01/migration.sql',
 ];
 const ENRICHMENT = readFileSync(resolvePath(MIGRATIONS, FILES[4]), 'utf8');
 
@@ -220,6 +221,23 @@ describe('unit catalog enrichment — material one truth', () => {
   it('keeps bh/m on BH_PER_M', async () => {
     const result = await identity('bh/m');
     expect(result.sourceUnitDefinition?.code).toBe('BH_PER_M');
+  });
+
+  it.each([
+    ['Bh/m', 'BH_PER_M'],
+    ['BH/M', 'BH_PER_M'],
+    ['bH/M', 'BH_PER_M'],
+    ['Buah/Meter', 'BH_PER_M'],
+    ['Buah per Meter', 'BH_PER_M'],
+    ['M1', 'M1'],
+    ['M', 'M1'],
+    ['m1', 'M1'],
+    ["m'", 'M1'],
+    ['Meter', 'M1'],
+  ] as const)('BP-UNIT-DISPLAY-01: source %s resolves to existing %s', async (raw, code) => {
+    const result = await identity(raw);
+    expect(result.status).toBe(UNIT_RESOLUTION_STATUS.RESOLVED);
+    expect(result.sourceUnitDefinition?.code).toBe(code);
   });
 
   it.each([
