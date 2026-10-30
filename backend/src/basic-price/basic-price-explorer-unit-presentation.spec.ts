@@ -88,6 +88,39 @@ describe('BP-UNIT-DISPLAY - per-offer unit truth, not catalog-forced conversion'
   });
 });
 
+describe('BP-UNIT-DISPLAY-01 - uniform symbols without changing price truth', () => {
+  it('shows m, m², m³ and bh/m from source-proven canonical identities', async () => {
+    const definitions = new Map([
+      ['m1', { id: 'm1', code: 'M1', symbol: 'm1', dimension: 'LENGTH' }],
+      ['m2', { id: 'm2', code: 'M2', symbol: 'm2', dimension: 'AREA' }],
+      ['m3', { id: 'm3', code: 'M3', symbol: 'm3', dimension: 'VOLUME' }],
+      ['bhm', { id: 'bhm', code: 'BH_PER_M', symbol: 'bh/m', dimension: 'COUNT' }],
+    ]);
+    const prisma = {
+      unitDefinition: {
+        findMany: jest.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+          where.id.in.map(id => definitions.get(id)).filter(Boolean)),
+      },
+    };
+    const resource = { id: 'material', code: 'M.01', name: 'Material', type: 'MATERIAL', baseUnit: 'M1' };
+    const rows = [
+      { id: 'source-m1', resource, sourceImportRow: { unitDefinitionId: 'm1', rawUnitText: 'M1' } },
+      { id: 'source-meter', resource, sourceImportRow: { unitDefinitionId: 'm1', rawUnitText: 'Meter' } },
+      { id: 'source-m2', resource, sourceImportRow: { unitDefinitionId: 'm2', rawUnitText: 'm²' } },
+      { id: 'source-m3', resource, sourceImportRow: { unitDefinitionId: 'm3', rawUnitText: 'M3' } },
+      { id: 'source-bh-m', resource, sourceImportRow: { unitDefinitionId: 'bhm', rawUnitText: 'BH/M' } },
+      { id: 'source-buah-meter', resource, sourceImportRow: { unitDefinitionId: 'bhm', rawUnitText: 'Buah/Meter' } },
+      { id: 'unproven', resource, sourceImportRow: { unitDefinitionId: null } },
+    ];
+    const service = new BasicPriceService(prisma as never, {} as never);
+    const labels = await (service as unknown as {
+      explorerVerifiedPriceUnitDisplays: (r: unknown[]) => Promise<Map<string, string | null>>
+    }).explorerVerifiedPriceUnitDisplays(rows);
+    expect([...labels.values()]).toEqual(['m', 'm', 'm²', 'm³', 'bh/m', 'bh/m', null]);
+    expect(prisma.unitDefinition.findMany).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('BP-UNIT-DISPLAY - independent audit regressions', () => {
   it('keeps historical inactive source identity and refuses mismatched dimensions', async () => {
     const definitions = new Map([
