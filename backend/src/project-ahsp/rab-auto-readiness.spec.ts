@@ -29,6 +29,11 @@ describe('RAB-AUTO-02 canonical orchestration readiness — no new matcher or DB
   const candidate = (id: string, recommended = false) => ({
     id,
     outputUnit: 'm',
+    ahsp: {
+      code: 'B.64',
+      workType: 'Pekerjaan Drainase',
+      methodName: 'Saluran U Pracetak Tipe DS 10A (140 cm x 140 cm dengan tutup)',
+    },
     preference: { recommended },
   });
 
@@ -61,6 +66,14 @@ describe('RAB-AUTO-02 canonical orchestration readiness — no new matcher or DB
     expect(result.mutationPerformed).toBe(false);
     expect(result.priceStatus).toBe('UNPRICED');
     expect(result.recommendedCount).toBe(1);
+    expect(result.candidatePreview).toEqual({
+      ahspVersionId: 'B64-v1',
+      code: 'B.64',
+      workType: 'Pekerjaan Drainase',
+      methodName: 'Saluran U Pracetak Tipe DS 10A (140 cm x 140 cm dengan tutup)',
+      outputUnit: 'm',
+      bindingAuthorized: false,
+    });
     expect(result.requiredBeforeAutomaticBind).toContain(
       'AUTHORIZED_PRICE_REGION',
     );
@@ -178,7 +191,9 @@ describe('RAB-AUTO-02 canonical orchestration readiness — no new matcher or DB
       limit: 50,
       query: '',
     });
-    expect((await service.assess(input)).kind).toBe('NO_PROVEN_MATCH');
+    const unproven = await service.assess(input);
+    expect(unproven.kind).toBe('NO_PROVEN_MATCH');
+    expect(unproven.candidatePreview).toBeNull();
   });
 
   it('does not auto-approve ambiguous or paginated candidate sets', async () => {
@@ -197,9 +212,9 @@ describe('RAB-AUTO-02 canonical orchestration readiness — no new matcher or DB
       limit: 50,
       query: '',
     });
-    expect((await service.assess(input)).kind).toBe(
-      'CANDIDATE_UNIVERSE_INCOMPLETE',
-    );
+    const truncated = await service.assess(input);
+    expect(truncated.kind).toBe('CANDIDATE_UNIVERSE_INCOMPLETE');
+    expect(truncated.candidatePreview).toBeNull();
     expect(ahsp.selectForBoqItem).not.toHaveBeenCalled();
   });
 

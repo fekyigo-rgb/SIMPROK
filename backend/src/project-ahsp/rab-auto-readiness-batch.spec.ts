@@ -96,6 +96,38 @@ describe('RAB-AUTO-02 project-wide read-only readiness', () => {
     });
   });
 
+
+  it('RAB-AUTO-08 forwards a single nonbinding eligible candidate to the same read-only batch', async () => {
+    prisma.boqItem.findMany.mockResolvedValue([{ id: 'B25' }]);
+    ahsp.searchEligibleVersions.mockResolvedValue({
+      items: [{
+        id: 'version-B25',
+        outputUnit: 'm',
+        ahsp: { code: 'B.25', workType: 'B.25', methodName: 'Gorong-gorong Pipa Baja Bergelombang' },
+        preference: { recommended: true },
+      }],
+      hasNext: false,
+      page: 1,
+      limit: 50,
+      query: '',
+    });
+    const result = await service.assessDraft({ ...context });
+    expect(result).toMatchObject({
+      summary: { CANDIDATE_REQUIRES_IDENTITY_PROOF: 1 },
+      automaticBindingPerformed: false,
+      mutationPerformed: false,
+      results: [{
+        boqItemId: 'B25',
+        kind: 'CANDIDATE_REQUIRES_IDENTITY_PROOF',
+        candidatePreview: {
+          ahspVersionId: 'version-B25',
+          code: 'B.25',
+          bindingAuthorized: false,
+        },
+      }],
+    });
+  });
+
   it('isolates one failed line, does not discard two successful lines or invent zero', async () => {
     prisma.boqItem.findMany.mockResolvedValue([
       { id: 'A' },

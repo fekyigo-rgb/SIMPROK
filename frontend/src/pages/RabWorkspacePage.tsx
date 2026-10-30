@@ -40,6 +40,7 @@ import { apiFetch } from '../utils/apiClient';
 import {
   parseRabAutoDraftPage,
   summarizeRabAutoDraft,
+  describeRabAutoItemReadiness,
   type RabAutoDraftLine,
 } from '../utils/rabAutoDraftReadiness';
 import { appendBoqImportApprovalIdentity, dismissBoqImportPreview, requiresBoqImportConfirmation, type BoqImportDraftImpact } from '../utils/boqImportApproval';
@@ -1260,6 +1261,16 @@ export function RabWorkspacePage() {
    * reachability reads this one, because persisting stores a live result and
    * an already-persisted row has none to store.
    */
+  // RAB-AUTO-08: exact same item-level assessment already fetched for the
+  // Working Draft. No frontend AHSP matcher or speculative price search.
+  const selectedAutoLine = selectedItem && draftAssessmentKey &&
+    draftAssessment.key === draftAssessmentKey &&
+    (draftAssessment.state === 'ready' || draftAssessment.state === 'partial')
+      ? draftAssessment.lines.find((line) => line.boqItemId === selectedItem.id)
+      : null;
+  const selectedAutoCandidate =
+    selectedAutoLine?.kind === 'CANDIDATE_REQUIRES_IDENTITY_PROOF'
+      ? selectedAutoLine.candidatePreview : null;
   const selectedCostStatus = selectedItem ? costRowStatuses[selectedItem.id] : undefined;
   /**
    * RM-03D1 — what the drawer DESCRIBES. An already-persisted row is described
@@ -3923,6 +3934,19 @@ export function RabWorkspacePage() {
                 <span>Status AHSP</span>
                 <strong>{costEngineStatus.statusLabel}</strong>
               </div>
+              {selectedAutoLine ? (
+                <div aria-label="Bukti kesiapan RAB otomatis">
+                  <span>Kesiapan RAB Otomatis</span>
+                  <strong>{describeRabAutoItemReadiness(selectedAutoLine)}</strong>
+                  {selectedAutoCandidate ? (
+                    <p role="status">
+                      Kandidat AHSP: {selectedAutoCandidate.code ?? 'Tanpa kode'} —
+                      {' '}{selectedAutoCandidate.methodName} ({selectedAutoCandidate.outputUnit ?? 'satuan belum tercatat'}).
+                      {' '}Belum terhubung; tombol Pilih / Ganti AHSP akan membuka pencarian kandidat ini untuk ditinjau.
+                    </p>
+                  ) : null}
+                </div>
+              ) : null}
               <div>
                 <span>Mesin / cara harga dibentuk</span>
                 <strong>{costEngineStatus.sourceLabel}</strong>
@@ -4141,7 +4165,15 @@ export function RabWorkspacePage() {
                 <button
                   type="button"
                   className="simprok-ahsp-drawer__primary"
-                  onClick={() => { setShowAhspSelection(true); setAhspPage(1); setAhspQuery(''); setDebouncedAhspQuery(''); setAhspPickerOpen(false); setAhspActiveIndex(0); }}
+                  onClick={() => {
+                    const searchCode = selectedAutoCandidate?.code?.trim() ?? '';
+                    setShowAhspSelection(true);
+                    setAhspPage(1);
+                    setAhspQuery(searchCode);
+                    setDebouncedAhspQuery(searchCode);
+                    setAhspPickerOpen(false);
+                    setAhspActiveIndex(0);
+                  }}
                   disabled={!projectId || !canEditDraft || isSelectingAhsp}
                   title={!projectId && isProvisional ? 'Simpan Draft pertama untuk mengaktifkan pencarian AHSP berbasis proyek' : 'Pilih / Ganti AHSP'}
                   aria-label="Pilih / Ganti AHSP"
