@@ -11,6 +11,7 @@ import {
   explorerSourceNameLabel,
   explorerVerifiedUnitLabel,
   formatExplorerPrice,
+  formatPriceEventDate,
   kdnLabel,
   observationBasisLabel,
   basicPriceRegionLabel,
@@ -89,21 +90,6 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'SUMBER', label: 'Sumber & Bukti' },
   { key: 'RIWAYAT', label: 'Riwayat' },
 ];
-
-/** Display a server-recorded INSTANT in the reader's local calendar zone.
- * Unlike effectiveDate (a UTC-encoded business date), recordedAt represents
- * the moment the update/correction was saved and must not be UTC-sliced.
- */
-function formatPriceEventDate(iso: string | null): string {
-  if (!iso) return 'Tanggal tindakan belum tercatat';
-  const recordedAt = new Date(iso);
-  if (Number.isNaN(recordedAt.getTime())) return 'Tanggal belum tersedia';
-  return new Intl.DateTimeFormat('id-ID', {
-    day: 'numeric',
-    month: 'long',
-    year: 'numeric',
-  }).format(recordedAt);
-}
 
 /**
  * BP-UX-FINAL-01C §10/§12 — BASIC PRICE DETAIL, LAYERED AND HONEST.
@@ -716,19 +702,21 @@ export function BasicPriceDetailPanel({
                 {priceHistory.entries.slice(0, visibleHistoryCount).map((entry, index) => (
                   <div className="bp-history__row bp-history__row--events" key={`price-event-${index}`}>
                     <span className="bp-history__price">{formatExplorerPrice(entry.price)}</span>
+                    <span className="bp-history__meta">
+                      <span className="bp-history__date">
+                        {entry.actionLabel === 'Harga Awal'
+                          ? 'Harga Awal'
+                          : entry.actionLabel
+                            ? `${entry.actionLabel} · ${formatPriceEventDate(entry.recordedAt)}`
+                            : 'Riwayat belum lengkap'}
+                      </span>
+                      <span className="bp-history__date">
+                        Sumber: {entry.sourceName ?? 'Belum tercatat'}
+                      </span>
+                    </span>
                     {entry.isCurrent ? (
                       <span className="bp-history__tag">{entry.changeLabel}</span>
                     ) : null}
-                    <span className="bp-history__date">
-                      {entry.actionLabel === 'Harga Awal'
-                        ? 'Harga Awal'
-                        : entry.actionLabel
-                          ? `${entry.actionLabel} · ${formatPriceEventDate(entry.recordedAt)}`
-                          : 'Riwayat belum lengkap'}
-                    </span>
-                    <span className="bp-history__date">
-                      Sumber: {entry.sourceName ?? 'Belum tercatat'}
-                    </span>
                   </div>
                 ))}
               </div>

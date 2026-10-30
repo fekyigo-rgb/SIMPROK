@@ -437,6 +437,11 @@ interface ImportBatchSourceNames {
 export interface ExplorerRowSource {
   id: string;
   workspaceId: string | null;
+  /** Optional on legacy fixtures; selected in real Explorer/Detail reads. */
+  resourceId?: string;
+  regionId?: string | null;
+  regionCoverageSetId?: string | null;
+  recordsNewObservation?: boolean;
   /** Exact original price for a monetary correction; not evidence of a new quote. */
   supersedesBasicPriceId?: string | null;
   assetScope: string;
