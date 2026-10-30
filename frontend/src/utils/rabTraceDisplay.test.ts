@@ -42,6 +42,17 @@ test("O-1. CASE 2 — a kernel price from fully authoritative sources is Auto SI
   assert.equal(origin.label, "Auto SIMPROK");
 });
 
+test("ABLS-UI-01 — a governed auxiliary estimate is distinct from Auto SIMPROK catalog price", () => {
+  const origin = resolvePriceOrigin("SERVER_COST_KERNEL", {
+    isWorkItem: true,
+    authority: { ...AUTHORITATIVE, temporaryEstimateCount: 1 },
+  });
+  assert.equal(origin.kind, "TEMPORARY_ESTIMATE");
+  assert.equal(origin.label, "Estimasi sementara");
+  assert.notEqual(origin.label, "Auto SIMPROK");
+  assert.match(origin.explanation, /bukan Basic Price katalog SIMPROK/);
+});
+
 test("O-1b. CASE 3/4 — one private source anywhere makes the price Data Pengguna", () => {
   // A private Basic Price inside an otherwise authoritative chain.
   assert.equal(

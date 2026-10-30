@@ -74,6 +74,8 @@ export const PRELOCK_FINDING = {
   BASIC_PRICE_AMBIGUOUS: 'BASIC_PRICE_AMBIGUOUS',
   /** No eligible price remains for this resource at that date. */
   BASIC_PRICE_MISSING: 'BASIC_PRICE_MISSING',
+  AUXILIARY_ESTIMATE_UNAVAILABLE: 'AUXILIARY_ESTIMATE_UNAVAILABLE',
+  AUXILIARY_ESTIMATE_DRIFTED: 'AUXILIARY_ESTIMATE_DRIFTED',
   /**
    * The row's own calculation occurrence cannot be used as the basis for
    * revalidation: it is absent, belongs to another project or workspace, or

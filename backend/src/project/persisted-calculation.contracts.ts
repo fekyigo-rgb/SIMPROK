@@ -75,6 +75,7 @@ export interface PersistedCalculationResource {
   ahspUnit: string;
   /** The canonical Basic Price this resource was priced from. */
   selectedBasicPriceId: string | null;
+  priceMode: string | null;
   sourcePriceValue: string | null;
   sourceUnit: string | null;
   adaptedPriceValue: string | null;
@@ -88,6 +89,16 @@ export interface PersistedCalculationResource {
   reasonCodes: string[];
   explanation: string;
   policyVersion: string;
+  estimatePolicyId: string | null;
+  estimatePolicyVersion: number | null;
+  estimatePercent: string | null;
+  estimateBasisAmount: string | null;
+  estimateDerivedAmount: string | null;
+  estimateApprovalReference: string | null;
+  estimateApprovedByAccountId: string | null;
+  estimateApprovedByPositionId: string | null;
+  estimateAuthorityCode: string | null;
+  estimateApprovedAt: string | null;
   /** coefficient x adaptedPriceValue, exact decimal, recomputed on read. */
   resourceCost: string;
 }
@@ -114,6 +125,7 @@ export interface PersistedCalculationIntegrity {
   lineTotalMatches: boolean;
   /** True when every resource produced a finite recomputed cost. */
   allResourceCostsReproduced: boolean;
+  allEstimateProvenanceReproduced: boolean;
 }
 
 export interface PersistedCalculationSuccess {
@@ -140,6 +152,7 @@ export interface PersistedCalculationSuccess {
     ahspAuthoritative: boolean | null;
     privateBasicPriceCount: number;
     catalogBasicPriceCount: number;
+    temporaryEstimateCount: number;
   };
   /** What the database holds right now. */
   stored: {

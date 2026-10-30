@@ -9,6 +9,7 @@ import {
   CostKernelBatchResult,
 } from './cost-kernel.contracts';
 import { calculateCostKernel } from './cost-kernel.kernel';
+import { frozenKernelAdaptedPrice } from './cost-kernel-resolution-price';
 
 type BoqItemWithRelations = Prisma.BoqItemGetPayload<{
   include: { boqStructure: { include: { project: true } }; ahspVersion: true };
@@ -169,7 +170,7 @@ export class CostKernelService {
           status: resolution.status,
           ahspVersionId: resolution.originalResource.ahspVersionId,
           coefficient: resolution.ahspCoefficient.toString(),
-          adaptedPriceValue: resolution.adaptedPriceValue?.toString() ?? null,
+          adaptedPriceValue: frozenKernelAdaptedPrice(resolution),
         })) ?? [],
     });
   }

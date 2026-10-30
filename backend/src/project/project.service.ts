@@ -119,6 +119,7 @@ export interface PriceSourceAuthority {
   ahspAuthoritative: boolean | null;
   privateBasicPriceCount: number;
   catalogBasicPriceCount: number;
+  temporaryEstimateCount: number;
 }
 
 interface ProjectExecutionStartActor {
@@ -2191,7 +2192,10 @@ export class ProjectService {
         // RAB-TRUTH-01H — the frozen ownership, not the AHSP's ownership today.
         ahspOwnershipAtCalculation: true,
         resourceResolutions: {
-          select: { selectedBasicPrice: { select: { assetScope: true } } },
+          select: {
+            priceMode: true,
+            selectedBasicPrice: { select: { assetScope: true } },
+          },
         },
       },
     });
@@ -2217,6 +2221,9 @@ export class ProjectService {
             catalogBasicPriceCount: occurrence.resourceResolutions.filter(
               (resolution) =>
                 resolution.selectedBasicPrice?.assetScope === 'SIMPROK_CATALOG',
+            ).length,
+            temporaryEstimateCount: occurrence.resourceResolutions.filter(
+              (resolution) => resolution.priceMode === 'TEMPORARY_ESTIMATE',
             ).length,
           },
         ];

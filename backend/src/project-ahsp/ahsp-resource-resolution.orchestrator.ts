@@ -1,6 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import {
   Prisma,
+  ProjectAhspPriceMode,
   ProjectAhspResolutionMethod,
   ProjectAhspResolutionStatus,
   ProjectAhspSelectionMode,
@@ -18,6 +19,12 @@ import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import { isResourceCatalogIdShape } from '../resource-catalog/resource-identity-resolution.kernel';
 import { identicalQuestionKey } from '../resource-catalog/identical-question-key';
+import { sumResolvedResourceCosts } from '../project/cost-kernel.kernel';
+import {
+  approvedAuxiliaryPolicyIsGoverned,
+  auxiliaryPolicyGovernanceInclude,
+  normalizedAuxiliaryName,
+} from './auxiliary-equipment-estimate.policy';
 
 /**
  * RM-03D2 advanced this from V1.
@@ -31,7 +38,7 @@ import { identicalQuestionKey } from '../resource-catalog/identical-question-key
  *
  * No schema change: this is the same String column it has always been.
  */
-export const E1A_RESOLUTION_POLICY_VERSION = 'E1A_CONTEXTUAL_EXACT_REGION_V2';
+export const E1A_RESOLUTION_POLICY_VERSION = 'E1A_CONTEXTUAL_EXACT_REGION_V3_ABLS01';
 
 export type ResolutionCreate =
   Prisma.ProjectAhspResourceResolutionUncheckedCreateWithoutOccurrenceInput;
@@ -78,6 +85,15 @@ export class AhspResourceResolutionOrchestrator {
     private readonly units: UnitKernelService,
     private readonly identity: ResourceIdentityResolutionService,
   ) {}
+
+  private holdEstimate(resolution: ResolutionCreate, code: string, explanation: string): void {
+    resolution.status = ProjectAhspResolutionStatus.NEEDS_REVIEW;
+    resolution.reasonCodes = [
+      ...(Array.isArray(resolution.reasonCodes) ? resolution.reasonCodes : []),
+      code,
+    ];
+    resolution.explanation = `${resolution.explanation} ${explanation}`;
+  }
 
   /**
    * ACG-01 CLOSURE 1 — THE SOURCE FACTS THIS LINE CARRIES, DERIVED ONCE.
@@ -213,6 +229,11 @@ export class AhspResourceResolutionOrchestrator {
     });
 
 const resolutions: ResolutionCreate[] = [];
+const auxiliaryCandidates: Array<{
+  index: number;
+  resource: any;
+  catalog: any;
+}> = [];
 for (const resource of version.resources) {
   // RM-03D1: identity is decided FIRST, by its own authority, and the
   // raw AHSP reference is passed through untouched so the audit trail
@@ -481,12 +502,15 @@ for (const resource of version.resources) {
         ? ProjectAhspResolutionStatus.NEEDS_REVIEW
         : ProjectAhspResolutionStatus.UNRESOLVED,
     selectionMode: resolved ? ProjectAhspSelectionMode.AUTO_SELECTED : null,
-    resourceCatalogId: resolved ? result.resolvedResourceCatalogId : null,
+    resourceCatalogId: identifiedCatalog.id,
     selectedBasicPriceId: resolved ? result.selectedBasicPriceId : null,
-    canonicalUnit: resolved ? result.canonicalUnit : null,
+    canonicalUnit: unitResolution?.status === 'RESOLVED'
+      ? unitResolution.targetUnitDefinition?.code ?? null
+      : null,
     sourcePriceValue: resolved ? result.sourcePriceValue : null,
     sourceUnit: resolved ? selected.resource.baseUnit : null,
     adaptedPriceValue: resolved ? result.adaptedPriceValue : null,
+    priceMode: resolved ? ProjectAhspPriceMode.BASIC_PRICE : null,
     conversionFactor: null,
     sourceUnitDefinitionId:
       unitResolution?.sourceUnitDefinition?.id ?? null,
@@ -506,8 +530,106 @@ for (const resource of version.resources) {
     explanation,
     policyVersion: E1A_RESOLUTION_POLICY_VERSION,
   });
+  const sourceName = normalizedAuxiliaryName(facts.rawName);
+  const isVerifiedGenericAuxiliary =
+    normalizedAuxiliaryName(identifiedCatalog.name) === 'alat bantu' &&
+    identifiedCatalog.type === 'EQUIPMENT' &&
+    resource.resourceType === 'EQUIPMENT' &&
+    (sourceName === '' || sourceName === 'alat bantu') &&
+    unitResolution?.status === 'RESOLVED' &&
+    unitResolution.targetUnitDefinition?.code === 'LS' &&
+    new Prisma.Decimal(unitResolution.quantityFactor ?? 0).equals(1);
+  if (!resolved && result.reasonCodes.includes('NO_BASIC_PRICE_CANDIDATE') && isVerifiedGenericAuxiliary) {
+    auxiliaryCandidates.push({ index: resolutions.length - 1, resource, catalog: identifiedCatalog });
+    if (!new Prisma.Decimal(resource.coefficient).equals(1)) {
+      this.holdEstimate(resolutions[resolutions.length - 1],
+        'AUXILIARY_ESTIMATE_COEFFICIENT_NOT_ONE',
+        'Estimasi sementara ditahan karena koefisien Alat Bantu bukan satu.');
+    }
+  }
 }
 
+    if (auxiliaryCandidates.length > 1) {
+      for (const candidate of auxiliaryCandidates) {
+        this.holdEstimate(resolutions[candidate.index], 'AUXILIARY_ESTIMATE_MULTIPLE_ROWS',
+          'Estimasi sementara ditahan karena AHSP memiliki lebih dari satu baris Alat Bantu generik.');
+      }
+      return resolutions;
+    }
+    const auxiliary = auxiliaryCandidates[0];
+    if (!auxiliary) return resolutions;
+    const target = resolutions[auxiliary.index];
+    if (!new Prisma.Decimal(auxiliary.resource.coefficient).equals(1)) return resolutions;
+
+    const policy = await tx.auxiliaryEquipmentEstimatePolicy?.findFirst?.({
+      where: {
+        workspaceId: input.workspaceId,
+        ahspVersionId: version.id,
+        effectiveFrom: { lte: asOf },
+        OR: [{ effectiveUntil: null }, { effectiveUntil: { gte: asOf } }],
+      },
+      orderBy: { version: 'desc' },
+      include: auxiliaryPolicyGovernanceInclude,
+    });
+    if (!policy) {
+      this.holdEstimate(target, 'AUXILIARY_ESTIMATE_POLICY_MISSING',
+        'Estimasi sementara ditahan: kebijakan persentase untuk versi AHSP ini tidak tersedia.');
+      return resolutions;
+    }
+    if (!approvedAuxiliaryPolicyIsGoverned(policy, {
+      workspaceId: input.workspaceId,
+      ahspVersionId: version.id,
+      asOf,
+    })) {
+      this.holdEstimate(target, 'AUXILIARY_ESTIMATE_POLICY_UNAUTHORIZED',
+        'Estimasi sementara ditahan: kebijakan tidak memiliki bukti otoritas yang lengkap dan berlaku.');
+      return resolutions;
+    }
+
+    const basis = sumResolvedResourceCosts(version.id, resolutions
+      .map((resolution, index) => ({ resolution, index }))
+      .filter(({ index }) => index !== auxiliary.index)
+      .map(({ resolution }) => ({
+        ahspResourceId: String(resolution.ahspResourceId),
+        resolutionId: `prospective:${String(resolution.ahspResourceId)}`,
+        status: String(resolution.status),
+        ahspVersionId: version.id,
+        coefficient: new Prisma.Decimal(String(resolution.ahspCoefficient)).toString(),
+        adaptedPriceValue: resolution.adaptedPriceValue === null || resolution.adaptedPriceValue === undefined
+          ? null : new Prisma.Decimal(String(resolution.adaptedPriceValue)).toString(),
+      })));
+    if (!basis.ok || !basis.total.greaterThan(0)) {
+      this.holdEstimate(target, 'AUXILIARY_ESTIMATE_BASIS_UNRESOLVED',
+        'Estimasi sementara ditahan: seluruh sumber daya lain harus RESOLVED dan basis harus lebih besar dari nol.');
+      return resolutions;
+    }
+
+    const percent = new Prisma.Decimal(policy.percent);
+    const exactDerived = basis.total.mul(percent).div(100);
+    const adapted = exactDerived.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+    target.status = ProjectAhspResolutionStatus.RESOLVED;
+    target.selectionMode = ProjectAhspSelectionMode.AUTO_SELECTED;
+    target.priceMode = ProjectAhspPriceMode.TEMPORARY_ESTIMATE;
+    target.selectedBasicPriceId = null;
+    target.sourcePriceValue = null;
+    target.sourceUnit = null;
+    target.adaptedPriceValue = adapted;
+    target.estimatePolicyId = policy.id;
+    target.estimatePolicyVersion = policy.version;
+    target.estimatePercent = percent;
+    target.estimateBasisAmount = basis.total;
+    target.estimateDerivedAmount = exactDerived;
+    target.estimateApprovalReference = policy.approvalReference;
+    target.estimateApprovedByAccountId = policy.approvedByAccountId;
+    target.estimateApprovedByPositionId = policy.approvedByPositionId;
+    target.estimateAuthorityCode = policy.approvalAuthorityCode;
+    target.estimateApprovedAt = policy.approvedAt;
+    target.resolutionMethod = ProjectAhspResolutionMethod.EXACT_DETERMINISTIC;
+    target.reasonCodes = [
+      ...(Array.isArray(target.reasonCodes) ? target.reasonCodes : []),
+      'AUXILIARY_TEMPORARY_ESTIMATE_APPROVED',
+    ];
+    target.explanation = `${target.explanation} Estimasi sementara Alat Bantu memakai seluruh biaya non-auxiliary yang RESOLVED dan kebijakan ${policy.id} versi ${policy.version}; bukan harga katalog SIMPROK.`;
 
     return resolutions;
   }

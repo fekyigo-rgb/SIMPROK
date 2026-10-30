@@ -19,7 +19,12 @@ import {
   RAB_KERNEL_PERSISTENCE_POLICY,
   RAB_KERNEL_PERSISTENCE_REASON,
 } from './rab-kernel-persistence.contracts';
-import { calculateCostKernel } from './cost-kernel.kernel';
+import { calculateCostKernel, sumResolvedResourceCosts } from './cost-kernel.kernel';
+import { frozenKernelAdaptedPrice } from './cost-kernel-resolution-price';
+import {
+  approvedAuxiliaryPolicyIsGoverned,
+  auxiliaryPolicyGovernanceInclude,
+} from '../project-ahsp/auxiliary-equipment-estimate.policy';
 import {
   COST_CALCULATION_REASON,
   COST_CALCULATION_STATUS,
@@ -223,11 +228,64 @@ export class RabKernelPersistenceService {
       // must be traceable end-to-end through the real publication chain
       // (§3.3) — never inferred from status fields alone.
       const resources: CostKernelResourceInput[] = [];
+      let frozenEstimate: any | null = null;
       for (const resolution of occurrence.resourceResolutions) {
         if (resolution.status !== 'RESOLVED') {
           throw new ConflictException(
             RAB_KERNEL_PERSISTENCE_REASON.UNRESOLVED_RESOURCE,
           );
+        }
+        const isTemporaryEstimate = resolution.priceMode === 'TEMPORARY_ESTIMATE';
+        if (isTemporaryEstimate) {
+          if (
+            frozenEstimate || !resolution.resourceCatalogId ||
+            resolution.selectedBasicPriceId !== null || resolution.sourcePriceValue !== null ||
+            resolution.adaptedPriceValue === null || resolution.estimatePolicyId === null ||
+            resolution.estimatePolicyVersion === null || resolution.estimatePercent === null ||
+            resolution.estimateBasisAmount === null || resolution.estimateDerivedAmount === null ||
+            !resolution.estimateApprovalReference || !resolution.estimateApprovedByAccountId ||
+            !resolution.estimateApprovedByPositionId || !resolution.estimateAuthorityCode ||
+            !resolution.estimateApprovedAt || !resolution.ahspCoefficient.equals(1)
+          ) {
+            throw new ConflictException('AUXILIARY_ESTIMATE_FROZEN_PROVENANCE_INVALID');
+          }
+          const currentPolicy = await tx.auxiliaryEquipmentEstimatePolicy.findFirst({
+            where: {
+              workspaceId: params.workspaceId,
+              ahspVersionId: item.ahspVersionId,
+              effectiveFrom: { lte: calculationAsOfDate },
+              OR: [{ effectiveUntil: null }, { effectiveUntil: { gte: calculationAsOfDate } }],
+            },
+            orderBy: { version: 'desc' },
+            include: auxiliaryPolicyGovernanceInclude,
+          });
+          if (
+            !currentPolicy || currentPolicy.id !== resolution.estimatePolicyId ||
+            currentPolicy.version !== resolution.estimatePolicyVersion ||
+            !approvedAuxiliaryPolicyIsGoverned(currentPolicy, {
+              workspaceId: params.workspaceId,
+              ahspVersionId: item.ahspVersionId,
+              asOf: calculationAsOfDate,
+            }) ||
+            !new Prisma.Decimal(currentPolicy.percent!).equals(resolution.estimatePercent) ||
+            currentPolicy.approvalReference !== resolution.estimateApprovalReference ||
+            currentPolicy.approvedByAccountId !== resolution.estimateApprovedByAccountId ||
+            currentPolicy.approvedByPositionId !== resolution.estimateApprovedByPositionId ||
+            currentPolicy.approvalAuthorityCode !== resolution.estimateAuthorityCode ||
+            currentPolicy.approvedAt?.getTime() !== resolution.estimateApprovedAt.getTime()
+          ) {
+            throw new ConflictException('AUXILIARY_ESTIMATE_POLICY_DRIFTED');
+          }
+          frozenEstimate = resolution;
+          resources.push({
+            ahspResourceId: resolution.ahspResourceId,
+            resolutionId: resolution.id,
+            status: resolution.status,
+            ahspVersionId: resolution.originalResource.ahspVersionId,
+            coefficient: resolution.ahspCoefficient.toString(),
+            adaptedPriceValue: frozenKernelAdaptedPrice(resolution),
+          });
+          continue;
         }
         if (
           !resolution.selectedBasicPriceId ||
@@ -322,8 +380,27 @@ export class RabKernelPersistenceService {
           status: resolution.status,
           ahspVersionId: resolution.originalResource.ahspVersionId,
           coefficient: resolution.ahspCoefficient.toString(),
-          adaptedPriceValue: resolution.adaptedPriceValue.toString(),
+          adaptedPriceValue: frozenKernelAdaptedPrice(resolution),
         });
+      }
+
+      if (frozenEstimate) {
+        const basis = sumResolvedResourceCosts(
+          item.ahspVersionId,
+          resources.filter((resource) => resource.resolutionId !== frozenEstimate.id),
+        );
+        const exactDerived = basis.ok
+          ? basis.total.mul(frozenEstimate.estimatePercent).div(100)
+          : null;
+        if (
+          !basis.ok || !basis.total.greaterThan(0) ||
+          !basis.total.equals(frozenEstimate.estimateBasisAmount) ||
+          !exactDerived!.equals(frozenEstimate.estimateDerivedAmount) ||
+          !exactDerived!.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP)
+            .equals(frozenEstimate.adaptedPriceValue)
+        ) {
+          throw new ConflictException('AUXILIARY_ESTIMATE_BASIS_DRIFTED');
+        }
       }
 
       // 9. The existing Cost Kernel, unchanged — exact Decimal, no

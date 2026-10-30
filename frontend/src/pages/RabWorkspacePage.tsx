@@ -1423,7 +1423,9 @@ export function RabWorkspacePage() {
   const storedPriceContext = selectedItem?.priceOrigin === 'SERVER_COST_KERNEL' && persistedProofDisplay?.provenance
     ? {
         regionName: persistedProofDisplay.provenance.regionName,
-        sourceLabel: (persistedProofDisplay.sourceAuthority?.privateBasicPriceCount ?? 0) > 0
+        sourceLabel: (persistedProofDisplay.sourceAuthority?.temporaryEstimateCount ?? 0) > 0
+          ? 'Estimasi Sementara · Alat Bantu'
+          : (persistedProofDisplay.sourceAuthority?.privateBasicPriceCount ?? 0) > 0
           ? (persistedProofDisplay.sourceAuthority?.catalogBasicPriceCount ?? 0) > 0
             ? 'Basic Price privat dan katalog'
             : 'Basic Price privat ruang kerja'
