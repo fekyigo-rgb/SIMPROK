@@ -23,6 +23,7 @@ describe('Project intake context security (e2e)', () => {
 
   const emails = {
     activeCreator: 'p7c.active.creator@test.local',
+    priceManager: 'p7c.price.manager@test.local',
     viewOnly: 'p7c.view.only@test.local',
     noAssignment: 'p7c.no.assignment@test.local',
     inactive: 'p7c.inactive@test.local',
@@ -40,12 +41,15 @@ describe('Project intake context security (e2e)', () => {
     prisma = new PrismaClient();
     const passwordHash = await bcrypt.hash(PASSWORD, SALT_ROUNDS);
 
-    const [projectView, projectCreate] = await Promise.all([
+    const [projectView, projectCreate, settingsManage] = await Promise.all([
       prisma.permission.findUniqueOrThrow({
         where: { code: 'PROJECT_VIEW' },
       }),
       prisma.permission.findUniqueOrThrow({
         where: { code: 'PROJECT_CREATE' },
+      }),
+      prisma.permission.findUniqueOrThrow({
+        where: { code: 'PROJECT_SETTINGS_MANAGE' },
       }),
     ]);
 
@@ -62,6 +66,18 @@ describe('Project intake context security (e2e)', () => {
         code: 'P7C_INTAKE_CREATE_A',
         workspaceId: workspaceAId,
         rolePermissions: { create: [{ permissionId: projectView.id }, { permissionId: projectCreate.id }] },
+      },
+    });
+    const rolePriceManagerA = await prisma.role.create({
+      data: {
+        name: 'F03A Price Preference Manager',
+        code: 'P7C_PRICE_MANAGER_A',
+        workspaceId: workspaceAId,
+        rolePermissions: { create: [
+          { permissionId: projectView.id },
+          { permissionId: projectCreate.id },
+          { permissionId: settingsManage.id },
+        ] },
       },
     });
     const roleViewA = await prisma.role.create({
@@ -150,6 +166,18 @@ describe('Project intake context security (e2e)', () => {
         status: 'ASSIGNED',
       },
     });
+    const priceManagerMembershipId = await createAccount(
+      emails.priceManager, workspaceAId, rolePriceManagerA.id, 'ACTIVE', projectAId,
+    );
+    await prisma.projectAssignment.create({
+      data: {
+        workspaceMembershipId: priceManagerMembershipId,
+        projectId: lockedProjectId,
+        roleInProject: 'MEMBER',
+        isPrimaryAssignment: false,
+        status: 'ASSIGNED',
+      },
+    });
     await createAccount(emails.viewOnly, workspaceAId, roleViewA.id, 'ACTIVE', projectAId);
     await createAccount(emails.noAssignment, workspaceAId, roleCreateA.id, 'ACTIVE');
     await createAccount(emails.inactive, workspaceAId, roleCreateA.id, 'INACTIVE', projectAId);
@@ -195,7 +223,7 @@ describe('Project intake context security (e2e)', () => {
     await prisma.user.deleteMany({ where: { workspaceMembershipId: { in: membershipIds } } });
     await prisma.workspaceMembership.deleteMany({ where: { id: { in: membershipIds } } });
     await prisma.account.deleteMany({ where: { id: { in: accountIds } } });
-    await prisma.role.deleteMany({ where: { code: { in: ['P7C_INTAKE_CREATE_A', 'P7C_INTAKE_VIEW_A', 'P7C_INTAKE_CREATE_B'] } } });
+    await prisma.role.deleteMany({ where: { code: { in: ['P7C_INTAKE_CREATE_A', 'P7C_INTAKE_VIEW_A', 'P7C_INTAKE_CREATE_B', 'P7C_PRICE_MANAGER_A'] } } });
     await prisma.projectRegionSelection.deleteMany({ where: { projectId: { in: projectIds } } });
     await prisma.project.deleteMany({ where: { id: { in: projectIds } } });
     await prisma.region.deleteMany({ where: { id: regionNewId } });
@@ -216,7 +244,7 @@ describe('Project intake context security (e2e)', () => {
   };
 
   it('F03A: project-managed intent is permissioned, CAS-locked, stored and reversible without auto-price selection', async () => {
-    const token = await login(emails.activeCreator);
+    let token = await login(emails.activeCreator);
     const url = `/projects/${projectAId}/intake-context`;
     const req = (body: Record<string, unknown>) =>
       request(app.getHttpServer()).patch(url)
@@ -230,16 +258,10 @@ describe('Project intake context security (e2e)', () => {
     // PROJECT_CREATE alone cannot silently acquire the price-choice power.
     await req({ priceSelectionPreferenceMode: 'LOWEST', expectedPriceSelectionPreferenceMode: null })
       .expect(403);
-    const settings = await prisma.permission.findUniqueOrThrow({
-      where: { code: 'PROJECT_SETTINGS_MANAGE' },
-    });
-    const role = await prisma.role.findFirstOrThrow({
-      where: { code: 'P7C_INTAKE_CREATE_A', workspaceId: workspaceAId },
-    });
-    const grant = await prisma.rolePermission.create({
-      data: { roleId: role.id, permissionId: settings.id },
-    });
-    try {
+    // Never grant/revoke permissions on the RAB-37 creator fixture:
+    // an independently assigned Project manager is the authorized actor.
+    token = await login(emails.priceManager);
+    {
       await req({ priceSelectionPreferenceMode: 'LOWEST' }).expect(400);
       const updated = await req({
         priceSelectionPreferenceMode: 'LOWEST',
@@ -291,8 +313,6 @@ describe('Project intake context security (e2e)', () => {
       expect(final.organizationId).toBe(initial.organizationId);
       expect(final.mainMaterialSpec).toBe(initial.mainMaterialSpec);
       expect(final.budgetBaseline?.toString()).toBe(initial.budgetBaseline?.toString());
-    } finally {
-      await prisma.rolePermission.delete({ where: { id: grant.id } });
     }
   }, 60_000);
 

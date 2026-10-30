@@ -468,6 +468,8 @@ describe('RI-01B project canonical context', () => {
     prisma.project.findUnique.mockResolvedValue({
       budgetBaseline: new Prisma.Decimal('250000000.00'),
       mainMaterialSpec: 'Beton K-300',
+      priceSelectionPreferenceMode: null,
+      priceSelectionPreferencePolicyVersion: null,
       classificationSelections: [
         {
           classificationNode: {
@@ -495,6 +497,9 @@ describe('RI-01B project canonical context', () => {
     await expect(service.getIntakeContext('project-1')).resolves.toEqual({
       budgetBaseline: new Prisma.Decimal('250000000.00'),
       mainMaterialSpec: 'Beton K-300',
+      priceSelectionPreferenceMode: null,
+      priceSelectionPreferencePolicyVersion: null,
+      priceSelectionAuthority: 'INTENT_ONLY_NOT_ACTIVE',
       classificationSelections: [
         {
           id: KATEGORI_A,
