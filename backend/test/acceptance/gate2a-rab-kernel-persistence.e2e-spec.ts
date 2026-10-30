@@ -80,6 +80,13 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
   let mismatchResourceCatalogBId: string;
   let mismatchBasicPriceId: string;
 
+  // SCOPE-02 fixtures reuse the existing authenticated Gate-2A journey.
+  // The IDs are removed through the same afterAll cleanup (no second harness).
+  const directionalAhspIds: string[] = [];
+  const directionalUnitIds: string[] = [];
+  const directionalAliasIds: string[] = [];
+  const directionalRuleIds: string[] = [];
+
   const createdPermissionIds: string[] = [];
   const accountIds: string[] = [];
   const membershipIds: string[] = [];
@@ -432,7 +439,7 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
   afterAll(async () => {
     const allProjectIds = [projectId, negativeProjectId, mismatchProjectId];
     const allStructureIds = [boqStructureId, negativeBoqStructureId, mismatchBoqStructureId];
-    const allAhspIds = [ahspId, negativeAhspId, mismatchAhspId];
+    const allAhspIds = [ahspId, negativeAhspId, mismatchAhspId, ...directionalAhspIds];
     const allBasicPriceIds = [basicPriceId, negativeBasicPriceId, mismatchBasicPriceId];
     const allResourceCatalogIds = [
       resourceCatalogId,
@@ -454,6 +461,10 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
 
     await prisma.basicPricePublicationAudit.deleteMany({ where: { basicPriceId } });
     await prisma.basicPrice.deleteMany({ where: { id: { in: allBasicPriceIds } } });
+    // Release the same new directional evidence after occurrence resolutions are gone.
+    await prisma.unitConversionRule.deleteMany({ where: { id: { in: directionalRuleIds } } });
+    await prisma.unitAlias.deleteMany({ where: { id: { in: directionalAliasIds } } });
+    await prisma.unitDefinition.deleteMany({ where: { id: { in: directionalUnitIds } } });
     await prisma.resourceCatalog.deleteMany({ where: { id: { in: allResourceCatalogIds } } });
     await prisma.priceSubmissionReviewDecision.deleteMany({ where: { reviewId } });
     await prisma.priceSubmissionReview.deleteMany({ where: { id: reviewId } });
@@ -737,6 +748,187 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
       .send({ calculationAsOfDate: '2026-7-1' })
       .expect(400);
   });
+
+  it('SCOPE-02: real authenticated RAB writer refuses forged conversion, then persists and rereads a certified rate', async () => {
+    // Reuse this suite's ALREADY-PUBLISHED, fully traceable Basic Price and
+    // approved project/roles/region. No new publication engine or test auth.
+    const kgAliases = await prisma.unitAlias.findMany({
+      where: { normalizedAlias: 'kg', isActive: true, context: null },
+      include: { unitDefinition: true },
+    });
+    const kg = kgAliases.filter((a) =>
+      a.unitDefinition.isActive && a.unitDefinition.dimension === 'MASS');
+    expect(kg).toHaveLength(1);
+    const sourceUnit = kg[0].unitDefinition;
+
+    const packageRaw = `scope02zak${tag.toLowerCase()}`;
+    const unit = await prisma.unitDefinition.create({
+      data: {
+        code: `SCOPE02_ZAK_${tag}`,
+        displayName: `${tag} test-only package`,
+        symbol: packageRaw,
+        dimension: 'COUNT',
+        kind: 'COMMERCIAL_PACKAGE',
+      },
+    });
+    directionalUnitIds.push(unit.id);
+    const alias = await prisma.unitAlias.create({
+      data: {
+        rawAlias: packageRaw,
+        normalizedAlias: packageRaw,
+        unitDefinitionId: unit.id,
+        isActive: true,
+      },
+    });
+    directionalAliasIds.push(alias.id);
+    const rule = await prisma.unitConversionRule.create({
+      data: {
+        sourceUnitId: sourceUnit.id,
+        targetUnitId: unit.id,
+        resourceCatalogId,
+        conversionType: 'PACKAGE_CONTENT',
+        quantityFactor: '0.025',
+        version: 1,
+        evidenceReference: `${tag} test-only package mass stated in fixture`,
+        status: 'ACTIVE',
+      },
+    });
+    directionalRuleIds.push(rule.id);
+
+    const ahsp = await prisma.aHSP.create({
+      data: {
+        workspaceId, workType: `${tag} scope02`, methodType: 'MANUAL',
+        locationType: 'GENERAL', methodName: `${tag} directional proof`,
+      },
+    });
+    directionalAhspIds.push(ahsp.id);
+    const version = await prisma.aHSPVersion.create({
+      data: {
+        ahspId: ahsp.id, workspaceId, versionNumber: 1,
+        outputUnit: 'Kg', regulationReference: labels,
+      },
+    });
+    const component = await prisma.aHSPResource.create({
+      data: {
+        ahspVersionId: version.id, resourceId: `${tag} Besi Beton`,
+        resourceType: 'MATERIAL', coefficient: '1.000000',
+        baseUnit: packageRaw,
+      },
+    });
+    const resolutionEvidence = {
+      ahspResourceId: component.id,
+      rawAhspResourceRef: component.resourceId,
+      rawAhspResourceType: 'MATERIAL' as const,
+      ahspCoefficient: '1.000000',
+      ahspUnit: packageRaw,
+      status: 'RESOLVED' as const,
+      selectionMode: 'AUTO_SELECTED' as const,
+      resourceCatalogId,
+      selectedBasicPriceId: basicPriceId,
+      canonicalUnit: unit.code,
+      sourcePriceValue: '100000.00',
+      sourceUnit: 'Kg',
+      priceMode: 'BASIC_PRICE' as const,
+      sourceUnitDefinitionId: sourceUnit.id,
+      targetUnitDefinitionId: unit.id,
+      unitConversionRuleId: rule.id,
+      unitConversionRuleVersion: 1,
+      quantityFactor: '0.025',
+      selectedSourceOrigin: 'SUPPLIER' as const,
+      selectedFreshnessStatus: 'CURRENT' as const,
+      selectedEffectiveDate: new Date('2026-01-01T00:00:00.000Z'),
+      resolutionMethod: 'EXACT_DETERMINISTIC' as const,
+      reasonCodes: ['PROVEN_DIRECTIONAL_PRICE_CONVERSION'],
+      explanation: labels,
+      policyVersion: 'E1A_PRICE_DIRECTIONAL_V1',
+    };
+    const occurrence = await prisma.projectAhspOccurrence.create({
+      data: {
+        workspaceId, projectId, ahspVersionId: version.id,
+        idempotencyKey: `${tag}-scope02-rejected-occ`,
+        businessPricingAsOfDate: new Date('2026-07-31T00:00:00.000Z'),
+        referenceRegionId: regionId,
+        resolutionPolicyVersion: 'E1A_CONTEXTUAL_EXACT_REGION_V3_ABLS01',
+        resourceResolutions: {
+          create: [{ ...resolutionEvidence, adaptedPriceValue: '4000001.00' }],
+        },
+      },
+    });
+    const row = await prisma.boqItem.create({
+      data: {
+        boqStructureId,
+        wbsCode: '9.88',
+        name: `${tag} scope02 directional`,
+        itemType: 'WORK_ITEM',
+        quantity: '2',
+        unit: 'Kg',
+        ahspVersionId: version.id,
+        workingOccurrenceId: occurrence.id,
+      },
+    });
+    const endpoint = `/projects/${projectId}/boq/items/${row.id}/cost-calculation/persist`;
+    const denied = await request(app.getHttpServer())
+      .post(endpoint)
+      .set('Authorization', `Bearer ${rabEditorToken}`)
+      .send({ calculationAsOfDate: '2026-07-31' })
+      .expect(409);
+    expect(denied.body.message).toBe('BASIC_PRICE_CONVERSION_PROVENANCE_INVALID');
+    const stillUnpriced = await prisma.boqItem.findUniqueOrThrow({ where: { id: row.id } });
+    expect(stillUnpriced.unitPrice).toBeNull();
+    expect(stillUnpriced.calculationOccurrenceId).toBeNull();
+
+    // Occurrences are immutable: form a separate, proven generation instead
+    // of changing the rejected event or rewriting any historical evidence.
+    const validOccurrence = await prisma.projectAhspOccurrence.create({
+      data: {
+        workspaceId, projectId, ahspVersionId: version.id,
+        idempotencyKey: `${tag}-scope02-accepted-occ`,
+        businessPricingAsOfDate: new Date('2026-07-31T00:00:00.000Z'),
+        referenceRegionId: regionId,
+        resolutionPolicyVersion: 'E1A_CONTEXTUAL_EXACT_REGION_V3_ABLS01',
+        resourceResolutions: {
+          create: [{ ...resolutionEvidence, adaptedPriceValue: '4000000.00' }],
+        },
+      },
+    });
+    const validRow = await prisma.boqItem.create({
+      data: {
+        boqStructureId,
+        wbsCode: '9.89',
+        name: `${tag} scope02 certified`,
+        itemType: 'WORK_ITEM',
+        quantity: '2',
+        unit: 'Kg',
+        ahspVersionId: version.id,
+        workingOccurrenceId: validOccurrence.id,
+      },
+    });
+    const accepted = await request(app.getHttpServer())
+      .post(`/projects/${projectId}/boq/items/${validRow.id}/cost-calculation/persist`)
+      .set('Authorization', `Bearer ${rabEditorToken}`)
+      .send({ calculationAsOfDate: '2026-07-31' })
+      .expect(201);
+    expect(accepted.body).toMatchObject({
+      unitPrice: '4000000.00', lineTotal: '8000000.00',
+      priceOrigin: 'SERVER_COST_KERNEL',
+    });
+    const persisted = await prisma.boqItem.findUniqueOrThrow({ where: { id: validRow.id } });
+    expect(persisted.unitPrice?.toFixed(2)).toBe('4000000.00');
+    expect(persisted.lineTotal?.toFixed(2)).toBe('8000000.00');
+    const reread = await request(app.getHttpServer())
+      .get(`/projects/${projectId}/boq/items/${validRow.id}/persisted-calculation`)
+      .set('Authorization', `Bearer ${rabViewerToken}`)
+      .expect(200);
+    expect(reread.body).toMatchObject({
+      status: 'VERIFIED',
+      stored: { unitPrice: '4000000.00', lineTotal: '8000000.00' },
+      recomputed: { unitPrice: '4000000.00', lineTotal: '8000000.00' },
+    });
+    expect(reread.body.resources[0]).toMatchObject({
+      sourcePriceValue: '100000', adaptedPriceValue: '4000000',
+      selectedBasicPriceId: basicPriceId,
+    });
+  }, 60_000);
 
   describe('§2.2 database truth — boq_items_price_origin_truth_check rejects every invalid shape directly', () => {
     const attempt = (data: Record<string, unknown>) =>
