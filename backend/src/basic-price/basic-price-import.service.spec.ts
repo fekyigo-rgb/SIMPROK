@@ -36,6 +36,7 @@ describe('BasicPriceImportService', () => {
       findUnique: jest.Mock;
     };
     basicPriceRegionCoverageMember: { createMany: jest.Mock };
+    basicPriceImportRowResourceMapping: { findMany: jest.Mock };
     priceSubmission: { create: jest.Mock; update: jest.Mock };
     priceSubmissionRevision: { create: jest.Mock };
     priceSubmissionAudit: { create: jest.Mock; findFirst: jest.Mock };
@@ -94,6 +95,7 @@ describe('BasicPriceImportService', () => {
         findUnique: jest.fn(),
       },
       basicPriceRegionCoverageMember: { createMany: jest.fn() },
+      basicPriceImportRowResourceMapping: { findMany: jest.fn().mockResolvedValue([]) },
       priceSubmission: { create: jest.fn(), update: jest.fn() },
       priceSubmissionRevision: { create: jest.fn() },
       priceSubmissionAudit: { create: jest.fn(), findFirst: jest.fn() },
@@ -433,6 +435,7 @@ describe('BasicPriceImportService', () => {
       tx.basicPriceImportRow.findUniqueOrThrow.mockResolvedValue({
         id: 'row-1',
         resourceCatalogId: 'resource-01',
+        unitDefinitionId: 'unit-kg',
         proposedCanonicalPrice: '158333.33',
         effectiveDateOverride: null,
       });
@@ -645,6 +648,7 @@ describe('BasicPriceImportService', () => {
       tx.basicPriceImportRow.findUniqueOrThrow.mockResolvedValue({
         id: 'row-new',
         resourceCatalogId: 'resource-02',
+        unitDefinitionId: 'unit-kg',
         proposedCanonicalPrice: '1000.00',
         effectiveDateOverride: null,
       });

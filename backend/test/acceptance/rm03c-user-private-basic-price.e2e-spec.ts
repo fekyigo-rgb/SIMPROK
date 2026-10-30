@@ -996,6 +996,204 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
     });
   });
 
+  // ── SCOPE-03B1: SAME reviewer mapping, no second price evidence table ──
+  describe('The existing mapping freezes provable conversion money (real PostgreSQL)', () => {
+    it('admits a complete snapshot and forbids partial or rewritten arithmetic', async () => {
+      // Synthetic schema-only proof. The public/private price writers are
+      // exercised in their existing authenticated suites, not bypassed here.
+      const source = await prisma.unitDefinition.create({
+        data: {
+          code: `${tag}-PKG`, displayName: `${tag} source package`,
+          symbol: 'z03b', dimension: 'COUNT', kind: 'COMMERCIAL_PACKAGE',
+        },
+      });
+      const target = await prisma.unitDefinition.create({
+        data: {
+          code: `${tag}-KG`, displayName: `${tag} target mass`,
+          symbol: 'kg03b', dimension: 'MASS', kind: 'CANONICAL',
+        },
+      });
+      let ruleId: string | null = null;
+      let decisionId: string | null = null;
+      try {
+        const rule = await prisma.unitConversionRule.create({
+          data: {
+            sourceUnitId: source.id, targetUnitId: target.id,
+            conversionType: 'PACKAGE_CONTENT',
+            quantityFactor: '40', version: 1,
+            resourceCatalogId: privateResourceId,
+            evidenceReference: 'SCOPE03B_TEST_ONLY_PACKAGE_40_KG',
+          },
+        });
+        ruleId = rule.id;
+        const complete = {
+          workspaceId: workspaceAId,
+          rowId: probeRowId,
+          resourceCatalogId: privateResourceId,
+          unitDefinitionId: target.id,
+          reviewerAccountId: ownerAccountId,
+          suggestionSource: 'MANUAL_SEARCH' as const,
+          candidateCountAtDecision: 0,
+          conversionSourcePriceValue: '80000.00',
+          conversionAdaptedPriceValue: '2000.00',
+          conversionQuantityFactor: '40',
+          conversionRuleId: rule.id,
+          conversionRuleVersion: 1,
+          conversionPolicyVersion: 'KAMUS_UNIT_KERNEL_01A_V1',
+        };
+        await expect(
+          prisma.basicPriceImportRowResourceMapping.create({
+            data: { ...complete, conversionRuleVersion: null },
+          }),
+        ).rejects.toThrow();
+        const decision = await prisma.basicPriceImportRowResourceMapping.create({
+          data: complete,
+        });
+        decisionId = decision.id;
+        expect(decision.conversionSourcePriceValue?.toFixed(2)).toBe('80000.00');
+        expect(decision.conversionAdaptedPriceValue?.toFixed(2)).toBe('2000.00');
+        expect(decision.conversionQuantityFactor?.toFixed(12)).toBe('40.000000000000');
+        await expect(
+          prisma.basicPriceImportRowResourceMapping.update({
+            where: { id: decision.id },
+            data: { conversionAdaptedPriceValue: '3000.00' },
+          }),
+        ).rejects.toThrow('BASIC_PRICE_CONVERSION_EVIDENCE_IMMUTABLE');
+        const reread = await prisma.basicPriceImportRowResourceMapping.findUniqueOrThrow({
+          where: { id: decision.id },
+        });
+        expect(reread.conversionAdaptedPriceValue?.toFixed(2)).toBe('2000.00');
+      } finally {
+        if (decisionId) {
+          await prisma.basicPriceImportRowResourceMapping.delete({
+            where: { id: decisionId },
+          });
+        }
+        if (ruleId) await prisma.unitConversionRule.delete({ where: { id: ruleId } });
+        await prisma.unitDefinition.deleteMany({
+          where: { id: { in: [source.id, target.id] } },
+        });
+      }
+    });
+  });
+
+  describe('SCOPE-03B2: existing authenticated private writer consumes certified rate', () => {
+    it('persists a proven price per canonical unit and retains the original source price', async () => {
+      const raw = `z03b${tag.toLowerCase()}`;
+      const targetCode = `K03B${tag}`;
+      const source = await prisma.unitDefinition.create({
+        data: {
+          code: `Z03B${tag}`, displayName: `${tag} package source`,
+          symbol: raw, dimension: 'COUNT', kind: 'COMMERCIAL_PACKAGE',
+        },
+      });
+      const target = await prisma.unitDefinition.create({
+        data: {
+          code: targetCode, displayName: `${tag} mass target`,
+          symbol: targetCode, dimension: 'MASS', kind: 'CANONICAL',
+        },
+      });
+      const aliases: string[] = [];
+      let resourceId: string | null = null;
+      let ruleId: string | null = null;
+      let batchIdLocal: string | null = null;
+      let priceId: string | null = null;
+      try {
+        for (const entry of [
+          { rawAlias: raw, normalizedAlias: raw, unitDefinitionId: source.id },
+          { rawAlias: targetCode, normalizedAlias: targetCode.toLowerCase(), unitDefinitionId: target.id },
+        ]) {
+          const alias = await prisma.unitAlias.create({ data: entry });
+          aliases.push(alias.id);
+        }
+        const catalog = await prisma.resourceCatalog.create({
+          data: {
+            workspaceId: workspaceAId, name: `${tag} Converted Material`,
+            code: `${tag}-CONV`, type: 'MATERIAL', baseUnit: targetCode,
+          },
+        });
+        resourceId = catalog.id;
+        const rule = await prisma.unitConversionRule.create({
+          data: {
+            sourceUnitId: source.id, targetUnitId: target.id,
+            conversionType: 'PACKAGE_CONTENT',
+            quantityFactor: '40', version: 1,
+            resourceCatalogId: catalog.id,
+            evidenceReference: 'SCOPE03B_TEST_ONLY_40_UNIT_PACKAGE',
+          },
+        });
+        ruleId = rule.id;
+        const batch = await prisma.basicPriceImportBatch.create({
+          data: {
+            workspaceId: workspaceAId, organizationId: orgAId,
+            uploadedByAccountId: ownerAccountId,
+            sourceFileName: `${tag}-converted.xlsx`,
+            sourceSha256: 'b'.repeat(64), sourceByteLength: 1000,
+            selectedSheetName: 'CONVERSION_TEST',
+            parserContractVersion: 'RM02B-XLSX-V1',
+            regionId, effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
+            sourceType: 'VENDOR_QUOTE', sourceOrigin: 'STORE',
+            sourceVendorName: `${tag} Unit Test Supplier`,
+            importFingerprint: `${tag}-converted-fingerprint`,
+            status: 'READY_FOR_REVIEW',
+          },
+        });
+        batchIdLocal = batch.id;
+        const row = await prisma.basicPriceImportRow.create({
+          data: {
+            batchId: batch.id, sourceSection: 'MATERIAL',
+            sourceSectionProvenance: 'SOURCE_ROW_CATEGORY',
+            sourceRowNumber: 5, sourceCodeCellAddress: 'A5',
+            sourceNameCellAddress: 'B5', sourceUnitCellAddress: 'C5',
+            sourcePriceCellAddress: 'D5', rawResourceCodeText: 'CONV',
+            rawResourceNameText: `${tag} Converted Material`,
+            rawUnitText: raw, rawPriceCellType: 2,
+            rawPriceNumericRoundTripString: '80000',
+            proposedCanonicalPrice: '80000.00',
+            resourceCatalogId: catalog.id, unitDefinitionId: target.id,
+            resolvedResourceType: 'MATERIAL', resolutionStatus: 'RESOLVED',
+            status: 'READY_FOR_SUBMISSION', reasonCodes: ['SCOPE03B_TEST_PROOF'],
+          },
+        });
+        await prisma.basicPriceImportRowResourceMapping.create({
+          data: {
+            workspaceId: workspaceAId, rowId: row.id,
+            resourceCatalogId: catalog.id, unitDefinitionId: target.id,
+            reviewerAccountId: ownerAccountId,
+            suggestionSource: 'MANUAL_SEARCH', candidateCountAtDecision: 0,
+            conversionSourcePriceValue: '80000.00',
+            conversionAdaptedPriceValue: '2000.00',
+            conversionQuantityFactor: '40', conversionRuleId: rule.id,
+            conversionRuleVersion: 1,
+            conversionPolicyVersion: 'KAMUS_UNIT_KERNEL_01A_V1',
+          },
+        });
+        const response = await keepPrivate(ownerToken, workspaceAId, batch.id).expect(201);
+        expect(response.body.createdCount).toBe(1);
+        const price = await prisma.basicPrice.findFirstOrThrow({
+          where: { sourceImportRowId: row.id, assetScope: 'WORKSPACE_PRIVATE' },
+        });
+        priceId = price.id;
+        expect(price.value.toFixed(2)).toBe('2000.00');
+        expect(price.resourceId).toBe(catalog.id);
+        const sourceRow = await prisma.basicPriceImportRow.findUniqueOrThrow({ where: { id: row.id } });
+        expect(sourceRow.proposedCanonicalPrice?.toFixed(2)).toBe('80000.00');
+        expect(sourceRow.rawUnitText).toBe(raw);
+        expect(sourceRow.unitDefinitionId).toBe(target.id);
+      } finally {
+        if (priceId) await prisma.basicPrice.delete({ where: { id: priceId } });
+        if (batchIdLocal) {
+          await prisma.basicPriceImportRow.deleteMany({ where: { batchId: batchIdLocal } });
+          await prisma.basicPriceImportBatch.delete({ where: { id: batchIdLocal } });
+        }
+        if (ruleId) await prisma.unitConversionRule.delete({ where: { id: ruleId } });
+        if (resourceId) await prisma.resourceCatalog.delete({ where: { id: resourceId } });
+        await prisma.unitAlias.deleteMany({ where: { id: { in: aliases } } });
+        await prisma.unitDefinition.deleteMany({ where: { id: { in: [source.id, target.id] } } });
+      }
+    }, 60_000);
+  });
+
   // ── 7. The incremental gate ──────────────────────────────────────────────
   //
   // THE OWNER'S ACTUAL MOMENT, over the actual endpoints.
