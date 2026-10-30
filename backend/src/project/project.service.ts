@@ -953,12 +953,12 @@ export class ProjectService {
     // does not activate multiple-price selection. Compare-and-swap under
     // the SAME Project row lock and draft lifecycle used by Preparation.
     // Existing RAB-37 region edits remain an independent unchanged path.
-    const hasPriceIntent = Object.prototype.hasOwnProperty.call(
-      dto, 'priceSelectionPreferenceMode',
-    );
-    const hasExpectedPriceIntent = Object.prototype.hasOwnProperty.call(
-      dto, 'expectedPriceSelectionPreferenceMode',
-    );
+    // class-transformer may materialize optional DTO fields as own
+    // properties with undefined. That is NOT a user instruction: treat only
+    // a non-undefined value as a supplied command. Null explicitly clears.
+    const hasPriceIntent = dto.priceSelectionPreferenceMode !== undefined;
+    const hasExpectedPriceIntent =
+      dto.expectedPriceSelectionPreferenceMode !== undefined;
     if (hasExpectedPriceIntent && !hasPriceIntent) {
       throw new BadRequestException('PROJECT_PRICE_PREFERENCE_CHANGE_REQUIRED');
     }
@@ -1002,11 +1002,11 @@ export class ProjectService {
           data.priceSelectionPreferencePolicyVersion = next
             ? 'F03A_PROJECT_PRICE_INTENT_V1' : null;
         }
-        if (Object.prototype.hasOwnProperty.call(dto, 'budgetBaseline')) {
+        if (dto.budgetBaseline !== undefined) {
           data.budgetBaseline = dto.budgetBaseline == null
             ? null : new Prisma.Decimal(dto.budgetBaseline);
         }
-        if (Object.prototype.hasOwnProperty.call(dto, 'mainMaterialSpec')) {
+        if (dto.mainMaterialSpec !== undefined) {
           data.mainMaterialSpec = this.normalizeOptionalText(dto.mainMaterialSpec) ?? null;
         }
         return Object.keys(data).length > 0
@@ -1064,11 +1064,11 @@ export class ProjectService {
           });
         }
         const data: Prisma.ProjectUpdateInput = {};
-        if (Object.prototype.hasOwnProperty.call(dto, 'budgetBaseline')) {
+        if (dto.budgetBaseline !== undefined) {
           data.budgetBaseline = dto.budgetBaseline == null
             ? null : new Prisma.Decimal(dto.budgetBaseline);
         }
-        if (Object.prototype.hasOwnProperty.call(dto, 'mainMaterialSpec')) {
+        if (dto.mainMaterialSpec !== undefined) {
           data.mainMaterialSpec = this.normalizeOptionalText(dto.mainMaterialSpec) ?? null;
         }
         const result = Object.keys(data).length > 0
@@ -1080,14 +1080,14 @@ export class ProjectService {
 
     const data: Prisma.ProjectUpdateInput = {};
 
-    if (Object.prototype.hasOwnProperty.call(dto, 'budgetBaseline')) {
+    if (dto.budgetBaseline !== undefined) {
       data.budgetBaseline =
         dto.budgetBaseline == null
           ? null
           : new Prisma.Decimal(dto.budgetBaseline);
     }
 
-    if (Object.prototype.hasOwnProperty.call(dto, 'mainMaterialSpec')) {
+    if (dto.mainMaterialSpec !== undefined) {
       data.mainMaterialSpec =
         this.normalizeOptionalText(dto.mainMaterialSpec) ?? null;
     }

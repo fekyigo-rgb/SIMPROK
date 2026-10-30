@@ -481,7 +481,7 @@ export class ProjectController {
     // F03A: preserve the legacy RAB-37 intake permission, but require the
     // existing PROJECT_SETTINGS_MANAGE authority for an explicit PRICE
     // preference change. Do not invent a role/permission or trust body fields.
-    if (Object.prototype.hasOwnProperty.call(dto, 'priceSelectionPreferenceMode')) {
+    if (dto.priceSelectionPreferenceMode !== undefined) {
       const accountId = request.user?.id;
       const workspaceId = request.projectAccess?.workspaceId;
       if (typeof accountId !== 'string' || typeof workspaceId !== 'string') {

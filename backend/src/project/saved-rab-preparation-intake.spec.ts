@@ -171,6 +171,25 @@ describe('RAB-37 saved Preparation — canonical PATCH safety', () => {
     expect(tx.project.update).not.toHaveBeenCalled();
   });
 
+  it('does not mistake materialized undefined optional DTO fields for a price command', async () => {
+    const { service, tx } = harness();
+    const dto = plainToInstance(UpdateProjectIntakeContextDto, {
+      locationRegionIds: [REGION_NEW],
+      expectedLocationRegionIds: [REGION_OLD],
+    });
+    // Regression: class-transformer/TS emit can materialize absent optional
+    // properties as own undefined fields. They must not invoke F03A.
+    Object.defineProperty(dto, 'priceSelectionPreferenceMode', {
+      value: undefined, configurable: true, enumerable: true,
+    });
+    Object.defineProperty(dto, 'expectedPriceSelectionPreferenceMode', {
+      value: undefined, configurable: true, enumerable: true,
+    });
+    await service.updateIntakeContext(PROJECT, dto);
+    expect(tx.projectRegionSelection.createMany).toHaveBeenCalledTimes(1);
+    expect(tx.project.update).not.toHaveBeenCalled();
+  });
+
   it('rejects a concurrent selection change without overwriting it', async () => {
     const { service, tx } = harness();
     tx.projectRegionSelection.findMany.mockResolvedValue([{ regionId: REGION_NEW }]);
