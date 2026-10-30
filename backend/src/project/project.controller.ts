@@ -474,9 +474,24 @@ export class ProjectController {
   // TODO(P7C-PERMISSION-DEBT): Replace PROJECT_CREATE with a dedicated project intake-context edit permission after Identity/Permission design approval.
   @Permissions('PROJECT_CREATE')
   async updateIntakeContext(
+    @Req() request: WorkPeriodAnchorProjectRequest,
     @Param('projectId') projectId: string,
     @Body() dto: UpdateProjectIntakeContextDto,
   ) {
+    // F03A: preserve the legacy RAB-37 intake permission, but require the
+    // existing PROJECT_SETTINGS_MANAGE authority for an explicit PRICE
+    // preference change. Do not invent a role/permission or trust body fields.
+    if (dto.priceSelectionPreferenceMode !== undefined) {
+      const accountId = request.user?.id;
+      const workspaceId = request.projectAccess?.workspaceId;
+      if (typeof accountId !== 'string' || typeof workspaceId !== 'string') {
+        throw new ForbiddenException('PROJECT_PRICE_PREFERENCE_PERMISSION_REQUIRED');
+      }
+      const grant = await this.permissionResolver.resolve(accountId, workspaceId);
+      if (!grant?.permissions.includes(PERMISSIONS.PROJECT_SETTINGS_MANAGE)) {
+        throw new ForbiddenException('PROJECT_PRICE_PREFERENCE_PERMISSION_REQUIRED');
+      }
+    }
     return this.projectService.updateIntakeContext(projectId, dto);
   }
 
