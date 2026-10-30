@@ -280,7 +280,9 @@ export class PersistedCalculationService {
         unitPriceMatches,
         lineTotalMatches,
         allResourceCostsReproduced,
-        allEstimateProvenanceReproduced,
+        ...(occurrence.resourceResolutions.some((resolution) => resolution.priceMode === 'TEMPORARY_ESTIMATE')
+          ? { allEstimateProvenanceReproduced }
+          : {}),
       },
       /**
        * WHOSE DATA FORMED THIS PRICE.

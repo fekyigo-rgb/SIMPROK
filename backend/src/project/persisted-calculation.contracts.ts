@@ -125,7 +125,8 @@ export interface PersistedCalculationIntegrity {
   lineTotalMatches: boolean;
   /** True when every resource produced a finite recomputed cost. */
   allResourceCostsReproduced: boolean;
-  allEstimateProvenanceReproduced: boolean;
+  /** Emitted only when a frozen calculation actually contains an auxiliary estimate. */
+  allEstimateProvenanceReproduced?: boolean;
 }
 
 export interface PersistedCalculationSuccess {

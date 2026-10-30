@@ -132,6 +132,7 @@ describe('ABLS-01 governed Alat Bantu LS temporary estimate', () => {
     const rows = await run(normal);
     const aux = rows[0];
     expect(aux.priceMode).toBe('TEMPORARY_ESTIMATE');
+    expect(aux.resourceCatalogId).toBe(auxCatalog.id);
     expect(aux.estimateBasisAmount?.toString()).toBe('200');
     expect(aux.estimateDerivedAmount?.toString()).toBe('5');
     expect(aux.adaptedPriceValue?.toString()).toBe('5');
@@ -198,6 +199,7 @@ describe('ABLS-01 governed Alat Bantu LS temporary estimate', () => {
     const rows = await run(normal, { policy });
     expect(rows[0].status).toBe('NEEDS_REVIEW');
     expect(rows[0].reasonCodes).toContain(reason);
+    expect(rows[0].resourceCatalogId).toBeNull();
     expect(rows[0].adaptedPriceValue).toBeNull();
   });
 

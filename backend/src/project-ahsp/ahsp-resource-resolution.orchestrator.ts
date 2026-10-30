@@ -502,7 +502,7 @@ for (const resource of version.resources) {
         ? ProjectAhspResolutionStatus.NEEDS_REVIEW
         : ProjectAhspResolutionStatus.UNRESOLVED,
     selectionMode: resolved ? ProjectAhspSelectionMode.AUTO_SELECTED : null,
-    resourceCatalogId: identifiedCatalog.id,
+    resourceCatalogId: resolved ? result.resolvedResourceCatalogId : null,
     selectedBasicPriceId: resolved ? result.selectedBasicPriceId : null,
     canonicalUnit: unitResolution?.status === 'RESOLVED'
       ? unitResolution.targetUnitDefinition?.code ?? null
@@ -610,6 +610,7 @@ for (const resource of version.resources) {
     target.status = ProjectAhspResolutionStatus.RESOLVED;
     target.selectionMode = ProjectAhspSelectionMode.AUTO_SELECTED;
     target.priceMode = ProjectAhspPriceMode.TEMPORARY_ESTIMATE;
+    target.resourceCatalogId = auxiliary.catalog.id;
     target.selectedBasicPriceId = null;
     target.sourcePriceValue = null;
     target.sourceUnit = null;
