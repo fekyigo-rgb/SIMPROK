@@ -1362,6 +1362,10 @@ export class BasicPriceService {
   /** Only the spelling changes. Unit identity still belongs to Unit Kernel. */
   private explorerUnitSymbol(code: string, symbol: string): string {
     switch (code) {
+      // Basic Price presentation spelling only; canonical identities stay M1/M2/M3.
+      case 'M1': return 'm';
+      case 'M2': return 'm²';
+      case 'M3': return 'm³';
       case 'PERSON_HOUR': return 'Orang-Jam';
       case 'PERSON_DAY': return 'Orang-Hari';
       case 'PERSON_WEEK': return 'Orang-Minggu';
