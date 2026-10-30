@@ -16,6 +16,7 @@ describe('BP-ONE-TRUTH-01 — same observed offer reaches AHSP candidate read', 
       }),
     };
     const tx = {
+      region: { findUnique: async ({ where }: any) => ({ id: where.id, parentId: null, administrativeLevel: 'PROVINCE', isActive: true }) },
       $queryRaw: jest
         .fn()
         .mockResolvedValueOnce([{ predecessorId, descendantId, depth: 1 }])

@@ -85,6 +85,7 @@ const PRICE = {
   pekerja: {
     id: 'price-pekerja',
     resourceId: CATALOG.pekerja.id,
+    regionId: 'region-fixture', regionCoverageSetId: null,
     value: { toString: () => '27643.54' },
     sourceOrigin: 'FIELD_REPORTED',
     freshnessStatus: 'CURRENT',
@@ -94,6 +95,7 @@ const PRICE = {
   excavator: {
     id: 'price-excavator',
     resourceId: CATALOG.excavator.id,
+    regionId: 'region-fixture', regionCoverageSetId: null,
     value: { toString: () => '281237.82' },
     sourceOrigin: 'FIELD_REPORTED',
     freshnessStatus: 'CURRENT',
@@ -149,6 +151,7 @@ function makeOrchestrator() {
 }
 
 const tx = {
+  region: { findUnique: async ({ where }: any) => ({ id: where.id, parentId: null, administrativeLevel: 'PROVINCE', isActive: true }) },
   $queryRaw: jest.fn().mockResolvedValue([]),
   basicPrice: {
     findMany: async () => [PRICE.pekerja, PRICE.excavator],
@@ -352,6 +355,7 @@ const CATALOG_UUID_PEKERJA = {
 const PRICE_UUID_PEKERJA = {
   id: 'price-uuid-pekerja',
   resourceId: CATALOG_UUID_PEKERJA.id,
+  regionId: 'region-fixture', regionCoverageSetId: null,
   value: { toString: () => '27643.54' },
   sourceOrigin: 'FIELD_REPORTED',
   freshnessStatus: 'CURRENT',
@@ -386,6 +390,7 @@ function makeRealIdentityOrchestrator() {
 const runReal = (resourceId: string) =>
   makeRealIdentityOrchestrator().resolveVersionResources(
     {
+      region: { findUnique: async ({ where }: any) => ({ id: where.id, parentId: null, administrativeLevel: 'PROVINCE', isActive: true }) },
       $queryRaw: jest.fn().mockResolvedValue([]),
       basicPrice: {
         findMany: async () => [PRICE_UUID_PEKERJA],
@@ -499,7 +504,7 @@ describe('AHSP occurrence — source facts reach the identity question', () => {
     return { orchestrator, seen };
   }
 
-  const tx = { $queryRaw: jest.fn().mockResolvedValue([]), basicPrice: { findMany: async () => [] } } as any;
+  const tx = { region: { findUnique: async ({ where }: any) => ({ id: where.id, parentId: null, administrativeLevel: 'PROVINCE', isActive: true }) }, $queryRaw: jest.fn().mockResolvedValue([]), basicPrice: { findMany: async () => [] } } as any;
 
   it('sends the code the SOURCE stated, not null, when the line carries one', async () => {
     const { orchestrator, seen } = spyOrchestrator();

@@ -167,6 +167,14 @@ function createHarness(fixture: Fixture) {
     .mockResolvedValue(fixture.existingRab ?? null);
 
   const tx = {
+    region: {
+      findUnique: jest.fn(async ({ where }: any) => ({
+        'region-fixture': { id: 'region-fixture', parentId: 'district-fixture', administrativeLevel: 'VILLAGE', isActive: true, name: 'Gambir', code: '31.71.01.1001' },
+        'district-fixture': { id: 'district-fixture', parentId: 'city-fixture', administrativeLevel: 'DISTRICT', isActive: true, name: 'Gambir', code: '31.71.01' },
+        'city-fixture': { id: 'city-fixture', parentId: 'province-fixture', administrativeLevel: 'REGENCY_CITY', isActive: true, name: 'Jakarta Pusat', code: '31.71' },
+        'province-fixture': { id: 'province-fixture', parentId: null, administrativeLevel: 'PROVINCE', isActive: true, name: 'DKI Jakarta', code: '31' },
+      } as Record<string, unknown>)[where.id] ?? null),
+    },
     $queryRaw: jest
       .fn()
       .mockResolvedValue([
@@ -332,6 +340,30 @@ describe('RabKernelPersistenceService', () => {
     expect(typeof writtenData.calculationPolicyVersion).toBe('string');
     expect(result.priceOrigin).toBe('SERVER_COST_KERNEL');
     expect(result.calculationOccurrenceId).toBe(OCCURRENCE_ID);
+  });
+
+  it('RAB-36B: re-proves a district ancestor Basic Price and uses the official writer', async () => {
+    const { service, tx, boqItemUpdate } = createHarness(
+      withNoOtherItems({ basicPrice: buildBasicPrice({ regionId: 'district-fixture' }) }),
+    );
+    const result = await call(service);
+    expect(result).toMatchObject({
+      priceOrigin: 'SERVER_COST_KERNEL',
+      unitPrice: '200000.00',
+      lineTotal: '1000000.00',
+    });
+    expect(tx.region.findUnique).toHaveBeenCalled();
+    expect(boqItemUpdate.mock.calls[0][0].data.calculationOccurrenceId)
+      .toBe(OCCURRENCE_ID);
+  });
+
+  it('RAB-36B: refuses a similarly named non-ancestor Basic Price at persistence', async () => {
+    const { service } = createHarness(
+      withNoOtherItems({ basicPrice: buildBasicPrice({ regionId: 'district-other' }) }),
+    );
+    await expect(call(service)).rejects.toMatchObject({
+      message: 'BASIC_PRICE_REGION_MISMATCH',
+    });
   });
 
   it('accepts a current, date-valid, traceable BasicPrice', async () => {

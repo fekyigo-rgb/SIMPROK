@@ -427,9 +427,11 @@ describe('promotion lineage precedence', () => {
       );
       // The AHSP candidate offer filters on region, as-of date and validity —
       // all three inherited.
-      expect(orchestrator).toContain(
-        'basicPriceRegionApplicabilityWhere(input.referenceRegionId)',
-      );
+      // RAB-36B replaces one exact-price region with ONLY the canonical
+      // origin-to-ancestor tiers. Same applicability law, not an arbitrary
+      // geographic offer or a new selector.
+      expect(orchestrator).toContain('regionalWhere');
+      expect(orchestrator).toContain('basicPriceRegionApplicabilityWhere(tier.regionId)');
       expect(orchestrator).toContain('effectiveDate: { lte: asOf }');
       expect(orchestrator).toContain('validUntil');
     });

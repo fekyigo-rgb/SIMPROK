@@ -233,6 +233,7 @@ describe('AHSP import acceptance boundary (e2e)', () => {
   let orgBId: string;
   let workspaceId: string;
   let workspaceBId: string;
+  let auditRegionId: string;
   const accountIds: string[] = [];
   const membershipIds: string[] = [];
   const createdPermissionIds: string[] = [];
@@ -421,6 +422,13 @@ describe('AHSP import acceptance boundary (e2e)', () => {
     app = moduleRef.createNestApplication();
     await app.init();
 
+    // Region is a price-scoping fact even for identity-only import probes.
+    // Reuse one REAL active test Region: never pass a fabricated random ID
+    // into the production orchestrator merely to test no-price outcomes.
+    auditRegionId = (await prisma.region.create({
+      data: { code: `${tag}-AUDIT-REG`, name: `${tag} Audit Region`,
+        administrativeLevel: 'PROVINCE', isActive: true },
+    })).id;
     const passwordHash = await bcrypt.hash(PASSWORD, 10);
     orgId = (
       await prisma.organization.create({
@@ -592,6 +600,9 @@ describe('AHSP import acceptance boundary (e2e)', () => {
     await prisma.organization.deleteMany({
       where: { id: { in: [orgId, orgBId].filter(Boolean) } },
     });
+    if (auditRegionId) {
+      await prisma.region.deleteMany({ where: { id: auditRegionId } });
+    }
     await app.close();
     await prisma.$disconnect();
   }, 180_000);
@@ -802,7 +813,7 @@ describe('AHSP import acceptance boundary (e2e)', () => {
       {
         workspaceId,
         projectId: randomUUID(),
-        referenceRegionId: randomUUID(),
+        referenceRegionId: auditRegionId,
         asOf: new Date('2026-09-15T00:00:00.000Z'),
         version,
       },
@@ -893,7 +904,7 @@ describe('AHSP import acceptance boundary (e2e)', () => {
       {
         workspaceId,
         projectId: randomUUID(),
-        referenceRegionId: randomUUID(),
+        referenceRegionId: auditRegionId,
         asOf: new Date('2026-09-15T00:00:00.000Z'),
         version,
       },
@@ -942,7 +953,7 @@ describe('AHSP import acceptance boundary (e2e)', () => {
       {
         workspaceId,
         projectId: randomUUID(),
-        referenceRegionId: randomUUID(),
+        referenceRegionId: auditRegionId,
         asOf: new Date('2026-09-15T00:00:00.000Z'),
         version,
       },
@@ -1607,7 +1618,7 @@ describe('AHSP import acceptance boundary (e2e)', () => {
       .resolveVersionResources(app.get(PrismaService), {
         workspaceId,
         projectId: randomUUID(),
-        referenceRegionId: randomUUID(),
+        referenceRegionId: auditRegionId,
         asOf: new Date('2026-09-15T00:00:00.000Z'),
         version,
       });
