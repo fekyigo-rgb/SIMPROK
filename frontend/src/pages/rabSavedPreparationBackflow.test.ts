@@ -35,3 +35,23 @@ test('saving requires explicit confirmation and declines to reprice frozen occur
   assert.match(preparation, /Keputusan occurrence, harga, dan BOQ yang sudah tersimpan tidak dihitung ulang otomatis/);
   assert.match(preparation, /locationRegionIds = selectedLocationRegionIds/);
 });
+
+test('saved Preparation retains the same five Owner rooms, using read-only fields where authority is absent', () => {
+  const saved = preparation.split('function SavedRabPreparation')[1] || '';
+  const labels = [
+    'Informasi Proyek',
+    'Klasifikasi Resmi',
+    'Lokasi Resmi',
+    'Alamat Detail',
+    'Data Pendukung',
+  ];
+  let cursor = -1;
+  for (const label of labels) {
+    const next = saved.indexOf('aria-label="' + label + '"', cursor + 1);
+    assert.ok(next > cursor, label);
+    cursor = next;
+  }
+  assert.match(saved, /readDraftPreparationFields\(loaded\.project\.description\)/);
+  assert.match(saved, /Tahun Anggaran \/ Tahun Harga/);
+  assert.match(saved, /Pemilik \/ Instansi/);
+});

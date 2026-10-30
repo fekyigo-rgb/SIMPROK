@@ -467,6 +467,8 @@ type SavedProjectIdentity = {
   name: string;
   code: string;
   status: string;
+  description?: string | null;
+  address?: string | null;
   rabLifecycle?: { canEditDraft: boolean; reasonCode: string | null };
 };
 
@@ -540,6 +542,8 @@ function SavedRabPreparation({ projectId }: { projectId: string }) {
     mainMaterialSpec.trim() !== (loaded.context.mainMaterialSpec ?? '').trim();
   const changed = locationChanged || budgetChanged || specChanged;
   const contextEditable = loaded?.project.rabLifecycle?.canEditDraft !== false;
+  const preparedFields = loaded?.project.description
+    ? readDraftPreparationFields(loaded.project.description) : null;
 
   const blocker = useBlocker(({ currentLocation, nextLocation }) =>
     !skipBlockRef.current && changed &&
@@ -652,7 +656,15 @@ function SavedRabPreparation({ projectId }: { projectId: string }) {
                 <h3>Informasi Proyek</h3>
                 <p><strong>{loaded.project.name}</strong></p>
                 <p>Kode proyek: {loaded.project.code} · Status: {loaded.project.status}</p>
+                <p>Tahun Anggaran / Tahun Harga: {preparedFields?.year ?? 'Belum tersedia'}</p>
+                <p>Pemilik / Instansi: {preparedFields?.owner ?? 'Belum tersedia'}</p>
                 <p>Identitas proyek tersimpan tetap; perubahan nama atau klasifikasi memerlukan kewenangan proyek tersendiri.</p>
+                <label className="simprok-rab-field">
+                  <span>Pagu Anggaran (opsional)</span>
+                  <input value={budgetCeiling} disabled={saving || !contextEditable}
+                    onChange={(event) => { setBudgetCeiling(event.target.value); setConfirmationOpen(false); }}
+                    placeholder="Contoh: 150000000.00" />
+                </label>
               </section>
               <section className="simprok-rab-room" aria-label="Klasifikasi Resmi">
                 <h3>Klasifikasi Resmi</h3>
@@ -674,14 +686,13 @@ function SavedRabPreparation({ projectId }: { projectId: string }) {
                   <p role="status">RAB tidak dalam kondisi draft yang dapat diubah. Lokasi tetap dapat dibaca, tetapi tidak dapat diubah melalui jalur ini.</p>
                 )}
               </section>
-              <section className="simprok-rab-room" aria-label="Pengaturan Harga">
-                <h3>Pengaturan Proyek</h3>
-                <label className="simprok-rab-field">
-                  <span>Pagu Anggaran (opsional)</span>
-                  <input value={budgetCeiling} disabled={saving || !contextEditable}
-                    onChange={(event) => { setBudgetCeiling(event.target.value); setConfirmationOpen(false); }}
-                    placeholder="Contoh: 150000000.00" />
-                </label>
+              <section className="simprok-rab-room" aria-label="Alamat Detail">
+                <h3>Alamat Detail</h3>
+                <p>{preparedFields?.address || loaded.project.address || 'Belum tersedia'}</p>
+                <small>Alamat lama dibaca dari proyek tersimpan; tidak ditulis ulang sebagai alamat baru.</small>
+              </section>
+              <section className="simprok-rab-room" aria-label="Data Pendukung">
+                <h3>Data Pendukung</h3>
                 <label className="simprok-rab-field">
                   <span>Spesifikasi Material Utama (opsional)</span>
                   <textarea value={mainMaterialSpec} disabled={saving || !contextEditable}
