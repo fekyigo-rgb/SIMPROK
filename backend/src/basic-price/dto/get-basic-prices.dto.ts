@@ -121,6 +121,12 @@ export class GetBasicPricesDto {
   @MaxLength(100)
   sourceName?: string;
 
+  // BP-EXPLORER-UI-03: optional narrowing by the existing canonical asset scope.
+  // Omitting it keeps the existing combined eligible list unchanged.
+  @IsOptional()
+  @IsIn(['WORKSPACE_PRIVATE', 'SIMPROK_CATALOG'])
+  assetScope?: 'WORKSPACE_PRIVATE' | 'SIMPROK_CATALOG';
+
   // Public API hard lock: only the terminal PUBLISHED verification is queryable.
   // Internal-curation statuses (UNVERIFIED/SUBMITTED/UNDER_REVIEW/VERIFIED/REJECTED)
   // are rejected here; the service also enforces this defensively.

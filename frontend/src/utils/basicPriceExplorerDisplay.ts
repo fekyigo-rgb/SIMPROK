@@ -272,6 +272,8 @@ export interface ExplorerFilters {
   sourceOrigin?: string;
   sourceFamily?: string;
   sourceName?: string;
+  /** Scope is server-filtered before pagination, never page-only client slicing. */
+  collection?: 'WORKSPACE_PRIVATE' | 'SIMPROK_CATALOG';
   unit?: string;
   freshnessStatus?: string;
   resourceType?: string;
@@ -298,6 +300,7 @@ export function buildExplorerQueryParams(filters: ExplorerFilters): Record<strin
   put('sourceOrigin', filters.sourceOrigin);
   put('sourceFamily', filters.sourceFamily);
   put('sourceName', filters.sourceName);
+  put('assetScope', filters.collection);
   put('unit', filters.unit);
   put('freshnessStatus', filters.freshnessStatus);
   put('resourceType', filters.resourceType);
