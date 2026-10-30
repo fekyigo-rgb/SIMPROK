@@ -17,6 +17,9 @@ describe('Project intake context security (e2e)', () => {
   let projectAId: string;
   let lockedProjectId: string;
   let projectBId: string;
+  let regionCountryId: string;
+  let regionOldId: string;
+  let regionNewId: string;
 
   const emails = {
     activeCreator: 'p7c.active.creator@test.local',
@@ -92,6 +95,21 @@ describe('Project intake context security (e2e)', () => {
     projectAId = projectA.id;
     lockedProjectId = lockedProject.id;
     projectBId = projectB.id;
+
+    // RAB-37: isolated canonical Region lineage fixture, no production data.
+    const country = await prisma.region.create({
+      data: { code: 'P7C-REG-COUNTRY', name: 'P7C Test Country', administrativeLevel: 'COUNTRY', isActive: true },
+    });
+    const oldRegion = await prisma.region.create({
+      data: { code: 'P7C-REG-OLD', name: 'P7C Test Province', parentId: country.id, administrativeLevel: 'PROVINCE', isActive: true },
+    });
+    const newRegion = await prisma.region.create({
+      data: { code: 'P7C-REG-NEW', name: 'P7C Test City', parentId: oldRegion.id, administrativeLevel: 'REGENCY_CITY', isActive: true },
+    });
+    regionCountryId = country.id;
+    regionOldId = oldRegion.id;
+    regionNewId = newRegion.id;
+    await prisma.projectRegionSelection.create({ data: { projectId: projectAId, regionId: regionOldId } });
 
     async function createAccount(email: string, workspaceId: string, roleId: string, status: 'ACTIVE' | 'INACTIVE', projectId?: string) {
       const account = await prisma.account.create({
@@ -178,7 +196,11 @@ describe('Project intake context security (e2e)', () => {
     await prisma.workspaceMembership.deleteMany({ where: { id: { in: membershipIds } } });
     await prisma.account.deleteMany({ where: { id: { in: accountIds } } });
     await prisma.role.deleteMany({ where: { code: { in: ['P7C_INTAKE_CREATE_A', 'P7C_INTAKE_VIEW_A', 'P7C_INTAKE_CREATE_B'] } } });
+    await prisma.projectRegionSelection.deleteMany({ where: { projectId: { in: projectIds } } });
     await prisma.project.deleteMany({ where: { id: { in: projectIds } } });
+    await prisma.region.deleteMany({ where: { id: regionNewId } });
+    await prisma.region.deleteMany({ where: { id: regionOldId } });
+    await prisma.region.deleteMany({ where: { id: regionCountryId } });
     await prisma.workspace.deleteMany({ where: { id: { in: [workspaceAId, workspaceBId].filter(Boolean) } } });
     await prisma.organization.deleteMany({ where: { name: { in: ['P7C Intake Org A', 'P7C Intake Org B'] } } });
     await app.close();
@@ -192,6 +214,50 @@ describe('Project intake context security (e2e)', () => {
       .expect(201);
     return response.body.access_token;
   };
+
+  it('RAB-37: authenticated saved-project Region PATCH persists and reads back without rewriting project identity', async () => {
+    const token = await login(emails.activeCreator);
+    const before = await prisma.project.findUniqueOrThrow({ where: { id: projectAId } });
+    const response = await request(app.getHttpServer())
+      .patch(`/projects/${projectAId}/intake-context`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({ locationRegionIds: [regionNewId], expectedLocationRegionIds: [regionOldId] })
+      .expect(200);
+    expect(response.body.locationRegionIds).toEqual([regionNewId]);
+    const reread = await request(app.getHttpServer())
+      .get(`/projects/${projectAId}/intake-context`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .expect(200);
+    expect(reread.body.locationSelections.map((x: { id: string }) => x.id))
+      .toEqual([regionNewId]);
+    const after = await prisma.project.findUniqueOrThrow({ where: { id: projectAId } });
+    expect(after.id).toBe(before.id);
+    expect(after.workspaceId).toBe(before.workspaceId);
+    expect(after.organizationId).toBe(before.organizationId);
+    const stale = await request(app.getHttpServer())
+      .patch(`/projects/${projectAId}/intake-context`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({ locationRegionIds: [regionOldId], expectedLocationRegionIds: [regionOldId] })
+      .expect(409);
+    expect(stale.body.message).toContain('PROJECT_REGION_SELECTION_CHANGED_RELOAD');
+    const stored = await prisma.projectRegionSelection.findMany({ where: { projectId: projectAId } });
+    expect(stored.map((x) => x.regionId)).toEqual([regionNewId]);
+  });
+
+  it('RAB-37: cannot change project Region when official baseline is ACTIVE', async () => {
+    const token = await login(emails.activeCreator);
+    await request(app.getHttpServer())
+      .patch(`/projects/${lockedProjectId}/intake-context`)
+      .set('Authorization', `Bearer ${token}`)
+      .set('x-workspace-id', workspaceAId)
+      .send({ locationRegionIds: [regionNewId], expectedLocationRegionIds: [] })
+      .expect(409);
+    expect(await prisma.projectRegionSelection.count({ where: { projectId: lockedProjectId } }))
+      .toBe(0);
+  });
 
   it('allows assigned PROJECT_CREATE user to update intake context before official baseline', async () => {
     const token = await login(emails.activeCreator);
