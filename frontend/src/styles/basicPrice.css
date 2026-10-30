@@ -401,6 +401,16 @@
   gap: 6px;
 }
 
+/* BP-EXPLORER-UI-03: one aligned row for collection and sorting. */
+.bp-tablebar__controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+  margin-left: auto;
+}
+
 .bp-tablewrap {
   width: 100%;
   overflow-x: auto;
@@ -438,6 +448,13 @@
   letter-spacing: 0.03em;
   text-transform: uppercase;
   white-space: nowrap;
+}
+
+/* BP-EXPLORER-UI-03: reuse the AHSP blue header, scoped to Explorer only. */
+.bp-table.bp-table--explorer thead th {
+  background: var(--simprok-trust-blue-500);
+  border-bottom-color: var(--simprok-trust-blue-500);
+  color: var(--simprok-white);
 }
 
 .bp-table tbody td {
