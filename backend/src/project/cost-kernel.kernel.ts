@@ -67,6 +67,56 @@ const parseNonNegativeDecimal = (value: string): Prisma.Decimal | null => {
   }
 };
 
+export type ResolvedResourceCostSum =
+  | { ok: true; total: Prisma.Decimal; resources: CalculatedResource[] }
+  | { ok: false; reason: CostCalculationReason };
+
+/**
+ * The one coefficient * adapted-price arithmetic authority. The complete BOQ
+ * kernel and the governed Alat Bantu basis both call this function, so the
+ * temporary estimate cannot acquire a second implementation or round early.
+ */
+export function sumResolvedResourceCosts(
+  ahspVersionId: string,
+  inputs: readonly CostKernelInput['resources'][number][],
+): ResolvedResourceCostSum {
+  let total = new Prisma.Decimal(0);
+  const resources: CalculatedResource[] = [];
+  for (const resource of inputs) {
+    if (resource.ahspVersionId !== ahspVersionId)
+      return {
+        ok: false,
+        reason: COST_CALCULATION_REASON.RESOURCE_AHSP_VERSION_MISMATCH,
+      };
+    if (resource.status !== 'RESOLVED')
+      return { ok: false, reason: COST_CALCULATION_REASON.UNRESOLVED_RESOURCE };
+    if (resource.adaptedPriceValue === null)
+      return {
+        ok: false,
+        reason: COST_CALCULATION_REASON.MISSING_ADAPTED_PRICE,
+      };
+    const coefficient = parsePositiveDecimal(resource.coefficient);
+    if (!coefficient)
+      return {
+        ok: false,
+        reason: COST_CALCULATION_REASON.INVALID_COEFFICIENT,
+      };
+    const adaptedPrice = parseNonNegativeDecimal(resource.adaptedPriceValue);
+    if (!adaptedPrice)
+      return { ok: false, reason: COST_CALCULATION_REASON.INVALID_DECIMAL };
+    const resourceCost = coefficient.mul(adaptedPrice);
+    total = total.add(resourceCost);
+    resources.push({
+      ahspResourceId: resource.ahspResourceId,
+      resolutionId: resource.resolutionId,
+      coefficient: coefficient.toString(),
+      adaptedUnitPrice: adaptedPrice.toString(),
+      resourceCost: resourceCost.toString(),
+    });
+  }
+  return { ok: true, total, resources };
+}
+
 /** Pure Grade A arithmetic over already-frozen resource resolutions. */
 export function calculateCostKernel(
   input: CostKernelInput,
@@ -98,39 +148,9 @@ export function calculateCostKernel(
   if (!volume)
     return fail(input.boqItemId, COST_CALCULATION_REASON.INVALID_VOLUME);
 
-  let ahspUnitPrice = new Prisma.Decimal(0);
-  const resources: CalculatedResource[] = [];
-  for (const resource of input.resources) {
-    if (resource.ahspVersionId !== input.ahspVersionId)
-      return fail(
-        input.boqItemId,
-        COST_CALCULATION_REASON.RESOURCE_AHSP_VERSION_MISMATCH,
-      );
-    if (resource.status !== 'RESOLVED')
-      return fail(input.boqItemId, COST_CALCULATION_REASON.UNRESOLVED_RESOURCE);
-    if (resource.adaptedPriceValue === null)
-      return fail(
-        input.boqItemId,
-        COST_CALCULATION_REASON.MISSING_ADAPTED_PRICE,
-      );
-
-    const coefficient = parsePositiveDecimal(resource.coefficient);
-    if (!coefficient)
-      return fail(input.boqItemId, COST_CALCULATION_REASON.INVALID_COEFFICIENT);
-    const adaptedPrice = parseNonNegativeDecimal(resource.adaptedPriceValue);
-    if (!adaptedPrice)
-      return fail(input.boqItemId, COST_CALCULATION_REASON.INVALID_DECIMAL);
-
-    const resourceCost = coefficient.mul(adaptedPrice);
-    ahspUnitPrice = ahspUnitPrice.add(resourceCost);
-    resources.push({
-      ahspResourceId: resource.ahspResourceId,
-      resolutionId: resource.resolutionId,
-      coefficient: coefficient.toString(),
-      adaptedUnitPrice: adaptedPrice.toString(),
-      resourceCost: resourceCost.toString(),
-    });
-  }
+  const sum = sumResolvedResourceCosts(input.ahspVersionId, input.resources);
+  if (!sum.ok) return fail(input.boqItemId, sum.reason);
+  const ahspUnitPrice = sum.total;
 
   return {
     status: COST_CALCULATION_STATUS.CALCULATED,
@@ -139,7 +159,7 @@ export function calculateCostKernel(
     occurrenceId: input.occurrenceId,
     volume: volume.toString(),
     outputUnit: unitIdentity.outputUnit,
-    resources,
+    resources: sum.resources,
     ahspUnitPrice: ahspUnitPrice.toString(),
     lineTotal: volume.mul(ahspUnitPrice).toString(),
     currency: 'IDR',

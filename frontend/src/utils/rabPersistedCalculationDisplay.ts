@@ -41,6 +41,7 @@ export interface PersistedCalculationResourceWire {
   coefficient: string;
   ahspUnit: string;
   selectedBasicPriceId: string | null;
+  priceMode?: string | null;
   sourcePriceValue: string | null;
   sourceUnit: string | null;
   adaptedPriceValue: string | null;
@@ -54,6 +55,16 @@ export interface PersistedCalculationResourceWire {
   reasonCodes: string[];
   explanation: string;
   policyVersion: string;
+  estimatePolicyId?: string | null;
+  estimatePolicyVersion?: number | null;
+  estimatePercent?: string | null;
+  estimateBasisAmount?: string | null;
+  estimateDerivedAmount?: string | null;
+  estimateApprovalReference?: string | null;
+  estimateApprovedByAccountId?: string | null;
+  estimateApprovedByPositionId?: string | null;
+  estimateAuthorityCode?: string | null;
+  estimateApprovedAt?: string | null;
   resourceCost: string;
 }
 
@@ -76,6 +87,7 @@ export interface PersistedCalculationWire {
     unitPriceMatches: boolean;
     lineTotalMatches: boolean;
     allResourceCostsReproduced: boolean;
+    allEstimateProvenanceReproduced?: boolean;
   };
   provenance?: {
     calculationOccurrenceId: string;

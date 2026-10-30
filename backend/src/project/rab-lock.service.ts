@@ -199,6 +199,39 @@ export class RabLockService {
       const now = currentByResource.get(frozen.ahspResourceId);
       const resourceLabel = frozen.rawAhspResourceRef;
 
+      if (frozen.priceMode === 'TEMPORARY_ESTIMATE') {
+        if (!now || now.status !== 'RESOLVED' || now.priceMode !== 'TEMPORARY_ESTIMATE') {
+          findings.push({ ...where, finding: PRELOCK_FINDING.AUXILIARY_ESTIMATE_UNAVAILABLE, detail: resourceLabel });
+          continue;
+        }
+        const sameDecimal = (left: unknown, right: unknown): boolean =>
+          left != null && right != null && new Prisma.Decimal(left as any).equals(new Prisma.Decimal(right as any));
+        const sameDate = (left: Date | null, right: unknown): boolean =>
+          left instanceof Date && right instanceof Date && left.getTime() === right.getTime();
+        if (
+          now.estimatePolicyId !== frozen.estimatePolicyId ||
+          now.estimatePolicyVersion !== frozen.estimatePolicyVersion ||
+          !sameDecimal(now.estimatePercent, frozen.estimatePercent) ||
+          !sameDecimal(now.estimateBasisAmount, frozen.estimateBasisAmount) ||
+          !sameDecimal(now.estimateDerivedAmount, frozen.estimateDerivedAmount) ||
+          now.estimateApprovalReference !== frozen.estimateApprovalReference ||
+          now.estimateApprovedByAccountId !== frozen.estimateApprovedByAccountId ||
+          now.estimateApprovedByPositionId !== frozen.estimateApprovedByPositionId ||
+          now.estimateAuthorityCode !== frozen.estimateAuthorityCode ||
+          !sameDate(frozen.estimateApprovedAt, now.estimateApprovedAt) ||
+          !sameDecimal(now.adaptedPriceValue, frozen.adaptedPriceValue)
+        ) {
+          findings.push({
+            ...where,
+            finding: PRELOCK_FINDING.AUXILIARY_ESTIMATE_DRIFTED,
+            detail: resourceLabel,
+            storedUnitPrice: frozen.adaptedPriceValue === null ? null : toDecimalString2(frozen.adaptedPriceValue),
+            currentUnitPrice: now.adaptedPriceValue == null ? null : toDecimalString2(String(now.adaptedPriceValue)),
+          });
+        }
+        continue;
+      }
+
       // The authority can no longer decide at all — ambiguity or a missing
       // price. SIMPROK does not choose on the Owner's behalf inside a freeze.
       if (!now || now.status === 'NEEDS_REVIEW') {

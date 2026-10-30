@@ -41,6 +41,7 @@ export type PriceOriginKind =
   | 'AUTO_SIMPROK'
   | 'MANUAL_INPUT'
   | 'USER_DATA'
+  | 'TEMPORARY_ESTIMATE'
   /**
    * NOT A FOURTH PRICE ORIGIN — nothing persists it and no enum grows.
    *
@@ -68,6 +69,7 @@ export interface PriceSourceAuthorityWire {
   ahspAuthoritative?: boolean | null;
   privateBasicPriceCount?: number | null;
   catalogBasicPriceCount?: number | null;
+  temporaryEstimateCount?: number | null;
 }
 
 export interface PriceOriginView {
@@ -109,7 +111,8 @@ const UNPRICED: PriceOriginView = {
  */
 const classifyCalculatedAuthority = (
   authority: PriceSourceAuthorityWire | null | undefined,
-): 'AUTO_SIMPROK' | 'USER_DATA' | 'UNDETERMINED' => {
+): 'AUTO_SIMPROK' | 'USER_DATA' | 'TEMPORARY_ESTIMATE' | 'UNDETERMINED' => {
+  if ((authority?.temporaryEstimateCount ?? 0) > 0) return 'TEMPORARY_ESTIMATE';
   if ((authority?.privateBasicPriceCount ?? 0) > 0) return 'USER_DATA';
   if (authority?.ahspAuthoritative === false) return 'USER_DATA';
   if (authority?.ahspAuthoritative === true) return 'AUTO_SIMPROK';
@@ -140,6 +143,14 @@ export const resolvePriceOrigin = (
 
   if (priceOrigin === 'SERVER_COST_KERNEL') {
     const authority = classifyCalculatedAuthority(options.authority);
+    if (authority === 'TEMPORARY_ESTIMATE') {
+      return withLineage({
+        kind: 'TEMPORARY_ESTIMATE',
+        label: 'Estimasi sementara',
+        explanation:
+          'Harga memuat estimasi sementara Alat Bantu dari kebijakan tergovernansi; ini bukan Basic Price katalog SIMPROK.',
+      });
+    }
     if (authority === 'AUTO_SIMPROK') {
       return withLineage({
         kind: 'AUTO_SIMPROK',
