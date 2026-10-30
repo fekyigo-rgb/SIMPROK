@@ -6,7 +6,8 @@ import {
   COST_CALCULATION_POLICY,
   COST_CALCULATION_STATUS,
 } from './cost-kernel.contracts';
-import { calculateCostKernel } from './cost-kernel.kernel';
+import { calculateCostKernel, sumResolvedResourceCosts } from './cost-kernel.kernel';
+import { frozenKernelAdaptedPrice } from './cost-kernel-resolution-price';
 import {
   PERSISTED_CALCULATION_REASON,
   PERSISTED_CALCULATION_STATUS,
@@ -147,7 +148,7 @@ export class PersistedCalculationService {
         status: resolution.status,
         ahspVersionId: resolution.originalResource.ahspVersionId,
         coefficient: resolution.ahspCoefficient.toString(),
-        adaptedPriceValue: resolution.adaptedPriceValue?.toString() ?? null,
+        adaptedPriceValue: frozenKernelAdaptedPrice(resolution),
       })),
     });
 
@@ -176,11 +177,11 @@ export class PersistedCalculationService {
       new Prisma.Decimal(item.lineTotal),
     );
 
+    const kernelResourceByResolutionId = new Map(
+      kernelResult.resources.map((resource) => [resource.resolutionId, resource]),
+    );
     const costByResolutionId = new Map(
-      kernelResult.resources.map((resource) => [
-        resource.resolutionId,
-        resource.resourceCost,
-      ]),
+      kernelResult.resources.map((resource) => [resource.resolutionId, resource.resourceCost]),
     );
 
     const resources: PersistedCalculationResource[] =
@@ -194,9 +195,15 @@ export class PersistedCalculationService {
         coefficient: resolution.ahspCoefficient.toString(),
         ahspUnit: resolution.ahspUnit,
         selectedBasicPriceId: resolution.selectedBasicPriceId,
+        priceMode:
+          resolution.priceMode ??
+          (resolution.selectedBasicPriceId === null ? null : 'BASIC_PRICE'),
         sourcePriceValue: resolution.sourcePriceValue?.toString() ?? null,
         sourceUnit: resolution.sourceUnit,
-        adaptedPriceValue: resolution.adaptedPriceValue?.toString() ?? null,
+        adaptedPriceValue:
+          resolution.priceMode === 'TEMPORARY_ESTIMATE'
+            ? kernelResourceByResolutionId.get(resolution.id)?.adaptedUnitPrice ?? null
+            : resolution.adaptedPriceValue?.toString() ?? null,
         canonicalUnit: resolution.canonicalUnit,
         quantityFactor: resolution.quantityFactor?.toString() ?? null,
         selectedSourceOrigin: resolution.selectedSourceOrigin,
@@ -209,16 +216,52 @@ export class PersistedCalculationService {
         reasonCodes: resolution.reasonCodes,
         explanation: resolution.explanation,
         policyVersion: resolution.policyVersion,
+        estimatePolicyId: resolution.estimatePolicyId,
+        estimatePolicyVersion: resolution.estimatePolicyVersion,
+        estimatePercent: resolution.estimatePercent?.toString() ?? null,
+        estimateBasisAmount: resolution.estimateBasisAmount?.toString() ?? null,
+        estimateDerivedAmount: resolution.estimateDerivedAmount?.toString() ?? null,
+        estimateApprovalReference: resolution.estimateApprovalReference,
+        estimateApprovedByAccountId: resolution.estimateApprovedByAccountId,
+        estimateApprovedByPositionId: resolution.estimateApprovedByPositionId,
+        estimateAuthorityCode: resolution.estimateAuthorityCode,
+        estimateApprovedAt: resolution.estimateApprovedAt?.toISOString() ?? null,
         resourceCost: costByResolutionId.get(resolution.id) ?? '0',
       }));
 
     const allResourceCostsReproduced = occurrence.resourceResolutions.every(
       (resolution) => costByResolutionId.has(resolution.id),
     );
+    const allEstimateProvenanceReproduced = occurrence.resourceResolutions
+      .filter((resolution) => resolution.priceMode === 'TEMPORARY_ESTIMATE')
+      .every((estimate) => {
+        if (
+          estimate.estimatePercent === null || estimate.estimateBasisAmount === null ||
+          estimate.estimateDerivedAmount === null || estimate.adaptedPriceValue === null ||
+          estimate.selectedBasicPriceId !== null || estimate.sourcePriceValue !== null
+        ) return false;
+        const basis = sumResolvedResourceCosts(
+          occurrence.ahspVersionId,
+          occurrence.resourceResolutions
+            .filter((resolution) => resolution.id !== estimate.id)
+            .map((resolution) => ({
+              ahspResourceId: resolution.ahspResourceId,
+              resolutionId: resolution.id,
+              status: resolution.status,
+              ahspVersionId: resolution.originalResource.ahspVersionId,
+              coefficient: resolution.ahspCoefficient.toString(),
+              adaptedPriceValue: frozenKernelAdaptedPrice(resolution),
+            })),
+        );
+        if (!basis.ok || !basis.total.equals(estimate.estimateBasisAmount)) return false;
+        const exact = basis.total.mul(estimate.estimatePercent).div(100);
+        return exact.equals(estimate.estimateDerivedAmount) &&
+          exact.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP).equals(estimate.adaptedPriceValue);
+      });
 
     return {
       status:
-        unitPriceMatches && lineTotalMatches && allResourceCostsReproduced
+        unitPriceMatches && lineTotalMatches && allResourceCostsReproduced && allEstimateProvenanceReproduced
           ? PERSISTED_CALCULATION_STATUS.VERIFIED
           : PERSISTED_CALCULATION_STATUS.MISMATCH,
       boqItemId: item.id,
@@ -237,6 +280,9 @@ export class PersistedCalculationService {
         unitPriceMatches,
         lineTotalMatches,
         allResourceCostsReproduced,
+        ...(occurrence.resourceResolutions.some((resolution) => resolution.priceMode === 'TEMPORARY_ESTIMATE')
+          ? { allEstimateProvenanceReproduced }
+          : {}),
       },
       /**
        * WHOSE DATA FORMED THIS PRICE.
@@ -270,6 +316,9 @@ export class PersistedCalculationService {
         catalogBasicPriceCount: occurrence.resourceResolutions.filter(
           (resolution) =>
             resolution.selectedBasicPrice?.assetScope === 'SIMPROK_CATALOG',
+        ).length,
+        temporaryEstimateCount: occurrence.resourceResolutions.filter(
+          (resolution) => resolution.priceMode === 'TEMPORARY_ESTIMATE',
         ).length,
       },
       provenance: {

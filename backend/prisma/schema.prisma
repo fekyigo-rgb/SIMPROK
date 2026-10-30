@@ -28,37 +28,38 @@ model Account {
 
   memberships                                 WorkspaceMembership[]
   intelligenceEvidence                        IntelligenceEvidence[]
-  verifiedBasicPriceSourceEquivalences        BasicPriceSourceEquivalence[]        @relation("BasicPriceSourceEquivalenceVerifiedBy")
-  reviewedBasicPriceImportRowResourceMappings BasicPriceImportRowResourceMapping[] @relation("BasicPriceImportRowResourceMappingReviewer")
-  basicPriceMappingReasonClarifications BasicPriceImportRowMappingReasonClarification[] @relation("BasicPriceMappingReasonClarificationActor")
-  basicPriceRowCompensations                  BasicPriceImportRowResolutionCompensation[] @relation("BasicPriceImportRowCompensationActor")
-  resourceCatalogNameCorrections             ResourceCatalogNameCorrection[] @relation("ResourceCatalogNameCorrectionActor")
-  basicPriceRejectedReviewReopens             BasicPriceImportRowRejectedReviewReopen[] @relation("BasicPriceRejectedReviewReopenActor")
-  basicPriceCategoryDecisions                  BasicPriceImportRowCategoryDecision[] @relation("BasicPriceImportRowCategoryActor")
-  basicPriceSpecificationDecisions             BasicPriceImportRowSpecificationDecision[] @relation("BasicPriceImportRowSpecificationActor")
-  basicPricePublicationAudits                 BasicPricePublicationAudit[]         @relation("BasicPricePublicationAuditActor")
-  basicPriceProvenanceCorrections             BasicPriceProvenanceCorrection[]     @relation("BasicPriceProvenanceCorrectionActor")
-  lockedRabDocuments                          RabDocument[]                        @relation("RabDocumentLockedBy")
-  capturedProjectAhspOccurrences              ProjectAhspOccurrence[]              @relation("ProjectAhspOccurrenceContextCapturedBy")
-  recordedProgressEntries                     ProgressEntry[]                      @relation("ProgressEntryRecorder")
-  progressAuditEvents                         ProgressAuditEvent[]                 @relation("ProgressAuditActor")
-  executionPlansCreated                       ExecutionPlanVersion[]               @relation("ExecutionPlanCreatedBy")
-  executionPlansEdited                        ExecutionPlanVersion[]               @relation("ExecutionPlanLastEditedBy")
-  executionPlansLocked                        ExecutionPlanVersion[]               @relation("ExecutionPlanLockedBy")
+  verifiedBasicPriceSourceEquivalences        BasicPriceSourceEquivalence[]                   @relation("BasicPriceSourceEquivalenceVerifiedBy")
+  reviewedBasicPriceImportRowResourceMappings BasicPriceImportRowResourceMapping[]            @relation("BasicPriceImportRowResourceMappingReviewer")
+  basicPriceMappingReasonClarifications       BasicPriceImportRowMappingReasonClarification[] @relation("BasicPriceMappingReasonClarificationActor")
+  basicPriceRowCompensations                  BasicPriceImportRowResolutionCompensation[]     @relation("BasicPriceImportRowCompensationActor")
+  resourceCatalogNameCorrections              ResourceCatalogNameCorrection[]                 @relation("ResourceCatalogNameCorrectionActor")
+  basicPriceRejectedReviewReopens             BasicPriceImportRowRejectedReviewReopen[]       @relation("BasicPriceRejectedReviewReopenActor")
+  basicPriceCategoryDecisions                 BasicPriceImportRowCategoryDecision[]           @relation("BasicPriceImportRowCategoryActor")
+  basicPriceSpecificationDecisions            BasicPriceImportRowSpecificationDecision[]      @relation("BasicPriceImportRowSpecificationActor")
+  basicPricePublicationAudits                 BasicPricePublicationAudit[]                    @relation("BasicPricePublicationAuditActor")
+  basicPriceProvenanceCorrections             BasicPriceProvenanceCorrection[]                @relation("BasicPriceProvenanceCorrectionActor")
+  lockedRabDocuments                          RabDocument[]                                   @relation("RabDocumentLockedBy")
+  capturedProjectAhspOccurrences              ProjectAhspOccurrence[]                         @relation("ProjectAhspOccurrenceContextCapturedBy")
+  recordedProgressEntries                     ProgressEntry[]                                 @relation("ProgressEntryRecorder")
+  progressAuditEvents                         ProgressAuditEvent[]                            @relation("ProgressAuditActor")
+  executionPlansCreated                       ExecutionPlanVersion[]                          @relation("ExecutionPlanCreatedBy")
+  executionPlansEdited                        ExecutionPlanVersion[]                          @relation("ExecutionPlanLastEditedBy")
+  executionPlansLocked                        ExecutionPlanVersion[]                          @relation("ExecutionPlanLockedBy")
   projectTimeZoneEvents                       ProjectTimeZoneEvent[]
-  ahspResourceIdentityDecisions               AhspResourceIdentityDecision[]       @relation("AhspResourceIdentityDecisionActor")
-  resourceIdentityQuestionDecisions           ResourceIdentityQuestionDecision[]   @relation("ResourceIdentityQuestionDecisionActor")
-  observedResourceNameReviews                 ObservedResourceNameReview[]          @relation("ObservedResourceNameReviewActor")
-  ingestionConnectorsActingFor                IngestionConnector[]                 @relation("IngestionConnectorActsOnBehalfOf")
+  ahspResourceIdentityDecisions               AhspResourceIdentityDecision[]                  @relation("AhspResourceIdentityDecisionActor")
+  resourceIdentityQuestionDecisions           ResourceIdentityQuestionDecision[]              @relation("ResourceIdentityQuestionDecisionActor")
+  observedResourceNameReviews                 ObservedResourceNameReview[]                    @relation("ObservedResourceNameReviewActor")
+  ingestionConnectorsActingFor                IngestionConnector[]                            @relation("IngestionConnectorActsOnBehalfOf")
   /// Platform governance, as SUBJECT and as EXECUTOR — two distinct roles that
   /// must never collapse into one relation.
-  platformAuthoritiesHeld                     PlatformGovernanceDecision[]         @relation("PlatformGovernanceHolder")
-  platformGovernanceCeremoniesExecuted        PlatformGovernanceDecision[]         @relation("PlatformGovernanceExecutor")
+  platformAuthoritiesHeld                     PlatformGovernanceDecision[]                    @relation("PlatformGovernanceHolder")
+  platformGovernanceCeremoniesExecuted        PlatformGovernanceDecision[]                    @relation("PlatformGovernanceExecutor")
   /// EXECUTOR ONLY — never the subject. An Account performs an authority
   /// ceremony; the Position receives the power. The two never collapse.
-  authorityGovernanceCeremoniesExecuted       AuthorityGovernanceDecision[]        @relation("AuthorityGovernanceExecutor")
-  intakeRequests                              IntakeRequest[]                      @relation("IntakeRequestRequester")
-  approvedBoqBusinessUseEvents                BoqBusinessUseEvent[]                @relation("BoqBusinessUseApprover")
+  authorityGovernanceCeremoniesExecuted       AuthorityGovernanceDecision[]                   @relation("AuthorityGovernanceExecutor")
+  intakeRequests                              IntakeRequest[]                                 @relation("IntakeRequestRequester")
+  approvedBoqBusinessUseEvents                BoqBusinessUseEvent[]                           @relation("BoqBusinessUseApprover")
+  approvedAuxiliaryEquipmentEstimatePolicies  AuxiliaryEquipmentEstimatePolicy[]              @relation("AuxiliaryEstimatePolicyApprover")
 
   @@map("accounts")
 }
@@ -82,8 +83,8 @@ model Organization {
   priceSubmissionReviews PriceSubmissionReview[]
   intelligenceEvidence   IntelligenceEvidence[]
   ingestionConnectors    IngestionConnector[]
-  intakeRequests        IntakeRequest[]
-  boqBusinessUseEvents  BoqBusinessUseEvent[]
+  intakeRequests         IntakeRequest[]
+  boqBusinessUseEvents   BoqBusinessUseEvent[]
 
   @@map("organizations")
 }
@@ -105,41 +106,42 @@ model Workspace {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  organization                      Organization                       @relation(fields: [organizationId], references: [id])
-  memberships                       WorkspaceMembership[]
-  roles                             Role[]
-  positions                         Position[]
-  approvalMatrices                  ApprovalMatrix[]
-  projects                          Project[]
-  stakeholderBridges                ProjectStakeholder[]
-  ahsps                             AHSP[]
-  ahspVersions                      AHSPVersion[]
-  ahspSnapshots                     AHSPSnapshot[]
-  resourceCatalogs                  ResourceCatalog[]
+  organization                       Organization                                @relation(fields: [organizationId], references: [id])
+  memberships                        WorkspaceMembership[]
+  roles                              Role[]
+  positions                          Position[]
+  approvalMatrices                   ApprovalMatrix[]
+  projects                           Project[]
+  stakeholderBridges                 ProjectStakeholder[]
+  ahsps                              AHSP[]
+  ahspVersions                       AHSPVersion[]
+  ahspSnapshots                      AHSPSnapshot[]
+  resourceCatalogs                   ResourceCatalog[]
   resourceCatalogNameCorrections     ResourceCatalogNameCorrection[]
-  observedResources                 ObservedResource[]
-  basicPrices                       BasicPrice[]
-  priceSubmissions                  PriceSubmission[]
-  priceSubmissionReviews            PriceSubmissionReview[]
-  intelligenceEvidence              IntelligenceEvidence[]
-  projectAhspOccurrences            ProjectAhspOccurrence[]
-  resourceSourceIdentities          ResourceSourceIdentity[]
-  basicPriceSourceEquivalences      BasicPriceSourceEquivalence[]
-  basicPriceProvenanceCorrections   BasicPriceProvenanceCorrection[]
-  basicPriceRowCompensations          BasicPriceImportRowResolutionCompensation[]
-  basicPriceRejectedReviewReopens     BasicPriceImportRowRejectedReviewReopen[]
-  basicPriceCategoryDecisions          BasicPriceImportRowCategoryDecision[]
-  basicPriceSpecificationDecisions     BasicPriceImportRowSpecificationDecision[]
-  progressAuditEvents               ProgressAuditEvent[]               @relation("ProgressAuditWorkspace")
-  projectTimeZoneEvents             ProjectTimeZoneEvent[]
-  ahspResourceIdentityDecisions     AhspResourceIdentityDecision[]
-  resourceIdentityQuestionDecisions ResourceIdentityQuestionDecision[]
-  ingestionConnectors               IngestionConnector[]
-  ahspImportJobs                    AHSPImportJob[]
-  ahspImportUnitDecisions           AhspImportUnitDecision[]
-  constructionClassificationNodes   ConstructionClassificationNode[]
-  intakeRequests                    IntakeRequest[]
-  boqBusinessUseEvents              BoqBusinessUseEvent[]
+  observedResources                  ObservedResource[]
+  basicPrices                        BasicPrice[]
+  priceSubmissions                   PriceSubmission[]
+  priceSubmissionReviews             PriceSubmissionReview[]
+  intelligenceEvidence               IntelligenceEvidence[]
+  projectAhspOccurrences             ProjectAhspOccurrence[]
+  resourceSourceIdentities           ResourceSourceIdentity[]
+  basicPriceSourceEquivalences       BasicPriceSourceEquivalence[]
+  basicPriceProvenanceCorrections    BasicPriceProvenanceCorrection[]
+  basicPriceRowCompensations         BasicPriceImportRowResolutionCompensation[]
+  basicPriceRejectedReviewReopens    BasicPriceImportRowRejectedReviewReopen[]
+  basicPriceCategoryDecisions        BasicPriceImportRowCategoryDecision[]
+  basicPriceSpecificationDecisions   BasicPriceImportRowSpecificationDecision[]
+  progressAuditEvents                ProgressAuditEvent[]                        @relation("ProgressAuditWorkspace")
+  projectTimeZoneEvents              ProjectTimeZoneEvent[]
+  ahspResourceIdentityDecisions      AhspResourceIdentityDecision[]
+  resourceIdentityQuestionDecisions  ResourceIdentityQuestionDecision[]
+  ingestionConnectors                IngestionConnector[]
+  ahspImportJobs                     AHSPImportJob[]
+  ahspImportUnitDecisions            AhspImportUnitDecision[]
+  constructionClassificationNodes    ConstructionClassificationNode[]
+  intakeRequests                     IntakeRequest[]
+  boqBusinessUseEvents               BoqBusinessUseEvent[]
+  auxiliaryEquipmentEstimatePolicies AuxiliaryEquipmentEstimatePolicy[]
 
   @@index([organizationId])
   @@map("workspaces")
@@ -296,22 +298,23 @@ model Position {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  workspace                    Workspace                     @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  parentPosition               Position?                     @relation("PositionToParent", fields: [parentPositionId], references: [id])
-  childPositions               Position[]                    @relation("PositionToParent")
-  assignments                  PositionAssignment[]
-  approvalMatrices             ApprovalMatrix[]
-  positionAuthorities          PositionAuthority[]
-  projectBaselines             ProjectBaseline[]
-  projectRisks                 ProjectRisk[]
-  formalDecisions              FormalDecision[]
-  progressAuditEvents          ProgressAuditEvent[]          @relation("ProgressAuditPosition")
-  lockedExecutionPlans         ExecutionPlanVersion[]        @relation("ExecutionPlanLockedByPosition")
+  workspace                                  Workspace                          @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  parentPosition                             Position?                          @relation("PositionToParent", fields: [parentPositionId], references: [id])
+  childPositions                             Position[]                         @relation("PositionToParent")
+  assignments                                PositionAssignment[]
+  approvalMatrices                           ApprovalMatrix[]
+  positionAuthorities                        PositionAuthority[]
+  projectBaselines                           ProjectBaseline[]
+  projectRisks                               ProjectRisk[]
+  formalDecisions                            FormalDecision[]
+  progressAuditEvents                        ProgressAuditEvent[]               @relation("ProgressAuditPosition")
+  lockedExecutionPlans                       ExecutionPlanVersion[]             @relation("ExecutionPlanLockedByPosition")
   /// THE SEAT AS SUBJECT. A Position is granted or loses an Authority; the
   /// person occupying it reaches that power through PositionAssignment. This is
   /// the governed history of those grants — never the current state, which
   /// remains `positionAuthorities`.
-  authorityGovernanceDecisions AuthorityGovernanceDecision[]
+  authorityGovernanceDecisions               AuthorityGovernanceDecision[]
+  approvedAuxiliaryEquipmentEstimatePolicies AuxiliaryEquipmentEstimatePolicy[] @relation("AuxiliaryEstimatePolicyPosition")
 
   @@index([workspaceId])
   @@map("positions")
@@ -325,8 +328,9 @@ model PositionAssignment {
   removedAt  DateTime?
   isActive   Boolean   @default(true)
 
-  position Position @relation(fields: [positionId], references: [id], onDelete: Cascade)
-  user     User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  position                                   Position                           @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  user                                       User                               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  approvedAuxiliaryEquipmentEstimatePolicies AuxiliaryEquipmentEstimatePolicy[] @relation("AuxiliaryEstimatePolicyAssignment")
 
   @@index([userId])
   @@index([positionId])
@@ -382,31 +386,31 @@ model Project {
   createdAt        DateTime      @default(now())
   updatedAt        DateTime      @updatedAt
 
-  workspace            Workspace               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  organization         Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  contracts            ProjectContract[]
-  stakeholders         ProjectStakeholder[]
-  assignments          ProjectAssignment[]
-  wbsNodes             WbsNode[]
-  boqStructures        BoqStructure[]
-  rabDocuments         RabDocument[]
-  baselines            ProjectBaseline[]
-  progressReports      ProgressReport[]
-  deviationSignals     DeviationSignal[]
-  risks                ProjectRisk[]
-  forecasts            ProjectForecast[]
-  recommendations      Recommendation[]
-  formalDecisions      FormalDecision[]
-  intelligenceEvidence IntelligenceEvidence[]
-  ahspOccurrences      ProjectAhspOccurrence[]
-  progressAuditEvents  ProgressAuditEvent[]
-  timeZoneEvents       ProjectTimeZoneEvent[]
-  executionPlans       ExecutionPlanVersion[]
-  intakeJobs           IntakeJob[]
-  intakeRequests       IntakeRequest[]
-  boqBusinessUseEvents BoqBusinessUseEvent[]
+  workspace                Workspace                        @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  organization             Organization                     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  contracts                ProjectContract[]
+  stakeholders             ProjectStakeholder[]
+  assignments              ProjectAssignment[]
+  wbsNodes                 WbsNode[]
+  boqStructures            BoqStructure[]
+  rabDocuments             RabDocument[]
+  baselines                ProjectBaseline[]
+  progressReports          ProgressReport[]
+  deviationSignals         DeviationSignal[]
+  risks                    ProjectRisk[]
+  forecasts                ProjectForecast[]
+  recommendations          Recommendation[]
+  formalDecisions          FormalDecision[]
+  intelligenceEvidence     IntelligenceEvidence[]
+  ahspOccurrences          ProjectAhspOccurrence[]
+  progressAuditEvents      ProgressAuditEvent[]
+  timeZoneEvents           ProjectTimeZoneEvent[]
+  executionPlans           ExecutionPlanVersion[]
+  intakeJobs               IntakeJob[]
+  intakeRequests           IntakeRequest[]
+  boqBusinessUseEvents     BoqBusinessUseEvent[]
   classificationSelections ProjectClassificationSelection[]
-  regionSelections     ProjectRegionSelection[]
+  regionSelections         ProjectRegionSelection[]
 
   @@unique([workspaceId, code])
   @@index([workspaceId])
@@ -798,7 +802,7 @@ model AHSP {
   classification String?
   /// Free note beside Kode on Manual identity. Not Dasar, Penerbit, or formula.
   /// Nullable: absent means the author stated none. Not a versioned recipe fact.
-  keterangan     String?  @db.Text
+  keterangan     String? @db.Text
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -839,18 +843,18 @@ model AHSP {
   /// commits. Restrict: the bound snapshot is not deleted out from under a review.
   proposalSnapshotId String? @unique @db.Uuid
 
-  workspace                  Workspace? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace                  Workspace?    @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   proposalSnapshot           AHSPSnapshot? @relation("AhspProposalSubject", fields: [proposalSnapshotId], references: [id], onDelete: Restrict)
-  createdByUser              User?      @relation("AHSPCreatedBy", fields: [createdByUserId], references: [id])
-  approvedByUser             User?      @relation("AHSPApprovedBy", fields: [approvedByUserId], references: [id])
-  ownershipTransferredByUser User?      @relation("AHSPOwnershipTransferredBy", fields: [ownershipTransferredByUserId], references: [id])
-  archivedByUser             User?      @relation("AHSPArchivedBy", fields: [archivedByUserId], references: [id])
-  deletedByUser              User?      @relation("AHSPDeletedBy", fields: [deletedByUserId], references: [id])
+  createdByUser              User?         @relation("AHSPCreatedBy", fields: [createdByUserId], references: [id])
+  approvedByUser             User?         @relation("AHSPApprovedBy", fields: [approvedByUserId], references: [id])
+  ownershipTransferredByUser User?         @relation("AHSPOwnershipTransferredBy", fields: [ownershipTransferredByUserId], references: [id])
+  archivedByUser             User?         @relation("AHSPArchivedBy", fields: [archivedByUserId], references: [id])
+  deletedByUser              User?         @relation("AHSPDeletedBy", fields: [deletedByUserId], references: [id])
 
-  versions   AHSPVersion[]
-  snapshots  AHSPSnapshot[]
-  importJobs AHSPImportJob[]
-  auditLogs  AHSPAuditLog[]
+  versions                  AHSPVersion[]
+  snapshots                 AHSPSnapshot[]
+  importJobs                AHSPImportJob[]
+  auditLogs                 AHSPAuditLog[]
   /// Product Law v1.4 — durable multi-path classification. Scalars above remain
   /// legacy display/backward-compat only; they are NOT the path assignment truth.
   classificationAssignments AhspClassificationAssignment[]
@@ -886,14 +890,15 @@ model AHSPVersion {
   createdAt              DateTime          @default(now())
   updatedAt              DateTime          @updatedAt
 
-  ahsp                   AHSP                    @relation(fields: [ahspId], references: [id], onDelete: Cascade)
-  workspace              Workspace?              @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  resources              AHSPResource[]
-  snapshots              AHSPSnapshot[]
-  auditLogs              AHSPAuditLog[]
-  BoqItem                BoqItem[]
-  projectAhspOccurrences ProjectAhspOccurrence[]
-  outputUnitDefinition   UnitDefinition?         @relation("AHSPVersionOutputUnit", fields: [outputUnitDefinitionId], references: [id], onDelete: Restrict)
+  ahsp                               AHSP                               @relation(fields: [ahspId], references: [id], onDelete: Cascade)
+  workspace                          Workspace?                         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  resources                          AHSPResource[]
+  snapshots                          AHSPSnapshot[]
+  auditLogs                          AHSPAuditLog[]
+  BoqItem                            BoqItem[]
+  projectAhspOccurrences             ProjectAhspOccurrence[]
+  auxiliaryEquipmentEstimatePolicies AuxiliaryEquipmentEstimatePolicy[]
+  outputUnitDefinition               UnitDefinition?                    @relation("AHSPVersionOutputUnit", fields: [outputUnitDefinitionId], references: [id], onDelete: Restrict)
 
   @@unique([ahspId, versionNumber])
   @@index([ahspId])
@@ -1165,20 +1170,20 @@ model AHSPImportJob {
   updatedAt      DateTime     @updatedAt
 
   /// Tenant scope. Nullable only because a row may predate the journal.
-  workspaceId              String? @db.Uuid
-  sourceSha256             String? @db.VarChar(64)
-  sourceFileName           String?
-  parserContractVersion    String?
-  knowledgeContractVersion String?
+  workspaceId                   String? @db.Uuid
+  sourceSha256                  String? @db.VarChar(64)
+  sourceFileName                String?
+  parserContractVersion         String?
+  knowledgeContractVersion      String?
   /// The document-level half of the knowledge as READ — contractVersion, source,
   /// document, status and reasonCodes; the work items live one per line. Stored
   /// once, never re-derived.
-  documentKnowledge        Json?
+  documentKnowledge             Json?
   /// Product Law v1.4 assisted Import — human/source classification + Dasar/
   /// Penerbit declarations BEFORE AHSP materialization. Does not alter source
   /// identity. Applied via AhspClassificationAssignmentService after write.
   assistedClassificationContext Json?
-  createdByUserId          String? @db.Uuid
+  createdByUserId               String? @db.Uuid
 
   ahsp          AHSP?                    @relation(fields: [ahspId], references: [id], onDelete: Cascade)
   workspace     Workspace?               @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
@@ -1251,10 +1256,10 @@ model AhspImportUnitDecision {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  workspace      Workspace       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  importJob      AHSPImportJob   @relation(fields: [importJobId], references: [id], onDelete: Cascade)
-  importLine     AHSPImportLine  @relation(fields: [importLineId], references: [id], onDelete: Cascade)
-  unitDefinition UnitDefinition  @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
+  workspace      Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  importJob      AHSPImportJob  @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+  importLine     AHSPImportLine @relation(fields: [importLineId], references: [id], onDelete: Cascade)
+  unitDefinition UnitDefinition @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
 
   @@unique([importLineId, occurrenceKey])
   @@index([workspaceId, importJobId])
@@ -1304,14 +1309,14 @@ model AHSPSnapshot {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  workspace                  Workspace?             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  ahsp                       AHSP                   @relation(fields: [sourceAhspId], references: [id])
-  ahspVersion                AHSPVersion            @relation(fields: [sourceVersionId], references: [id])
-  resources                  AHSPSnapshotResource[]
-  classificationAssignments  AhspSnapshotClassificationAssignment[]
-  proposalFor                AHSP?                  @relation("AhspProposalSubject")
-  boqItems                   BoqItem[]
-  outputUnitDefinition UnitDefinition?        @relation("AHSPSnapshotOutputUnit", fields: [outputUnitDefinitionId], references: [id], onDelete: Restrict)
+  workspace                 Workspace?                             @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  ahsp                      AHSP                                   @relation(fields: [sourceAhspId], references: [id])
+  ahspVersion               AHSPVersion                            @relation(fields: [sourceVersionId], references: [id])
+  resources                 AHSPSnapshotResource[]
+  classificationAssignments AhspSnapshotClassificationAssignment[]
+  proposalFor               AHSP?                                  @relation("AhspProposalSubject")
+  boqItems                  BoqItem[]
+  outputUnitDefinition      UnitDefinition?                        @relation("AHSPSnapshotOutputUnit", fields: [outputUnitDefinitionId], references: [id], onDelete: Restrict)
 
   @@unique([sourceAhspId, sourceVersionId, snapshotDate])
   @@index([workspaceId])
@@ -1348,8 +1353,8 @@ model AhspSnapshotClassificationAssignment {
   provenance   AhspClassificationAssignmentProvenance
   createdAt    DateTime                               @default(now())
 
-  snapshot   AHSPSnapshot                 @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
-  assignment AhspClassificationAssignment @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
+  snapshot   AHSPSnapshot                   @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+  assignment AhspClassificationAssignment   @relation(fields: [assignmentId], references: [id], onDelete: Restrict)
   leafNode   ConstructionClassificationNode @relation(fields: [leafNodeId], references: [id], onDelete: Restrict)
 
   @@unique([snapshotId, assignmentId])
@@ -1422,8 +1427,9 @@ model PositionAuthority {
   isActive    Boolean   @default(true)
   revokedAt   DateTime?
 
-  position  Position  @relation(fields: [positionId], references: [id], onDelete: Cascade)
-  authority Authority @relation(fields: [authorityId], references: [id], onDelete: Cascade)
+  position                                   Position                           @relation(fields: [positionId], references: [id], onDelete: Cascade)
+  authority                                  Authority                          @relation(fields: [authorityId], references: [id], onDelete: Cascade)
+  approvedAuxiliaryEquipmentEstimatePolicies AuxiliaryEquipmentEstimatePolicy[] @relation("AuxiliaryEstimatePolicyAuthority")
 
   @@unique([positionId, authorityId])
   @@index([positionId])
@@ -1650,7 +1656,7 @@ model ResourceCatalog {
   updatedAt      DateTime     @updatedAt
 
   basicPrices                    BasicPrice[]
-  workspace                      Workspace?                           @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  workspace                      Workspace?                                  @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   priceSubmissions               PriceSubmission[]
   canonicalPricePoints           CanonicalPricePoint[]
   projectAhspResourceResolutions ProjectAhspResourceResolution[]
@@ -1658,8 +1664,8 @@ model ResourceCatalog {
   basicPriceImportRows           BasicPriceImportRow[]
   sourceIdentities               ResourceSourceIdentity[]
   importRowResourceMappings      BasicPriceImportRowResourceMapping[]
-  nameCorrections                 ResourceCatalogNameCorrection[]
-  basicPriceRowCompensations      BasicPriceImportRowResolutionCompensation[]
+  nameCorrections                ResourceCatalogNameCorrection[]
+  basicPriceRowCompensations     BasicPriceImportRowResolutionCompensation[]
 
   ahspResourceIdentityDecisions     AhspResourceIdentityDecision[]
   observedResources                 ObservedResource[]
@@ -1674,8 +1680,8 @@ model ResourceCatalog {
 }
 
 /// BP-C3: append-only proof of a curator-authorized nomenclature correction.
- /// The resource ID, type, unit and technical specifications stay unchanged.
- /// Source observations, Basic Prices and AHSP/BOQ references are never rewritten.
+/// The resource ID, type, unit and technical specifications stay unchanged.
+/// Source observations, Basic Prices and AHSP/BOQ references are never rewritten.
 model ResourceCatalogNameCorrection {
   id                String   @id @default(uuid()) @db.Uuid
   workspaceId       String   @db.Uuid
@@ -1770,7 +1776,7 @@ model ObservedResource {
   identityQuestionDecisions ResourceIdentityQuestionDecision[]
   /// Spelling interpretations are append-only events. They never replace the
   /// original source spelling or become an identity decision by themselves.
-  nameReviews              ObservedResourceNameReview[]
+  nameReviews               ObservedResourceNameReview[]
 
   /// One import row is observed once. Nulls in provenance make hand-built rows
   /// distinct (Postgres NULL semantics), which is correct: only a real,
@@ -2019,15 +2025,15 @@ model PriceSubmission {
   createdAt           DateTime              @default(now())
   updatedAt           DateTime              @updatedAt
 
-  resource        ResourceCatalog           @relation(fields: [resourceId], references: [id], onDelete: Cascade)
-  workspace       Workspace?                @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  region          Region?                   @relation(fields: [regionId], references: [id], onDelete: Restrict)
+  resource          ResourceCatalog              @relation(fields: [resourceId], references: [id], onDelete: Cascade)
+  workspace         Workspace?                   @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  region            Region?                      @relation(fields: [regionId], references: [id], onDelete: Restrict)
   regionCoverageSet BasicPriceRegionCoverageSet? @relation(fields: [regionCoverageSetId], references: [id], onDelete: Restrict)
-  revisions       PriceSubmissionRevision[]
-  audits          PriceSubmissionAudit[]
-  publishedPrices BasicPrice[]
-  review          PriceSubmissionReview?
-  importRow       BasicPriceImportRow?
+  revisions         PriceSubmissionRevision[]
+  audits            PriceSubmissionAudit[]
+  publishedPrices   BasicPrice[]
+  review            PriceSubmissionReview?
+  importRow         BasicPriceImportRow?
 
   @@index([workspaceId])
   @@index([workspaceId, organizationId])
@@ -2146,8 +2152,8 @@ model SourceDocument {
   storageRef          String
   createdAt           DateTime @default(now())
 
-  intakeJobs     IntakeJob[]
-  intakeRequests IntakeRequest[]
+  intakeJobs           IntakeJob[]
+  intakeRequests       IntakeRequest[]
   boqBusinessUseEvents BoqBusinessUseEvent[]
 
   @@index([workspaceId])
@@ -2178,11 +2184,11 @@ model IntakeJob {
   createdAt               DateTime        @default(now())
   updatedAt               DateTime        @updatedAt
 
-  sourceDocument      SourceDocument       @relation(fields: [sourceDocumentId], references: [id], onDelete: Restrict)
-  project             Project?             @relation(fields: [projectId], references: [id], onDelete: Restrict)
-  extractionArtifacts ExtractionArtifact[]
-  candidates          KnowledgeCandidate[]
-  intakeRequests      IntakeRequest[]
+  sourceDocument       SourceDocument        @relation(fields: [sourceDocumentId], references: [id], onDelete: Restrict)
+  project              Project?              @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  extractionArtifacts  ExtractionArtifact[]
+  candidates           KnowledgeCandidate[]
+  intakeRequests       IntakeRequest[]
   boqBusinessUseEvents BoqBusinessUseEvent[]
 
   @@unique([idempotencyKey])
@@ -2208,12 +2214,12 @@ model IntakeRequest {
   correlationId          String   @unique
   createdAt              DateTime @default(now())
 
-  sourceDocument    SourceDocument @relation(fields: [sourceDocumentId], references: [id], onDelete: Restrict)
-  intakeJob         IntakeJob?     @relation(fields: [intakeJobId], references: [id], onDelete: Restrict)
-  requestingAccount Account        @relation("IntakeRequestRequester", fields: [requestingAccountId], references: [id], onDelete: Restrict)
-  workspace         Workspace      @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  organization      Organization   @relation(fields: [organizationId], references: [id], onDelete: Restrict)
-  project           Project        @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  sourceDocument       SourceDocument        @relation(fields: [sourceDocumentId], references: [id], onDelete: Restrict)
+  intakeJob            IntakeJob?            @relation(fields: [intakeJobId], references: [id], onDelete: Restrict)
+  requestingAccount    Account               @relation("IntakeRequestRequester", fields: [requestingAccountId], references: [id], onDelete: Restrict)
+  workspace            Workspace             @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  organization         Organization          @relation(fields: [organizationId], references: [id], onDelete: Restrict)
+  project              Project               @relation(fields: [projectId], references: [id], onDelete: Restrict)
   boqBusinessUseEvents BoqBusinessUseEvent[]
 
   @@index([sourceDocumentId])
@@ -2569,7 +2575,7 @@ enum ConstructionClassificationLevel {
 }
 
 model ConstructionClassificationNode {
-  id             String                           @id @default(uuid()) @db.Uuid
+  id             String                          @id @default(uuid()) @db.Uuid
   level          ConstructionClassificationLevel
   name           String
   /// NFKC + lower + collapsed whitespace — identity key companion to name.
@@ -2577,17 +2583,17 @@ model ConstructionClassificationNode {
   code           String?
   /// NULL only for JENIS_PENGADAAN roots. RESTRICT: parent with children cannot
   /// be deleted out from under them. Self-parent refused by CHECK.
-  parentId       String?                          @db.Uuid
+  parentId       String?                         @db.Uuid
   /// NULL = GLOBAL/SHARED canonical node. Non-null = WORKSPACE/LOCAL custom.
-  workspaceId    String?                          @db.Uuid
-  isActive       Boolean                          @default(true)
-  createdAt      DateTime                         @default(now())
-  updatedAt      DateTime                         @updatedAt
+  workspaceId    String?                         @db.Uuid
+  isActive       Boolean                         @default(true)
+  createdAt      DateTime                        @default(now())
+  updatedAt      DateTime                        @updatedAt
 
-  parent    ConstructionClassificationNode?  @relation("ConstructionClassificationHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
-  children  ConstructionClassificationNode[] @relation("ConstructionClassificationHierarchy")
-  workspace Workspace?                       @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
-  ahspClassificationAssignments         AhspClassificationAssignment[]
+  parent                            ConstructionClassificationNode?        @relation("ConstructionClassificationHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children                          ConstructionClassificationNode[]       @relation("ConstructionClassificationHierarchy")
+  workspace                         Workspace?                             @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  ahspClassificationAssignments     AhspClassificationAssignment[]
   snapshotClassificationAssignments AhspSnapshotClassificationAssignment[]
   projectClassificationSelections   ProjectClassificationSelection[]
 
@@ -2623,9 +2629,9 @@ model AhspClassificationAssignment {
   createdAt  DateTime                               @default(now())
   updatedAt  DateTime                               @updatedAt
 
-  ahsp              AHSP                                    @relation(fields: [ahspId], references: [id], onDelete: Cascade)
-  leafNode          ConstructionClassificationNode          @relation(fields: [leafNodeId], references: [id], onDelete: Restrict)
-  snapshotCaptures  AhspSnapshotClassificationAssignment[]
+  ahsp             AHSP                                   @relation(fields: [ahspId], references: [id], onDelete: Cascade)
+  leafNode         ConstructionClassificationNode         @relation(fields: [leafNodeId], references: [id], onDelete: Restrict)
+  snapshotCaptures AhspSnapshotClassificationAssignment[]
 
   @@unique([ahspId, leafNodeId, provenance])
   @@index([ahspId])
@@ -2668,15 +2674,15 @@ model Region {
   createdAt           DateTime                   @default(now())
   updatedAt           DateTime                   @updatedAt
 
-  parent                  Region?                 @relation("RegionHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
-  children                Region[]                @relation("RegionHierarchy")
-  basicPrices             BasicPrice[]
-  priceSubmissions        PriceSubmission[]
-  basicPriceImportBatches BasicPriceImportBatch[]
-  projectAhspOccurrences  ProjectAhspOccurrence[]
+  parent                    Region?                          @relation("RegionHierarchy", fields: [parentId], references: [id], onDelete: Restrict)
+  children                  Region[]                         @relation("RegionHierarchy")
+  basicPrices               BasicPrice[]
+  priceSubmissions          PriceSubmission[]
+  basicPriceImportBatches   BasicPriceImportBatch[]
+  projectAhspOccurrences    ProjectAhspOccurrence[]
   basicPriceCoverageAnchors BasicPriceRegionCoverageSet[]    @relation("BasicPriceRegionCoverageAnchor")
   basicPriceCoverageMembers BasicPriceRegionCoverageMember[] @relation("BasicPriceRegionCoverageMemberRegion")
-  projectRegionSelections  ProjectRegionSelection[]
+  projectRegionSelections   ProjectRegionSelection[]
 
   @@index([parentId])
   @@map("regions")
@@ -3045,16 +3051,16 @@ model BasicPriceImportBatch {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  region             Region?               @relation(fields: [regionId], references: [id], onDelete: Restrict)
+  region             Region?                      @relation(fields: [regionId], references: [id], onDelete: Restrict)
   regionCoverageSet  BasicPriceRegionCoverageSet? @relation(fields: [regionCoverageSetId], references: [id], onDelete: Restrict)
-  ingestionConnector IngestionConnector?   @relation(fields: [ingestionConnectorId], references: [id], onDelete: Restrict)
+  ingestionConnector IngestionConnector?          @relation(fields: [ingestionConnectorId], references: [id], onDelete: Restrict)
   rows               BasicPriceImportRow[]
 
   // BP-HISTORY: remove only an unfinished, unsubmitted import from the user's
   // active history. Keep the canonical source, fingerprint and audit evidence.
   // NEVER cascade-delete already committed BasicPrice or identity decisions.
-  historyDismissedAt DateTime?
-  historyDismissedByAccountId String? @db.Uuid
+  historyDismissedAt          DateTime?
+  historyDismissedByAccountId String?   @db.Uuid
 
   @@unique([workspaceId, importFingerprint])
   /// USI-01R2 §6B — ONE OBSERVATION, ONE FACT, ENFORCED BY THE DATABASE.
@@ -3229,23 +3235,23 @@ model BasicPriceImportRow {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  batch             BasicPriceImportBatch                @relation(fields: [batchId], references: [id], onDelete: Cascade)
-  resourceCatalog   ResourceCatalog?                     @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
-  unitDefinition    UnitDefinition?                      @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
-  priceSubmission   PriceSubmission?                     @relation(fields: [priceSubmissionId], references: [id], onDelete: Restrict)
+  batch                   BasicPriceImportBatch                       @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  resourceCatalog         ResourceCatalog?                            @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
+  unitDefinition          UnitDefinition?                             @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
+  priceSubmission         PriceSubmission?                            @relation(fields: [priceSubmissionId], references: [id], onDelete: Restrict)
   /// RM-03C: at most one workspace-private BasicPrice may ever be materialized
   /// from a given import row (enforced by the @unique on the owning side), so
   /// re-running the private writer is idempotent rather than duplicating a fact.
   /// This is INDEPENDENT of priceSubmissionId — a row may be kept private AND
   /// later proposed to the SIMPROK catalog; neither invalidates the other.
-  privateBasicPrice BasicPrice?                          @relation("PrivateBasicPriceProvenance")
-  collisionOfRow    BasicPriceImportRow?                 @relation("RowCollision", fields: [collisionOfRowId], references: [id], onDelete: SetNull)
-  collidingRows     BasicPriceImportRow[]                @relation("RowCollision")
-  resourceMappings  BasicPriceImportRowResourceMapping[]
+  privateBasicPrice       BasicPrice?                                 @relation("PrivateBasicPriceProvenance")
+  collisionOfRow          BasicPriceImportRow?                        @relation("RowCollision", fields: [collisionOfRowId], references: [id], onDelete: SetNull)
+  collidingRows           BasicPriceImportRow[]                       @relation("RowCollision")
+  resourceMappings        BasicPriceImportRowResourceMapping[]
   resolutionCompensations BasicPriceImportRowResolutionCompensation[]
-  rejectedReviewReopens BasicPriceImportRowRejectedReviewReopen[]
-  categoryDecisions BasicPriceImportRowCategoryDecision[]
-  specificationDecisions BasicPriceImportRowSpecificationDecision[]
+  rejectedReviewReopens   BasicPriceImportRowRejectedReviewReopen[]
+  categoryDecisions       BasicPriceImportRowCategoryDecision[]
+  specificationDecisions  BasicPriceImportRowSpecificationDecision[]
 
   @@unique([batchId, sourceRowNumber])
   @@index([batchId])
@@ -3285,51 +3291,51 @@ enum BasicPriceImportRowMappingSuggestionSource {
 /// Append-only account-owned decision that assigns a resource family ONLY to
 /// an import row lacking a source-proven family. Original Excel cells stay intact.
 model BasicPriceImportRowCategoryDecision {
-  id                String @id(map: "bp_row_category_decisions_pkey") @default(uuid()) @db.Uuid
-  workspaceId       String @db.Uuid
-  rowId             String @db.Uuid
-  actorAccountId    String @db.Uuid
-  previousSection   BasicPriceImportRowSection?
-  chosenSection     BasicPriceImportRowSection
-  previousVersion   Int
-  resultingVersion  Int
-  reason            String? @db.Text
-  decidedAt         DateTime @default(now())
+  id               String                      @id(map: "bp_row_category_decisions_pkey") @default(uuid()) @db.Uuid
+  workspaceId      String                      @db.Uuid
+  rowId            String                      @db.Uuid
+  actorAccountId   String                      @db.Uuid
+  previousSection  BasicPriceImportRowSection?
+  chosenSection    BasicPriceImportRowSection
+  previousVersion  Int
+  resultingVersion Int
+  reason           String?                     @db.Text
+  decidedAt        DateTime                    @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, map: "bp_row_category_decisions_workspace_fk")
-  row BasicPriceImportRow @relation(fields: [rowId], references: [id], onDelete: Restrict, map: "bp_row_category_decisions_row_fk")
-  actor Account @relation("BasicPriceImportRowCategoryActor", fields: [actorAccountId], references: [id], onDelete: Restrict, map: "bp_row_category_decisions_actor_fk")
+  workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Restrict, map: "bp_row_category_decisions_workspace_fk")
+  row       BasicPriceImportRow @relation(fields: [rowId], references: [id], onDelete: Restrict, map: "bp_row_category_decisions_row_fk")
+  actor     Account             @relation("BasicPriceImportRowCategoryActor", fields: [actorAccountId], references: [id], onDelete: Restrict, map: "bp_row_category_decisions_actor_fk")
 
+  @@unique([rowId, resultingVersion], map: "bp_row_category_decisions_rowId_resultingVersion_key")
   @@index([rowId], map: "bp_row_category_decisions_rowId_idx")
   @@index([workspaceId], map: "bp_row_category_decisions_workspaceId_idx")
   @@index([actorAccountId], map: "bp_row_category_decisions_actorAccountId_idx")
-  @@unique([rowId, resultingVersion], map: "bp_row_category_decisions_rowId_resultingVersion_key")
   @@map("basic_price_import_row_category_decisions")
 }
 
 /// PR205: append-only human specification decision about ONE owned import row.
 /// This is evidence for the ONE identity kernel; never a second catalog.
 model BasicPriceImportRowSpecificationDecision {
-  id String @id @default(uuid()) @db.Uuid
-  workspaceId String @db.Uuid
-  rowId String @db.Uuid
-  actorAccountId String @db.Uuid
-  previousDecisionId String? @db.Uuid
-  previousVersion Int
-  resultingVersion Int
+  id                      String   @id @default(uuid()) @db.Uuid
+  workspaceId             String   @db.Uuid
+  rowId                   String   @db.Uuid
+  actorAccountId          String   @db.Uuid
+  previousDecisionId      String?  @db.Uuid
+  previousVersion         Int
+  resultingVersion        Int
   /// CONFIRM_SOURCE, SUPPLEMENT, or CORRECT; never an automatic approval.
-  decisionKind String
-  sourceSha256 String @db.VarChar(64)
-  sourceSpecifications Json?
+  decisionKind            String
+  sourceSha256            String   @db.VarChar(64)
+  sourceSpecifications    Json?
   confirmedSpecifications Json
-  reason String? @db.Text
-  decidedAt DateTime @default(now())
+  reason                  String?  @db.Text
+  decidedAt               DateTime @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, map: "bp_row_spec_workspace_fk")
-  row BasicPriceImportRow @relation(fields: [rowId], references: [id], onDelete: Restrict, map: "bp_row_spec_row_fk")
-  actor Account @relation("BasicPriceImportRowSpecificationActor", fields: [actorAccountId], references: [id], onDelete: Restrict, map: "bp_row_spec_actor_fk")
-  previousDecision BasicPriceImportRowSpecificationDecision? @relation("BPRowSpecificationDecisionLineage", fields: [previousDecisionId], references: [id], onDelete: Restrict)
-  nextDecisions BasicPriceImportRowSpecificationDecision[] @relation("BPRowSpecificationDecisionLineage")
+  workspace        Workspace                                  @relation(fields: [workspaceId], references: [id], onDelete: Restrict, map: "bp_row_spec_workspace_fk")
+  row              BasicPriceImportRow                        @relation(fields: [rowId], references: [id], onDelete: Restrict, map: "bp_row_spec_row_fk")
+  actor            Account                                    @relation("BasicPriceImportRowSpecificationActor", fields: [actorAccountId], references: [id], onDelete: Restrict, map: "bp_row_spec_actor_fk")
+  previousDecision BasicPriceImportRowSpecificationDecision?  @relation("BPRowSpecificationDecisionLineage", fields: [previousDecisionId], references: [id], onDelete: Restrict)
+  nextDecisions    BasicPriceImportRowSpecificationDecision[] @relation("BPRowSpecificationDecisionLineage")
 
   @@unique([rowId, resultingVersion], map: "bp_row_spec_row_version_key")
   @@index([workspaceId, rowId, resultingVersion(sort: Desc)], map: "bp_row_spec_history_idx")
@@ -3349,11 +3355,11 @@ model BasicPriceImportRowResourceMapping {
   candidateCountAtDecision Int
   decidedAt                DateTime                                   @default(now())
 
-  row             BasicPriceImportRow @relation(fields: [rowId], references: [id], onDelete: Cascade)
-  resourceCatalog ResourceCatalog     @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
-  unitDefinition  UnitDefinition      @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
-  reviewer        Account             @relation("BasicPriceImportRowResourceMappingReviewer", fields: [reviewerAccountId], references: [id], onDelete: Restrict, map: "fk_row_mapping_reviewer")
-  compensation    BasicPriceImportRowResolutionCompensation?
+  row                 BasicPriceImportRow                            @relation(fields: [rowId], references: [id], onDelete: Cascade)
+  resourceCatalog     ResourceCatalog                                @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
+  unitDefinition      UnitDefinition                                 @relation(fields: [unitDefinitionId], references: [id], onDelete: Restrict)
+  reviewer            Account                                        @relation("BasicPriceImportRowResourceMappingReviewer", fields: [reviewerAccountId], references: [id], onDelete: Restrict, map: "fk_row_mapping_reviewer")
+  compensation        BasicPriceImportRowResolutionCompensation?
   reasonClarification BasicPriceImportRowMappingReasonClarification?
 
   @@index([rowId])
@@ -3366,15 +3372,16 @@ model BasicPriceImportRowResourceMapping {
 /// BP-ROW11-GRADEA: one append-only explanation of an already-decided mapping.
 /// A mapping reason never changes; a clarification is not a second mapping.
 model BasicPriceImportRowMappingReasonClarification {
-  id String @id @default(uuid()) @db.Uuid
-  mappingId String @unique @db.Uuid
-  workspaceId String @db.Uuid
-  actorAccountId String @db.Uuid
-  originalReason String? @db.Text
-  clarifiedReason String @db.Text
-  recordedAt DateTime @default(now())
-  mapping BasicPriceImportRowResourceMapping @relation(fields: [mappingId], references: [id], onDelete: Restrict)
-  actor Account @relation("BasicPriceMappingReasonClarificationActor", fields: [actorAccountId], references: [id], onDelete: Restrict)
+  id              String                             @id @default(uuid()) @db.Uuid
+  mappingId       String                             @unique @db.Uuid
+  workspaceId     String                             @db.Uuid
+  actorAccountId  String                             @db.Uuid
+  originalReason  String?                            @db.Text
+  clarifiedReason String                             @db.Text
+  recordedAt      DateTime                           @default(now())
+  mapping         BasicPriceImportRowResourceMapping @relation(fields: [mappingId], references: [id], onDelete: Restrict)
+  actor           Account                            @relation("BasicPriceMappingReasonClarificationActor", fields: [actorAccountId], references: [id], onDelete: Restrict)
+
   @@index([workspaceId])
   @@map("basic_price_import_row_mapping_reason_clarifications")
 }
@@ -3390,19 +3397,19 @@ model BasicPriceImportRowMappingReasonClarification {
 /// batch is still under review. This never edits the immutable source,
 /// catalogs, prices, or the previous REJECTED reason.
 model BasicPriceImportRowRejectedReviewReopen {
-  id               String @id @default(uuid()) @db.Uuid
-  workspaceId      String @db.Uuid
-  rowId            String @db.Uuid
-  actorAccountId   String @db.Uuid
-  reason           String @db.Text
-  priorRowVersion  Int
-  newRowVersion    Int
-  previousReason   String @db.Text
-  reopenedAt       DateTime @default(now())
+  id              String   @id @default(uuid()) @db.Uuid
+  workspaceId     String   @db.Uuid
+  rowId           String   @db.Uuid
+  actorAccountId  String   @db.Uuid
+  reason          String   @db.Text
+  priorRowVersion Int
+  newRowVersion   Int
+  previousReason  String   @db.Text
+  reopenedAt      DateTime @default(now())
 
-  workspace Workspace @relation(fields: [workspaceId], references: [id], onDelete: Restrict, map: "bp_c1_reopen_workspace_fk")
-  row BasicPriceImportRow @relation(fields: [rowId], references: [id], onDelete: Restrict, map: "bp_c1_reopen_row_fk")
-  actor Account @relation("BasicPriceRejectedReviewReopenActor", fields: [actorAccountId], references: [id], onDelete: Restrict, map: "bp_c1_reopen_actor_fk")
+  workspace Workspace           @relation(fields: [workspaceId], references: [id], onDelete: Restrict, map: "bp_c1_reopen_workspace_fk")
+  row       BasicPriceImportRow @relation(fields: [rowId], references: [id], onDelete: Restrict, map: "bp_c1_reopen_row_fk")
+  actor     Account             @relation("BasicPriceRejectedReviewReopenActor", fields: [actorAccountId], references: [id], onDelete: Restrict, map: "bp_c1_reopen_actor_fk")
 
   @@unique([rowId, priorRowVersion], map: "bp_c1_reopen_one_per_version")
   @@index([workspaceId, reopenedAt], map: "bp_c1_reopen_workspace_time_idx")
@@ -3574,6 +3581,52 @@ enum ProjectAhspResolutionMethod {
   DETERMINISTIC_ATTEMPTED
 }
 
+enum ProjectAhspPriceMode {
+  BASIC_PRICE
+  TEMPORARY_ESTIMATE
+}
+
+enum AuxiliaryEquipmentEstimatePolicyDecision {
+  APPROVED
+  HOLD
+  REVOKED
+}
+
+/// Append-only, AHSP-version-scoped authority for a temporary Alat Bantu LS
+/// estimate. No percentage default exists; APPROVED rows are valid only after
+/// the application and database governance proofs succeed.
+model AuxiliaryEquipmentEstimatePolicy {
+  id                             String                                   @id @default(uuid()) @db.Uuid
+  workspaceId                    String                                   @db.Uuid
+  ahspVersionId                  String                                   @db.Uuid
+  version                        Int
+  decision                       AuxiliaryEquipmentEstimatePolicyDecision
+  percent                        Decimal?                                 @db.Decimal(9, 6)
+  evidenceReference              String
+  approvalReference              String?
+  approvedByAccountId            String?                                  @db.Uuid
+  approvedByPositionId           String?                                  @db.Uuid
+  approvedByPositionAssignmentId String?                                  @db.Uuid
+  approvedByPositionAuthorityId  String?                                  @db.Uuid
+  approvalAuthorityCode          String?
+  approvedAt                     DateTime?
+  effectiveFrom                  DateTime
+  effectiveUntil                 DateTime?
+  createdAt                      DateTime                                 @default(now())
+
+  workspace                    Workspace                       @relation(fields: [workspaceId], references: [id], onDelete: Restrict)
+  ahspVersion                  AHSPVersion                     @relation(fields: [ahspVersionId], references: [id], onDelete: Restrict)
+  approvedByAccount            Account?                        @relation("AuxiliaryEstimatePolicyApprover", fields: [approvedByAccountId], references: [id], onDelete: Restrict)
+  approvedByPosition           Position?                       @relation("AuxiliaryEstimatePolicyPosition", fields: [approvedByPositionId], references: [id], onDelete: Restrict)
+  approvedByPositionAssignment PositionAssignment?             @relation("AuxiliaryEstimatePolicyAssignment", fields: [approvedByPositionAssignmentId], references: [id], onDelete: Restrict)
+  approvedByPositionAuthority  PositionAuthority?              @relation("AuxiliaryEstimatePolicyAuthority", fields: [approvedByPositionAuthorityId], references: [id], onDelete: Restrict)
+  frozenResolutions            ProjectAhspResourceResolution[]
+
+  @@unique([workspaceId, ahspVersionId, version], map: "aeep_scope_version_key")
+  @@index([workspaceId, ahspVersionId, effectiveFrom])
+  @@map("auxiliary_equipment_estimate_policies")
+}
+
 model ProjectAhspOccurrence {
   id                           String         @id @default(uuid()) @db.Uuid
   workspaceId                  String         @db.Uuid
@@ -3637,50 +3690,63 @@ model ProjectAhspOccurrence {
 }
 
 model ProjectAhspResourceResolution {
-  id                        String                      @id @default(uuid()) @db.Uuid
-  occurrenceId              String                      @db.Uuid
-  ahspResourceId            String                      @db.Uuid
-  rawAhspResourceRef        String
-  rawAhspResourceType       String
-  ahspCoefficient           Decimal                     @db.Decimal(18, 6)
-  ahspUnit                  String
-  resourceCatalogId         String?                     @db.Uuid
-  selectedBasicPriceId      String?                     @db.Uuid
-  status                    ProjectAhspResolutionStatus
-  selectionMode             ProjectAhspSelectionMode?
-  canonicalUnit             String?
-  sourcePriceValue          Decimal?                    @db.Decimal(18, 2)
-  sourceUnit                String?
-  adaptedPriceValue         Decimal?                    @db.Decimal(18, 2)
-  conversionFactor          Decimal?                    @db.Decimal(18, 6)
-  sourceUnitDefinitionId    String?                     @db.Uuid
-  targetUnitDefinitionId    String?                     @db.Uuid
-  unitConversionRuleId      String?                     @db.Uuid
-  unitConversionRuleVersion Int?
-  quantityFactor            Decimal?                    @db.Decimal(24, 12)
-  selectedSourceOrigin      PriceSourceOrigin?
-  selectedFreshnessStatus   PriceFreshnessStatus?
-  selectedEffectiveDate     DateTime?
-  resolutionMethod          ProjectAhspResolutionMethod
-  reasonCodes               String[]
-  explanation               String                      @db.Text
-  policyVersion             String
-  createdAt                 DateTime                    @default(now())
-  updatedAt                 DateTime                    @updatedAt
+  id                           String                      @id @default(uuid()) @db.Uuid
+  occurrenceId                 String                      @db.Uuid
+  ahspResourceId               String                      @db.Uuid
+  rawAhspResourceRef           String
+  rawAhspResourceType          String
+  ahspCoefficient              Decimal                     @db.Decimal(18, 6)
+  ahspUnit                     String
+  resourceCatalogId            String?                     @db.Uuid
+  selectedBasicPriceId         String?                     @db.Uuid
+  priceMode                    ProjectAhspPriceMode?
+  status                       ProjectAhspResolutionStatus
+  selectionMode                ProjectAhspSelectionMode?
+  canonicalUnit                String?
+  sourcePriceValue             Decimal?                    @db.Decimal(18, 2)
+  sourceUnit                   String?
+  adaptedPriceValue            Decimal?                    @db.Decimal(18, 2)
+  estimatePolicyId             String?                     @db.Uuid
+  estimatePolicyVersion        Int?
+  estimatePercent              Decimal?                    @db.Decimal(9, 6)
+  estimateBasisAmount          Decimal?                    @db.Decimal(38, 8)
+  estimateDerivedAmount        Decimal?                    @db.Decimal(48, 18)
+  estimateApprovalReference    String?
+  estimateApprovedByAccountId  String?                     @db.Uuid
+  estimateApprovedByPositionId String?                     @db.Uuid
+  estimateAuthorityCode        String?
+  estimateApprovedAt           DateTime?
+  conversionFactor             Decimal?                    @db.Decimal(18, 6)
+  sourceUnitDefinitionId       String?                     @db.Uuid
+  targetUnitDefinitionId       String?                     @db.Uuid
+  unitConversionRuleId         String?                     @db.Uuid
+  unitConversionRuleVersion    Int?
+  quantityFactor               Decimal?                    @db.Decimal(24, 12)
+  selectedSourceOrigin         PriceSourceOrigin?
+  selectedFreshnessStatus      PriceFreshnessStatus?
+  selectedEffectiveDate        DateTime?
+  resolutionMethod             ProjectAhspResolutionMethod
+  reasonCodes                  String[]
+  explanation                  String                      @db.Text
+  policyVersion                String
+  createdAt                    DateTime                    @default(now())
+  updatedAt                    DateTime                    @updatedAt
 
-  occurrence           ProjectAhspOccurrence @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
-  originalResource     AHSPResource          @relation(fields: [ahspResourceId], references: [id], onDelete: Restrict)
-  resolvedCatalog      ResourceCatalog?      @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
-  selectedBasicPrice   BasicPrice?           @relation(fields: [selectedBasicPriceId], references: [id], onDelete: Restrict)
-  sourceUnitDefinition UnitDefinition?       @relation("ResolutionSourceUnit", fields: [sourceUnitDefinitionId], references: [id], onDelete: Restrict, map: "pahr_sourceUnitDefinitionId_fkey")
-  targetUnitDefinition UnitDefinition?       @relation("ResolutionTargetUnit", fields: [targetUnitDefinitionId], references: [id], onDelete: Restrict, map: "pahr_targetUnitDefinitionId_fkey")
-  unitConversionRule   UnitConversionRule?   @relation(fields: [unitConversionRuleId], references: [id], onDelete: Restrict, map: "pahr_unitConversionRuleId_fkey")
+  occurrence           ProjectAhspOccurrence             @relation(fields: [occurrenceId], references: [id], onDelete: Cascade)
+  originalResource     AHSPResource                      @relation(fields: [ahspResourceId], references: [id], onDelete: Restrict)
+  resolvedCatalog      ResourceCatalog?                  @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
+  selectedBasicPrice   BasicPrice?                       @relation(fields: [selectedBasicPriceId], references: [id], onDelete: Restrict)
+  estimatePolicy       AuxiliaryEquipmentEstimatePolicy? @relation(fields: [estimatePolicyId], references: [id], onDelete: Restrict)
+  sourceUnitDefinition UnitDefinition?                   @relation("ResolutionSourceUnit", fields: [sourceUnitDefinitionId], references: [id], onDelete: Restrict, map: "pahr_sourceUnitDefinitionId_fkey")
+  targetUnitDefinition UnitDefinition?                   @relation("ResolutionTargetUnit", fields: [targetUnitDefinitionId], references: [id], onDelete: Restrict, map: "pahr_targetUnitDefinitionId_fkey")
+  unitConversionRule   UnitConversionRule?               @relation(fields: [unitConversionRuleId], references: [id], onDelete: Restrict, map: "pahr_unitConversionRuleId_fkey")
 
   @@unique([occurrenceId, ahspResourceId], map: "pahr_occurrence_ahsp_resource_key")
   @@index([occurrenceId])
   @@index([ahspResourceId])
   @@index([resourceCatalogId])
   @@index([selectedBasicPriceId])
+  @@index([estimatePolicyId])
   @@index([sourceUnitDefinitionId])
   @@index([targetUnitDefinitionId])
   @@index([unitConversionRuleId])
@@ -3701,9 +3767,9 @@ model BoqStructure {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  project Project?      @relation(fields: [projectId], references: [id], onDelete: Cascade)
-  items   BoqItem[]
-  rabs    RabDocument[]
+  project           Project?              @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items             BoqItem[]
+  rabs              RabDocument[]
   businessUseEvents BoqBusinessUseEvent[]
 
   @@index([projectId])
