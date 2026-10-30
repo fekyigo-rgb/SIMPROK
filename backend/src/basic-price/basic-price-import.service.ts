@@ -15,6 +15,7 @@ import {
 } from './basic-price-universal-intake.adapter';
 import { INTAKE_ERRORS, IntakeError } from '../universal-intake/intake-errors';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
+import { certifiedImportedBasicPrice } from './basic-price-import-conversion-price';
 import { UNIT_RESOLUTION_STATUS } from '../unit-kernel/unit-kernel.contracts';
 import {
   MAX_ENVELOPE_BYTES,
@@ -3098,7 +3099,8 @@ export class BasicPriceImportService {
           reportedByAccountId: batch.uploadedByAccountId,
           sourceOrigin: batch.sourceOrigin as PriceSourceOrigin,
           sourceType: batch.sourceType as PriceSourceType,
-          value: row.proposedCanonicalPrice,
+          // Same immutable conversion proof the private import writer verifies.
+          value: await certifiedImportedBasicPrice(tx, row),
           effectiveDate:
             row.effectiveDateOverride ?? (batch.effectiveDate as Date),
           auditReason: `RM02_IMPORT_SUBMISSION; batchId:${batch.id}; rowId:${row.id}`,

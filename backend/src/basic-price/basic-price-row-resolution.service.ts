@@ -756,7 +756,14 @@ export class BasicPriceRowResolutionService {
     unitDefinition: { id: string; code: string },
     resourceCatalogId?: string,
     humanDecisionReason?: string,
-  ): Promise<void> {
+  ): Promise<{
+    conversionSourcePriceValue: Prisma.Decimal;
+    conversionAdaptedPriceValue: Prisma.Decimal;
+    conversionQuantityFactor: Prisma.Decimal;
+    conversionRuleId: string;
+    conversionRuleVersion: number;
+    conversionPolicyVersion: string;
+  } | null> {
     const rawSourceUnit = row.rawUnitText?.trim() ?? '';
 
     // NO SOURCE UNIT IS NOT A WEAKER PROOF — IT IS NO PROOF.
@@ -867,18 +874,15 @@ export class BasicPriceRowResolutionService {
         unitResolution,
       });
 
-    // RESOLVED but not IDENTITY means the kernel found a real, evidence-bound
-    // conversion — the quantity is convertible, and the PRICE would therefore
-    // have to be divided by the same factor to stay true. Basic Price has no
-    // such price-transformation seam today: `proposedCanonicalPrice` is the raw
-    // source price per `rawUnitText`, and it is written into BasicPrice.value
-    // untouched. Persisting the converted unit against an unconverted price
-    // would publish a mathematically false price that reads as canonical.
+    // RESOLVED but not IDENTITY means UnitKernel proved a DIRECTIONAL
+    // conversion. SCOPE-03B reuses the pre-existing exact money adapter and
+    // freezes the complete proof on the existing append-only mapping decision.
+    // `proposedCanonicalPrice` remains the unchanged per-SOURCE-unit amount.
+    // The private and community writers must re-prove the frozen adaptation
+    // inside their transaction before writing any canonical price.
     //
-    // So SIMPROK refuses and says exactly why, rather than inventing the
-    // missing arithmetic here. This is the fail-closed half of "SIMPROK
-    // menghitung, manusia memutuskan": it will not quietly decide that a
-    // per-sack price is a per-cubic-metre price.
+    // A quotient lacking exact cents or an identified rule remains 409/HELD;
+    // no human choice can turn an unproved price into an accepted amount.
     //
     // Human interpretation of an unknown source spelling is IDENTITY, not a
     // conversion: skip this gate when the kernel never produced a factor.
@@ -920,6 +924,26 @@ export class BasicPriceRowResolutionService {
                 : 'SOURCE_PRICE_OR_PROOF_MISSING',
               persistable: false as const,
             };
+      if (
+        preview?.status === 'RESOLVED' &&
+        proof.sourceUnitDefinition &&
+        proof.targetUnitDefinition?.id === unitDefinition.id &&
+        proof.conversionRuleId &&
+        proof.conversionRuleVersion &&
+        proof.quantityFactor &&
+        proof.policyVersion
+      ) {
+        // The only lawful new state: record the COMPLETE price evidence on
+        // the same immutable mapping decision. No raw price is rewritten.
+        return {
+          conversionSourcePriceValue: new Prisma.Decimal(preview.sourcePrice),
+          conversionAdaptedPriceValue: new Prisma.Decimal(preview.adaptedPrice),
+          conversionQuantityFactor: new Prisma.Decimal(preview.factor),
+          conversionRuleId: proof.conversionRuleId,
+          conversionRuleVersion: proof.conversionRuleVersion,
+          conversionPolicyVersion: proof.policyVersion,
+        };
+      }
       throw new ConflictException({
         statusCode: 409,
         error: 'Conflict',
@@ -927,6 +951,7 @@ export class BasicPriceRowResolutionService {
         unitResolution: { ...unitResolution, priceAdaptation },
       });
     }
+    return null;
   }
 
   /**
@@ -1030,12 +1055,15 @@ export class BasicPriceRowResolutionService {
       // this transaction just created, which by construction has no rules yet.
       // When a weak batch hint is being corrected, Unit Kernel context follows
       // the catalog family the reviewer confirmed — never the stale hint.
-      await this.assertSelectedUnitProvenBySourceUnit(
+      const conversionEvidence = await this.assertSelectedUnitProvenBySourceUnit(
         { ...row, sourceSection: effectiveSection },
         unitDefinition,
         dto.resourceCatalogId,
         dto.reason,
       );
+      if (conversionEvidence && resourceCatalog.baseUnit !== unitDefinition.code) {
+        throw new ConflictException('BASIC_PRICE_CONVERSION_TARGET_NOT_CATALOG_UNIT');
+      }
 
       const priorSameIdentity = await tx.basicPriceImportRow.findFirst({
         where: {
@@ -1249,6 +1277,7 @@ export class BasicPriceRowResolutionService {
           reason: dto.reason ?? null,
           suggestionSource,
           candidateCountAtDecision: distinctSignalIds.size,
+          ...(conversionEvidence ?? {}),
         },
       });
 

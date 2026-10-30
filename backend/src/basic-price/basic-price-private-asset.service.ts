@@ -27,6 +27,7 @@ import type { TrustedBasicPriceActor } from './trusted-basic-price-actor.service
 import { parseDateOnlyUtc } from '../common/date-only.util';
 import { expectedKdnMatchesStored } from './basic-price-detail-change.policy';
 import { privateUseBlockReason } from './basic-price-batch-actions.policy';
+import { certifiedImportedBasicPrice } from './basic-price-import-conversion-price';
 import { confirmedSpecifications, compareConfirmedSpecifications } from '../resource-catalog/resource-identity-specification.contract';
 import {
   hasExplicitUnverifiedSourceSpecification,
@@ -749,6 +750,9 @@ export class BasicPricePrivateAssetService {
           if (!row.resourceCatalogId || !row.proposedCanonicalPrice) {
             throw new ConflictException('ROW_NOT_RESOLVED');
           }
+          // Same evidence-bound money authority as the community proposal.
+          // Re-prove the frozen decision before creating ANY private price.
+          const priceToStore = await certifiedImportedBasicPrice(tx, row);
 
           // ONE resolver for the price's temporal facts, so a row-level date
           // override can never inherit a batch derivation that does not explain it.
@@ -846,7 +850,7 @@ export class BasicPricePrivateAssetService {
               regionCoverageSetId: batch.regionCoverageSetId,
               effectiveDate: temporal.effectiveDate,
               // EXACT money. Prisma.Decimal, never Number()/parseFloat().
-              value: new Prisma.Decimal(row.proposedCanonicalPrice),
+              value: priceToStore,
               // BP-KDN-01 — the %KDN of THIS observation, copied only when the
               // import row already holds a lawful canonical value. Null stays
               // null (unknown, never zero). Independent of `value`. Stated 0%

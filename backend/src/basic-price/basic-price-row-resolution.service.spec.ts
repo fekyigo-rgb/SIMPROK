@@ -2426,6 +2426,60 @@ describe('BasicPriceRowResolutionService', () => {
       nothingWasWritten();
     });
 
+    it('SCOPE-03B: certified source unit converts once and freezes EXACT money on mapping', async () => {
+      rowIs({ proposedCanonicalPrice: new Prisma.Decimal('80000.00') });
+      tx.unitDefinition.findFirst.mockResolvedValue({ id: 'unit-01', code: 'KG' });
+      tx.resourceCatalog.findFirst.mockResolvedValue({
+        id: 'resource-01', status: 'ACTIVE', workspaceId: WORKSPACE_ID,
+        type: 'MATERIAL', name: 'Semen', baseUnit: 'KG',
+      });
+      kernelAnswers({
+        status: 'RESOLVED',
+        priceOperation: 'DIVIDE_SOURCE_UNIT_PRICE_BY_QUANTITY_FACTOR',
+        quantityFactor: '40',
+        conversionRuleId: 'rule-zak-kg',
+        conversionRuleVersion: 2,
+        sourceUnitDefinition: { id: 'unit-zak', code: 'ZAK' },
+        targetUnitDefinition: { id: 'unit-01', code: 'KG' },
+        reasonCodes: ['UNIQUE_EVIDENCE_BOUND_RULE'],
+      });
+      const result = await resolve();
+      expect(result.status).toBe('READY_FOR_SUBMISSION');
+      expect(tx.basicPriceImportRowResourceMapping.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          resourceCatalogId: 'resource-01',
+          unitDefinitionId: 'unit-01',
+          conversionSourcePriceValue: new Prisma.Decimal('80000.00'),
+          conversionAdaptedPriceValue: new Prisma.Decimal('2000.00'),
+          conversionQuantityFactor: new Prisma.Decimal('40'),
+          conversionRuleId: 'rule-zak-kg',
+          conversionRuleVersion: 2,
+          conversionPolicyVersion: 'KAMUS_UNIT_KERNEL_01A_V1',
+        }),
+      });
+      const changed = tx.basicPriceImportRow.update.mock.calls[0][0].data;
+      expect(changed).not.toHaveProperty('proposedCanonicalPrice');
+      expect(changed).not.toHaveProperty('rawUnitText');
+    });
+
+    it('SCOPE-03B: converted price is held if chosen unit conflicts with catalog unit', async () => {
+      rowIs({ proposedCanonicalPrice: new Prisma.Decimal('80000.00') });
+      tx.unitDefinition.findFirst.mockResolvedValue({ id: 'unit-01', code: 'KG' });
+      kernelAnswers({
+        status: 'RESOLVED',
+        priceOperation: 'DIVIDE_SOURCE_UNIT_PRICE_BY_QUANTITY_FACTOR',
+        quantityFactor: '40',
+        conversionRuleId: 'rule-zak-kg',
+        conversionRuleVersion: 2,
+        sourceUnitDefinition: { id: 'unit-zak', code: 'ZAK' },
+        targetUnitDefinition: { id: 'unit-01', code: 'KG' },
+      });
+      expect(await refusalOf()).toMatchObject({
+        message: 'BASIC_PRICE_CONVERSION_TARGET_NOT_CATALOG_UNIT',
+      });
+      nothingWasWritten();
+    });
+
     it('SCOPE-03A: shows the existing Unit Kernel exact price math, but saves nothing', async () => {
       rowIs({ proposedCanonicalPrice: new Prisma.Decimal('80000.00') });
       tx.unitDefinition.findFirst.mockResolvedValue({ id: 'unit-01', code: 'KG' });

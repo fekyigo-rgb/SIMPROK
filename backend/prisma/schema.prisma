@@ -769,6 +769,7 @@ model UnitConversionRule {
   targetUnit      UnitDefinition                  @relation("UnitRuleTarget", fields: [targetUnitId], references: [id], onDelete: Restrict)
   resourceCatalog ResourceCatalog?                @relation(fields: [resourceCatalogId], references: [id], onDelete: Restrict)
   resolutions     ProjectAhspResourceResolution[]
+  basicPriceImportConversionMappings BasicPriceImportRowResourceMapping[] @relation("BasicPriceImportConversionRule")
 
   @@unique([sourceUnitId, targetUnitId, conversionType, resourceCatalogId, version], map: "unit_conversion_rule_version_key")
   @@index([sourceUnitId, targetUnitId, status])
@@ -3354,6 +3355,15 @@ model BasicPriceImportRowResourceMapping {
   reason                   String?                                    @db.Text
   suggestionSource         BasicPriceImportRowMappingSuggestionSource
   candidateCountAtDecision Int
+  /// SCOPE-03B: null on old/identity mappings; all fields together on a
+  /// proved source-price -> selected canonical unit conversion. Immutable
+  /// row mapping decision, never derived from free-text reason.
+  conversionSourcePriceValue Decimal? @db.Decimal(18, 2)
+  conversionAdaptedPriceValue Decimal? @db.Decimal(18, 2)
+  conversionQuantityFactor Decimal? @db.Decimal(24, 12)
+  conversionRuleId String? @db.Uuid
+  conversionRuleVersion Int?
+  conversionPolicyVersion String?
   decidedAt                DateTime                                   @default(now())
 
   row                 BasicPriceImportRow                            @relation(fields: [rowId], references: [id], onDelete: Cascade)
@@ -3362,7 +3372,9 @@ model BasicPriceImportRowResourceMapping {
   reviewer            Account                                        @relation("BasicPriceImportRowResourceMappingReviewer", fields: [reviewerAccountId], references: [id], onDelete: Restrict, map: "fk_row_mapping_reviewer")
   compensation        BasicPriceImportRowResolutionCompensation?
   reasonClarification BasicPriceImportRowMappingReasonClarification?
+  conversionRule UnitConversionRule? @relation("BasicPriceImportConversionRule", fields: [conversionRuleId], references: [id], onDelete: Restrict)
 
+  @@index([conversionRuleId])
   @@index([rowId])
   @@index([resourceCatalogId])
   @@index([workspaceId])

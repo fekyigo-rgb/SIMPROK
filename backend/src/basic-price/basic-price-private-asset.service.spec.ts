@@ -43,6 +43,7 @@ describe('BasicPricePrivateAssetService', () => {
   const baseRow = () => ({
     id: rowId,
     resourceCatalogId,
+    unitDefinitionId: 'unit-kg',
     proposedCanonicalPrice: new Prisma.Decimal('137500.00'),
     effectiveDateOverride: null,
   });
@@ -90,6 +91,9 @@ describe('BasicPricePrivateAssetService', () => {
       },
       basicPriceImportRow: {
         findUniqueOrThrow: jest.fn().mockResolvedValue(baseRow()),
+      },
+      basicPriceImportRowResourceMapping: {
+        findMany: jest.fn().mockResolvedValue([]),
       },
     };
     prisma.$transaction.mockImplementation((callback: any) => callback(tx));
