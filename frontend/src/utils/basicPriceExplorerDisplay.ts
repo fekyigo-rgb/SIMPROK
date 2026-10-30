@@ -205,7 +205,7 @@ export interface BasicPriceProvenHistoryEntry {
   /** Server-authored language; the Frontend must never classify events. */
   changeLabel: 'Terkini' | 'Diperbarui' | 'Dikoreksi' | 'Harga Awal' | 'Belum terverifikasi';
   actionLabel: 'Diperbarui' | 'Dikoreksi' | 'Harga Awal' | null;
-  recordedAt: string;
+  recordedAt: string | null;
   sourceName: string | null;
   isCurrent: boolean;
 }

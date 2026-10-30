@@ -1234,6 +1234,20 @@ describe('BasicPriceService — BP-UX-FINAL-01C truth closure', () => {
       expectTwoBranchEligibility(fullHistoryCall.where);
       expect(fullHistoryCall.where.resourceId).toBe('rc-01');
       expect(fullHistoryCall.where.regionId).toBeNull();
+      // A lawful published correction may replace a later-effective row.
+      // Candidate membership is decided by exact pointers, NOT by <= anchor date.
+      expect(fullHistoryCall.where).not.toHaveProperty('effectiveDate');
+      expect(fullHistoryCall).toMatchObject({
+        select: {
+          kdnPercent: true,
+          kdnEstablishment: true,
+          publicationAudits: {
+            where: { action: 'PUBLISH' },
+            take: 1,
+            select: { createdAt: true },
+          },
+        },
+      });
       // One Detail row + one canonical correction read + one proven event read.
       expect(prisma.basicPrice.findMany).toHaveBeenCalledTimes(2);
       expect(prisma.basicPrice.findFirst).toHaveBeenCalledTimes(2);

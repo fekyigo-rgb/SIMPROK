@@ -27,6 +27,10 @@ export interface ProvenHistoryRow {
   createdAt: Date;
   effectiveDate: Date;
   price: string;
+  kdnPercent?: string | null;
+  kdnEstablishment?: string | null;
+  /** The authoritative publication instant of a catalog correction. */
+  publicationAt?: Date | null;
   sourceName: string | null;
   provenanceCorrections?: ReadonlyArray<{
     before: unknown;
@@ -88,16 +92,30 @@ export function buildProvenPriceHistory(
       (correctionParent
         ? candidate.resourceId === cursor.resourceId &&
           candidate.regionId === cursor.regionId &&
-          candidate.regionCoverageSetId === cursor.regionCoverageSetId &&
           candidate.assetScope === cursor.assetScope &&
-          candidate.workspaceId === cursor.workspaceId &&
-          candidate.sourceType === cursor.sourceType &&
-          candidate.sourceOrigin === cursor.sourceOrigin &&
-          candidate.effectiveDate.getTime() === cursor.effectiveDate.getTime()
+          candidate.workspaceId === cursor.workspaceId
         : lawfulPrivateObservationEdge(cursor, candidate))
         ? candidate
         : undefined;
     if (parentId && !permittedParent) truncated = true;
+
+    // KDN-only updates are real canonical events, but NOT price events.
+    // Continue through their exact lineage without counting them as
+    // 'Diperbarui'/'Dikoreksi' in Riwayat Harga.
+    const kdnOnly = Boolean(
+      permittedParent &&
+      cursor.price === permittedParent.price &&
+      cursor.kdnPercent !== null &&
+      cursor.kdnPercent !== undefined &&
+      cursor.kdnPercent !== permittedParent.kdnPercent &&
+      ((observationParent &&
+        cursor.kdnEstablishment === 'MANUAL_NEW_OBSERVATION') ||
+        (correctionParent && cursor.kdnEstablishment === 'MANUAL_CORRECTION')),
+    );
+    if (kdnOnly && permittedParent) {
+      cursor = permittedParent;
+      continue;
+    }
 
     const actionLabel = correctionParent
       ? ('Dikoreksi' as const)
@@ -126,7 +144,10 @@ export function buildProvenPriceHistory(
           ? 'Terkini'
           : actionLabel,
       actionLabel,
-      recordedAt: cursor.createdAt.toISOString(),
+      recordedAt:
+        correctionParent && cursor.assetScope === 'SIMPROK_CATALOG'
+          ? (cursor.publicationAt?.toISOString() ?? null)
+          : cursor.createdAt.toISOString(),
       sourceName,
       isCurrent: entries.length === 0 && anchorCurrentAtSelectedDate,
     });

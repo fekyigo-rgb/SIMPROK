@@ -94,7 +94,8 @@ const TABS: { key: TabKey; label: string }[] = [
  * Unlike effectiveDate (a UTC-encoded business date), recordedAt represents
  * the moment the update/correction was saved and must not be UTC-sliced.
  */
-function formatPriceEventDate(iso: string): string {
+function formatPriceEventDate(iso: string | null): string {
+  if (!iso) return 'Tanggal tindakan belum tercatat';
   const recordedAt = new Date(iso);
   if (Number.isNaN(recordedAt.getTime())) return 'Tanggal belum tersedia';
   return new Intl.DateTimeFormat('id-ID', {

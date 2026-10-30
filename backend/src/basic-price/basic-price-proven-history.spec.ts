@@ -184,4 +184,104 @@ describe('BP-HISTORY-ONE-TRUTH — Backend owns the UI event meaning', () => {
     expect(result.entries).toHaveLength(2);
     expect(result.truncated).toBe(true);
   });
+
+  it('published correction traverses lawful changes in period, source type and coverage', () => {
+    const predecessor = row(0, {
+      assetScope: 'SIMPROK_CATALOG',
+      workspaceId: null,
+      effectiveDate: new Date('2026-11-01T00:00:00Z'),
+      sourceType: 'OFFICIAL_DOCUMENT',
+      sourceOrigin: 'OFFICIAL_SOURCE',
+      regionCoverageSetId: 'coverage-old',
+    });
+    const publishedAt = new Date('2026-10-29T04:00:00Z');
+    const correction = row(1, {
+      assetScope: 'SIMPROK_CATALOG',
+      workspaceId: null,
+      effectiveDate: new Date('2026-10-20T00:00:00Z'),
+      createdAt: new Date('2026-10-05T04:00:00Z'),
+      sourceType: 'MARKET_SURVEY',
+      sourceOrigin: 'FIELD_REPORT',
+      regionCoverageSetId: 'coverage-new',
+      supersedesBasicPriceId: predecessor.id,
+      publicationAt: publishedAt,
+    });
+    const history = buildProvenPriceHistory(correction.id, [
+      predecessor,
+      correction,
+    ]);
+    expect(history.entries.map((x) => x.actionLabel)).toEqual([
+      'Dikoreksi',
+      'Harga Awal',
+    ]);
+    expect(history.entries[0].recordedAt).toBe(publishedAt.toISOString());
+    expect(history.truncated).toBe(false);
+  });
+
+  it('catalog correction without a publication timestamp does not invent a date', () => {
+    const predecessor = row(0, {
+      assetScope: 'SIMPROK_CATALOG',
+      workspaceId: null,
+    });
+    const corrected = row(1, {
+      assetScope: 'SIMPROK_CATALOG',
+      workspaceId: null,
+      supersedesBasicPriceId: predecessor.id,
+      publicationAt: null,
+    });
+    const history = buildProvenPriceHistory(corrected.id, [
+      predecessor,
+      corrected,
+    ]);
+    expect(history.entries[0].actionLabel).toBe('Dikoreksi');
+    expect(history.entries[0].recordedAt).toBeNull();
+  });
+
+  it('private KDN-only observation and correction do not masquerade as price events', () => {
+    const original = row(0, {
+      price: '1550000.00',
+      kdnPercent: '30.00',
+    });
+    const kdnObserved = row(1, {
+      price: '1550000.00',
+      kdnPercent: '40.00',
+      kdnEstablishment: 'MANUAL_NEW_OBSERVATION',
+      provenanceCorrections: audit(0),
+    });
+    const actualPrice = row(2, {
+      price: '1750000.00',
+      kdnPercent: '40.00',
+      provenanceCorrections: audit(1),
+    });
+    const observedHistory = buildProvenPriceHistory(actualPrice.id, [
+      original,
+      kdnObserved,
+      actualPrice,
+    ]);
+    expect(observedHistory.entries.map((x) => x.price)).toEqual([
+      '1750000.00',
+      '1550000.00',
+    ]);
+    expect(observedHistory.entries.map((x) => x.actionLabel)).toEqual([
+      'Diperbarui',
+      'Harga Awal',
+    ]);
+
+    const kdnCorrected = row(3, {
+      price: '1550000.00',
+      kdnPercent: '45.00',
+      kdnEstablishment: 'MANUAL_CORRECTION',
+      supersedesBasicPriceId: original.id,
+    });
+    const correctedHistory = buildProvenPriceHistory(kdnCorrected.id, [
+      original,
+      kdnCorrected,
+    ]);
+    expect(correctedHistory.entries).toHaveLength(1);
+    expect(correctedHistory.entries[0].actionLabel).toBe('Harga Awal');
+    expect(correctedHistory.entries[0].changeLabel).toBe('Terkini');
+    expect(correctedHistory.entries[0].recordedAt).toBe(
+      original.createdAt.toISOString(),
+    );
+  });
 });

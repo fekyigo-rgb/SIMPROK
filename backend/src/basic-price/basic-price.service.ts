@@ -1574,8 +1574,10 @@ export class BasicPriceService {
         ...this.eligibility.usableWhere(workspaceId),
         resourceId: anchor.resourceId,
         regionId: anchor.regionId,
-        // Never put future prices into a historical as-of Detail.
-        effectiveDate: { lte: anchor.effectiveDate },
+        // The exact superseded predecessor may carry a LATER business
+        // effectiveDate than its lawful correction. Time filtering this
+        // candidate superset would sever that canonical correction pointer.
+        // Only backward, proven pointers enter the emitted history.
       },
       select: {
         ...EXPLORER_ROW_SELECT,
@@ -1584,11 +1586,22 @@ export class BasicPriceService {
         regionCoverageSetId: true,
         createdAt: true,
         recordsNewObservation: true,
+        kdnPercent: true,
+        kdnEstablishment: true,
+        publicationAudits: {
+          where: { action: 'PUBLISH' },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { createdAt: true },
+        },
       },
       orderBy: [{ effectiveDate: 'desc' }, { createdAt: 'desc' }],
       take: BASIC_PRICE_PROVEN_HISTORY_MAX_CANDIDATES + 1,
     });
-    const bounded = candidates.slice(0, BASIC_PRICE_PROVEN_HISTORY_MAX_CANDIDATES);
+    const bounded = candidates.slice(
+      0,
+      BASIC_PRICE_PROVEN_HISTORY_MAX_CANDIDATES,
+    );
     // A crowded catalog may hold 500 newer unrelated prices for this same
     // resource+region. The selected ID must still appear as the first history
     // fact; make one scoped recovery query ONLY when the capped read omitted it.
@@ -1608,6 +1621,14 @@ export class BasicPriceService {
           regionCoverageSetId: true,
           createdAt: true,
           recordsNewObservation: true,
+          kdnPercent: true,
+          kdnEstablishment: true,
+          publicationAudits: {
+            where: { action: 'PUBLISH' },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: { createdAt: true },
+          },
         },
       });
       if (anchored) bounded.push(anchored);
@@ -1629,6 +1650,9 @@ export class BasicPriceService {
       createdAt: row.createdAt,
       effectiveDate: row.effectiveDate,
       price: toDecimalString2(row.value),
+      kdnPercent: row.kdnPercent?.toString() ?? null,
+      kdnEstablishment: row.kdnEstablishment,
+      publicationAt: row.publicationAudits?.[0]?.createdAt ?? null,
       sourceName: deriveExplorerSourceName(row),
       provenanceCorrections: row.provenanceCorrections,
     }));
@@ -1648,9 +1672,15 @@ export class BasicPriceService {
       select: { id: true },
     });
     const excludedByLaterSameSource = activeAtReference
-      ? (await BasicPriceService.olderSameSourceObservationOfferIds(
-        this.prisma, this.eligibility, workspaceId, asOf, precedence,
-      )).includes(anchor.id)
+      ? (
+          await BasicPriceService.olderSameSourceObservationOfferIds(
+            this.prisma,
+            this.eligibility,
+            workspaceId,
+            asOf,
+            precedence,
+          )
+        ).includes(anchor.id)
       : false;
     return buildProvenPriceHistory(
       anchor.id,

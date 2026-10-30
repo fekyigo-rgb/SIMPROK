@@ -810,9 +810,14 @@ export interface BasicPriceDomesticContent {
 /** A single proven price event. All meanings are resolved by Backend. */
 export interface BasicPriceProvenHistoryEntry {
   price: string;
-  changeLabel: 'Terkini' | 'Diperbarui' | 'Dikoreksi' | 'Harga Awal' | 'Belum terverifikasi';
+  changeLabel:
+    | 'Terkini'
+    | 'Diperbarui'
+    | 'Dikoreksi'
+    | 'Harga Awal'
+    | 'Belum terverifikasi';
   actionLabel: 'Diperbarui' | 'Dikoreksi' | 'Harga Awal' | null;
-  recordedAt: string;
+  recordedAt: string | null;
   sourceName: string | null;
   isCurrent: boolean;
 }
