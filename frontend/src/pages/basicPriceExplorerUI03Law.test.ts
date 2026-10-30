@@ -9,10 +9,11 @@ const ahsp = readFileSync(new URL('../styles/ahsp.css', import.meta.url), 'utf8'
 
 test('Koleksi uses the canonical API filter, not client-side filtering of one page', () => {
   assert.equal(buildExplorerQueryParams({}).assetScope, undefined);
-  assert.equal(buildExplorerQueryParams({ assetScope: 'WORKSPACE_PRIVATE' }).assetScope, 'WORKSPACE_PRIVATE');
-  assert.equal(buildExplorerQueryParams({ assetScope: 'SIMPROK_CATALOG' }).assetScope, 'SIMPROK_CATALOG');
-  assert.match(page, /assetScope: collection \|\| undefined/);
+  assert.equal(buildExplorerQueryParams({ collection: 'WORKSPACE_PRIVATE' }).assetScope, 'WORKSPACE_PRIVATE');
+  assert.equal(buildExplorerQueryParams({ collection: 'SIMPROK_CATALOG' }).assetScope, 'SIMPROK_CATALOG');
+  assert.match(page, /collection: collection \|\| undefined/);
   assert.doesNotMatch(page, /state\.items\.filter\([^)]*assetScope/s);
+  assert.doesNotMatch(page, /\bassetScope\b/);
 });
 
 test('Koleksi is beside the existing sort and has three Owner-approved labels', () => {

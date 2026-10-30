@@ -249,7 +249,7 @@ export function BasicPriceExplorerPage() {
         resourceType: draft.resourceType || undefined,
         sourceFamily: draft.sourceFamily || undefined,
         sourceName: draft.sourceName || undefined,
-        assetScope: collection || undefined,
+        collection: collection || undefined,
         page,
         limit: 20,
         sortBy: 'effectiveDate',
