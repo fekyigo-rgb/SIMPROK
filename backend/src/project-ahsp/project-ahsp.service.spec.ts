@@ -89,6 +89,8 @@ describe('ProjectAhspService E1A', () => {
     const price = {
       id: '80000000-0000-4000-8000-000000000001',
       resourceId: catalog.id,
+      regionId: selectionInput.referenceRegionId,
+      regionCoverageSetId: null,
       value: new Prisma.Decimal('1234567890123456.78'),
       sourceOrigin: 'SUPPLIER',
       freshnessStatus: 'CURRENT',
@@ -127,7 +129,12 @@ describe('ProjectAhspService E1A', () => {
         }),
         update: jest.fn().mockResolvedValue({}),
       },
-      region: { findFirst: jest.fn().mockResolvedValue({ id: selectionInput.referenceRegionId }) },
+      region: {
+        findFirst: jest.fn().mockResolvedValue({ id: selectionInput.referenceRegionId }),
+        findUnique: jest.fn(async ({ where }: any) => ({
+          id: where.id, parentId: null, administrativeLevel: 'PROVINCE', isActive: true,
+        })),
+      },
       aHSPVersion: {
         findFirst: jest.fn(async ({ where }: { where?: { versionNumber?: { gt?: number } } } = {}) => {
           if (where?.versionNumber?.gt != null) return null;
@@ -673,9 +680,11 @@ describe('ProjectAhspService E1A', () => {
     expect(where).toMatchObject({
       effectiveDate: { lte: new Date('2026-08-04T00:00:00.000Z') },
     });
-    expect(where.AND).toContainEqual(
-      basicPriceRegionApplicabilityWhere(selectionInput.referenceRegionId),
-    );
+    // Canonical tier offer contains one exact-region predicate at this
+    // PROVINCE-only fixture. It is intentionally nested under the tiers OR.
+    expect(where.AND).toContainEqual({
+      OR: [basicPriceRegionApplicabilityWhere(selectionInput.referenceRegionId)],
+    });
     expect(where).not.toHaveProperty('freshnessStatus');
   });
 
@@ -726,7 +735,7 @@ describe('ProjectAhspService E1A', () => {
         ],
       },
       { OR: [{ validUntil: null }, { validUntil: { gte: new Date('2026-08-04T00:00:00.000Z') } }] },
-      basicPriceRegionApplicabilityWhere(selectionInput.referenceRegionId),
+      { OR: [basicPriceRegionApplicabilityWhere(selectionInput.referenceRegionId)] },
     ]);
   });
 

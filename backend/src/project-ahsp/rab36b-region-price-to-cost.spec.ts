@@ -7,11 +7,12 @@ const district = 'district-gambir';
 const city = 'city-jakarta-pusat';
 const province = 'province-jakarta';
 const otherDistrict = 'district-pancoran';
-const hierarchy: Record<string, { id: string; parentId: string | null; administrativeLevel: string; isActive: boolean; name?: string; code?: string }> = {
+const hierarchy: Record<string, { id: string; parentId: string | null; administrativeLevel: string | null; isActive: boolean; name?: string; code?: string }> = {
   [origin]: { id: origin, parentId: district, administrativeLevel: 'VILLAGE', isActive: true },
   [district]: { id: district, parentId: city, administrativeLevel: 'DISTRICT', isActive: true, name: 'Gambir', code: '31.71.01' },
   [city]: { id: city, parentId: province, administrativeLevel: 'REGENCY_CITY', isActive: true },
   [province]: { id: province, parentId: null, administrativeLevel: 'PROVINCE', isActive: true },
+  'legacy-active': { id: 'legacy-active', parentId: null, administrativeLevel: null, isActive: true, name: 'Wilayah Legacy', code: 'L' },
 };
 
 const catalog = {
@@ -152,6 +153,16 @@ describe('RAB-36B: canonical Region priority -> existing price kernel -> Cost Ke
     ], city);
     expect(resolution.selectedBasicPriceId).toBe('province-valid');
     expect(resolution.explanation).toContain('tier PROVINCE');
+  });
+  it('keeps a proven exact-price path for active legacy Region, without widening to parent', async () => {
+    const { resolution } = await run([
+      price('old-exact-price', 'legacy-active', '50.00'),
+      price('unrelated-province', province, '1.00'),
+    ], 'legacy-active');
+    expect(resolution.selectedBasicPriceId).toBe('old-exact-price');
+    expect(resolution.explanation).toContain('tier LEGACY_EXACT');
+    const unavailable = await run([price('province', province, '1.00')], 'legacy-active');
+    expect(unavailable.resolution.status).toBe('UNRESOLVED');
   });
   it('fails closed on an unproven hierarchy rather than guessing a parent', async () => {
     await expect(run([], 'village-unknown'))

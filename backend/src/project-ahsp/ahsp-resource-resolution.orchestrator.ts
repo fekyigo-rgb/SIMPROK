@@ -11,7 +11,7 @@ import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibil
 import { BasicPriceService } from '../basic-price/basic-price.service';
 import { promotionLineagePrecedenceWhere } from '../basic-price/basic-price-promotion-precedence';
 import { basicPriceRegionApplicabilityWhere, basicPriceRegionMatches } from '../basic-price/basic-price-region-applicability';
-import { firstEligiblePriceRegionTier, loadCanonicalPriceRegionContext } from '../basic-price/basic-price-region-priority';
+import { firstEligiblePriceRegionTier, legacyExactPriceRegionLadder, loadCanonicalPriceRegionContext } from '../basic-price/basic-price-region-priority';
 import {
   basicPriceCurrentnessWhere,
   mergeCurrentnessAnd,
@@ -201,11 +201,16 @@ export class AhspResourceResolutionOrchestrator {
       );
     // RAB-36B: reuse the canonical Region hierarchy; never derive a parent
     // from place names or code prefixes. All reads use the caller's transaction.
-    const { ladder: regionalLadder, facts: regionFacts } =
+    const { ladder: provenLadder, facts: regionFacts } =
       await loadCanonicalPriceRegionContext(tx, input.referenceRegionId);
-    if (regionalLadder.status !== 'COMPLETE') {
+    const originFact = regionFacts.find((region) => region.id === input.referenceRegionId);
+    if (!originFact?.isActive) {
       throw new ConflictException('RAB_PRICE_REGION_HIERARCHY_UNPROVEN');
     }
+    // Backwards compatibility for active legacy Region rows: exact pricing
+    // still works, but NO ancestor fallback is invented without complete proof.
+    const regionalLadder = provenLadder.status === 'COMPLETE'
+      ? provenLadder : legacyExactPriceRegionLadder(input.referenceRegionId);
     const regionalWhere: Prisma.BasicPriceWhereInput = {
       OR: regionalLadder.tiers.map((tier) =>
         basicPriceRegionApplicabilityWhere(tier.regionId)),

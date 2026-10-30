@@ -18,13 +18,19 @@ export type PriceRegionFact = Readonly<{
   isActive: boolean;
 }>;
 
-export type PriceRegionTier = Readonly<{ regionId: string; level: PriceRegionLevel; priority: number }>;
+export type PriceRegionTier = Readonly<{ regionId: string; level: PriceRegionLevel | 'LEGACY_EXACT'; priority: number }>;
 
 export type PriceRegionLadder =
   | Readonly<{ status: 'COMPLETE'; tiers: readonly PriceRegionTier[] }>
   | Readonly<{ status: 'INCOMPLETE'; tiers: readonly PriceRegionTier[]; reason:
     'ORIGIN_NOT_FOUND' | 'ORIGIN_NOT_SUPPORTED' | 'REGION_INACTIVE' |
     'PARENT_NOT_PROVEN' | 'HIERARCHY_LEVEL_MISMATCH' | 'HIERARCHY_CYCLE' }>;
+
+/** Existing canonical rows without hierarchy keep their original exact-region pricing path. */
+export const legacyExactPriceRegionLadder = (originRegionId: string): PriceRegionLadder => ({
+  status: 'COMPLETE',
+  tiers: [{ regionId: originRegionId, level: 'LEGACY_EXACT', priority: 0 }],
+});
 
 const nextParentLevel: Record<PriceRegionLevel, PriceRegionLevel | null> = {
   VILLAGE: 'DISTRICT',

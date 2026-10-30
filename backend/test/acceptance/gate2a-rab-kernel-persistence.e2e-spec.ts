@@ -39,6 +39,11 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
   let workspaceId: string;
   let orgId: string;
   let regionId: string;
+  let fallbackChildRegionId: string;
+  let fallbackProjectId: string;
+  let fallbackBoqItemId: string;
+  let fallbackBoqStructureId: string;
+  let fallbackAhspId: string;
 
   // Positive fixture
   let projectId: string;
@@ -162,6 +167,7 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
     sourcePriceValue: string;
     /** §PR57 Gap A: the ResourceCatalog id this RESOLVED resolution truthfully identifies. */
     resourceCatalogId: string;
+    referenceRegionId?: string;
   }) => {
     const ahsp = await prisma.aHSP.create({
       data: {
@@ -197,7 +203,7 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
         ahspVersionId: version.id,
         idempotencyKey: `${tag}-${params.resourceName}-occurrence`,
         businessPricingAsOfDate: new Date('2026-07-31T00:00:00.000Z'),
-        referenceRegionId: regionId,
+        referenceRegionId: params.referenceRegionId ?? regionId,
         resolutionPolicyVersion: 'E1A_CONTEXTUAL_EXACT_REGION_V1',
         resourceResolutions: {
           create: [
@@ -259,9 +265,14 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
     });
     workspaceId = workspace.id;
     const region = await prisma.region.create({
-      data: { code: `${tag}-REG`, name: `${tag} Region`, isActive: true },
+      data: { code: `${tag}-REG`, name: `${tag} Region`, isActive: true, administrativeLevel: 'PROVINCE' },
     });
     regionId = region.id;
+    const childRegion = await prisma.region.create({
+      data: { code: `${tag}-REG-CHILD`, name: `${tag} Kota Anak`, isActive: true,
+        administrativeLevel: 'REGENCY_CITY', parentId: regionId },
+    });
+    fallbackChildRegionId = childRegion.id;
 
     const project = await prisma.project.create({
       data: { workspaceId, organizationId: orgId, code: `${tag}-P`, name: `${tag} Project`, status: 'PLANNED' },
@@ -275,15 +286,20 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
       data: { workspaceId, organizationId: orgId, code: `${tag}-MISMATCH`, name: `${tag} Mismatch Project`, status: 'PLANNED' },
     });
     mismatchProjectId = mismatchProject.id;
+    const fallbackProject = await prisma.project.create({
+      data: { workspaceId, organizationId: orgId, code: `${tag}-REGIONAL`,
+        name: `${tag} Fallback Region Project`, status: 'PLANNED' },
+    });
+    fallbackProjectId = fallbackProject.id;
 
     const rabEditor = await createActor(
       'editor',
       ['RAB_DRAFT_EDIT'],
-      [projectId, negativeProjectId, mismatchProjectId],
+      [projectId, negativeProjectId, mismatchProjectId, fallbackProjectId],
     );
     const verifier = await createActor('verifier', ['BASIC_PRICE_VERIFY'], []);
     const publisher = await createActor('publisher', ['BASIC_PRICE_PUBLISH'], []);
-    const rabViewer = await createActor('viewer', ['RAB_VIEW'], [projectId]);
+    const rabViewer = await createActor('viewer', ['RAB_VIEW'], [projectId, fallbackProjectId]);
     const costReader = await createActor('costreader', ['PROJECT_VIEW'], [projectId]);
     rabEditorToken = await login(rabEditor.email);
     verifierToken = await login(verifier.email);
@@ -359,6 +375,19 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
     ahspId = positiveFixture.ahspId;
     boqStructureId = positiveFixture.structureId;
     boqItemId = positiveFixture.itemId;
+
+    // RAB-36B: second project, SAME published Basic Price, canonical child city.
+    const regionalFixture = await buildAhspAndBoqFixture({
+      projectId: fallbackProjectId,
+      resourceName: `${tag} Besi Beton Regional`,
+      selectedBasicPriceId: basicPriceId,
+      sourcePriceValue: '100000.00',
+      resourceCatalogId,
+      referenceRegionId: fallbackChildRegionId,
+    });
+    fallbackAhspId = regionalFixture.ahspId;
+    fallbackBoqStructureId = regionalFixture.structureId;
+    fallbackBoqItemId = regionalFixture.itemId;
 
     // ---- Negative: a PUBLISHED/PUBLISHED price fabricated with NO submission chain ----
     const negativeResourceCatalog = await prisma.resourceCatalog.create({
@@ -437,9 +466,9 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
   }, 60_000);
 
   afterAll(async () => {
-    const allProjectIds = [projectId, negativeProjectId, mismatchProjectId];
-    const allStructureIds = [boqStructureId, negativeBoqStructureId, mismatchBoqStructureId];
-    const allAhspIds = [ahspId, negativeAhspId, mismatchAhspId, ...directionalAhspIds];
+    const allProjectIds = [projectId, negativeProjectId, mismatchProjectId, fallbackProjectId];
+    const allStructureIds = [boqStructureId, negativeBoqStructureId, mismatchBoqStructureId, fallbackBoqStructureId];
+    const allAhspIds = [ahspId, negativeAhspId, mismatchAhspId, fallbackAhspId, ...directionalAhspIds];
     const allBasicPriceIds = [basicPriceId, negativeBasicPriceId, mismatchBasicPriceId];
     const allResourceCatalogIds = [
       resourceCatalogId,
@@ -471,6 +500,7 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
     await prisma.priceSubmissionAudit.deleteMany({ where: { submissionId } });
     await prisma.priceSubmissionRevision.deleteMany({ where: { submissionId } });
     await prisma.priceSubmission.deleteMany({ where: { id: submissionId } });
+    await prisma.region.deleteMany({ where: { id: fallbackChildRegionId } });
     await prisma.region.deleteMany({ where: { id: regionId } });
 
     await prisma.projectAssignment.deleteMany({ where: { workspaceMembershipId: { in: membershipIds } } });
@@ -567,6 +597,33 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
    * lands in: priceOrigin SERVER_COST_KERNEL, workingOccurrenceId cleared,
    * calculationOccurrenceId intact.
    */
+  it('RAB-36B: authenticated PostgreSQL writer accepts ancestor price and re-reads frozen money', async () => {
+    // Reuse the existing real HTTP actor permissions, published price and
+    // provenance. Child city uses its canonical province ancestor's price.
+    const accepted = await request(app.getHttpServer())
+      .post(`/projects/${fallbackProjectId}/boq/items/${fallbackBoqItemId}/cost-calculation/persist`)
+      .set('Authorization', `Bearer ${rabEditorToken}`)
+      .send({ calculationAsOfDate: '2026-07-31' })
+      .expect(201);
+    expect(accepted.body).toMatchObject({
+      unitPrice: '200000.00', lineTotal: '1000000.00',
+      priceOrigin: 'SERVER_COST_KERNEL',
+    });
+    const stored = await prisma.boqItem.findUniqueOrThrow({ where: { id: fallbackBoqItemId } });
+    expect(stored.unitPrice?.toFixed(2)).toBe('200000.00');
+    expect(stored.lineTotal?.toFixed(2)).toBe('1000000.00');
+    const reread = await request(app.getHttpServer())
+      .get(`/projects/${fallbackProjectId}/boq/items/${fallbackBoqItemId}/persisted-calculation`)
+      .set('Authorization', `Bearer ${rabViewerToken}`)
+      .expect(200);
+    expect(reread.body).toMatchObject({
+      status: 'VERIFIED',
+      stored: { unitPrice: '200000.00', lineTotal: '1000000.00' },
+      recomputed: { unitPrice: '200000.00', lineTotal: '1000000.00' },
+    });
+    expect(reread.body.resources[0].selectedBasicPriceId).toBe(basicPriceId);
+  }, 60_000);
+
   it('RM-03: re-proves the persisted line from its own frozen provenance, reproducing stored money exactly', async () => {
     const response = await request(app.getHttpServer())
       .get(`/projects/${projectId}/boq/items/${boqItemId}/persisted-calculation`)
