@@ -949,6 +949,69 @@ export class ProjectService {
       );
     }
 
+    // RAB-37: extend the EXISTING intake-context PATCH for saved draft
+    // geography, preserving the same canonical Region verifier used on create.
+    // Every existing BOQ, frozen occurrence, and prior price remains untouched.
+    if (dto.locationRegionIds !== undefined) {
+      if (!dto.expectedLocationRegionIds) {
+        throw new BadRequestException('PROJECT_REGION_EXPECTED_SELECTION_REQUIRED');
+      }
+      const nextIds = uniqueCanonicalIds(dto.locationRegionIds);
+      if (nextIds.length !== dto.locationRegionIds.length || nextIds.length === 0) {
+        throw new BadRequestException('PROJECT_REGION_INVALID_SELECTION');
+      }
+      await this.assertProjectRegionSelections(nextIds);
+      const sameIds = (a: readonly string[], b: readonly string[]) =>
+        [...a].sort().join('|') === [...b].sort().join('|');
+      return this.prisma.$transaction(async (tx) => {
+        // Serialize edits of this project's intake context. An existing
+        // baseline or concurrent location change must reject the whole request.
+        const locked = await tx.$queryRaw<Array<{ id: string; status: ProjectStatus }>>`
+          SELECT "id", "status" FROM "projects"
+          WHERE "id" = ${projectId}::uuid FOR UPDATE`;
+        if (locked.length !== 1) throw new NotFoundException('Project not found');
+        // Reuse the SAME write-path lifecycle gate that protects RAB editing.
+        // Active baseline, APPROVED, LOCKED, and incompatible draft status
+        // all fail closed; a mere "active baseline count = 0" is insufficient.
+        const lifecycle = await this.rabLifecyclePolicy.evaluateInTransaction(
+          tx, projectId, locked[0].status,
+        );
+        if (!lifecycle.canEditDraft) {
+          throw new ConflictException(
+            'PROJECT_INTAKE_LIFECYCLE_LOCKED: ' + (lifecycle.reasonCode ?? 'UNKNOWN'),
+          );
+        }
+        const current = await tx.projectRegionSelection.findMany({
+          where: { projectId },
+          select: { regionId: true },
+        });
+        if (!sameIds(
+          current.map((selection) => selection.regionId),
+          dto.expectedLocationRegionIds!,
+        )) {
+          throw new ConflictException('PROJECT_REGION_SELECTION_CHANGED_RELOAD');
+        }
+        if (!sameIds(current.map((selection) => selection.regionId), nextIds)) {
+          await tx.projectRegionSelection.deleteMany({ where: { projectId } });
+          await tx.projectRegionSelection.createMany({
+            data: nextIds.map((regionId) => ({ projectId, regionId })),
+          });
+        }
+        const data: Prisma.ProjectUpdateInput = {};
+        if (Object.prototype.hasOwnProperty.call(dto, 'budgetBaseline')) {
+          data.budgetBaseline = dto.budgetBaseline == null
+            ? null : new Prisma.Decimal(dto.budgetBaseline);
+        }
+        if (Object.prototype.hasOwnProperty.call(dto, 'mainMaterialSpec')) {
+          data.mainMaterialSpec = this.normalizeOptionalText(dto.mainMaterialSpec) ?? null;
+        }
+        const result = Object.keys(data).length > 0
+          ? await tx.project.update({ where: { id: projectId }, data })
+          : await tx.project.findUniqueOrThrow({ where: { id: projectId } });
+        return { ...result, locationRegionIds: nextIds };
+      });
+    }
+
     const data: Prisma.ProjectUpdateInput = {};
 
     if (Object.prototype.hasOwnProperty.call(dto, 'budgetBaseline')) {
