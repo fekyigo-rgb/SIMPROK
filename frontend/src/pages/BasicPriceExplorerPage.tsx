@@ -189,7 +189,9 @@ export function BasicPriceExplorerPage() {
   type SortKey = 'effectiveDate' | 'resourceName' | 'price';
   type SortDirection = 'asc' | 'desc';
   type SortChoice = `${SortKey}:${SortDirection}`;
-  const [sortOrder, setSortOrder] = useState<SortChoice>('effectiveDate:desc');
+  // Owner-approved neutral view: show the canonical Item list A–Z on entry.
+  // This is presentation state only; other sort choices remain available.
+  const [sortOrder, setSortOrder] = useState<SortChoice>('resourceName:asc');
   const [sortBy, sortDirection] = sortOrder.split(':') as [SortKey, SortDirection];
   // Collection is table-scoped, as is sorting. Empty = unchanged combined list.
   const [collection, setCollection] = useState<'' | 'WORKSPACE_PRIVATE' | 'SIMPROK_CATALOG'>('');
@@ -325,6 +327,7 @@ export function BasicPriceExplorerPage() {
   const resetFilters = () => {
     setDraft(EMPTY_DRAFT);
     setCollection('');
+    setSortOrder('resourceName:asc');
     replaceSelectedIds(new Set());
     setSelectionNotice(null);
     setPage(1);
