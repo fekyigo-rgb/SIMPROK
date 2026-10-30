@@ -370,6 +370,16 @@ for (const resource of version.resources) {
     identifiedCatalog.id,
     trustedUnitContext,
   );
+  // Only when the legacy exact-unit route cannot price: ask the SAME Unit
+  // Kernel for the needed PRICE -> AHSP direction. A reverse-direction rule
+  // is never inverted. No new dictionary, pricing engine or candidate search.
+  const directlyPricedUnit = unitResolution?.status === 'RESOLVED' &&
+    unitResolution.quantityFactor === '1'
+    ? null
+    : await this.units.resolve(
+        identifiedCatalog.baseUnit, resource.baseUnit,
+        identifiedCatalog.id, trustedUnitContext,
+      );
   const candidates = await Promise.all(
     priceRows.map(async (price) => {
       const resolved =
@@ -438,6 +448,16 @@ for (const resource of version.resources) {
       rawSourceUnit: unitResolution?.rawSourceUnit ?? '',
       rawTargetUnit: unitResolution?.rawTargetUnit ?? '',
     },
+    ...(directlyPricedUnit ? { directPriceUnitResolution: {
+      status: directlyPricedUnit.status,
+      rawSourceUnit: directlyPricedUnit.rawSourceUnit,
+      rawTargetUnit: directlyPricedUnit.rawTargetUnit,
+      canonicalTargetUnitCode: directlyPricedUnit.targetUnitDefinition?.code ?? null,
+      quantityFactor: directlyPricedUnit.quantityFactor,
+      priceOperation: directlyPricedUnit.priceOperation,
+      conversionRuleId: directlyPricedUnit.conversionRuleId,
+      conversionRuleVersion: directlyPricedUnit.conversionRuleVersion,
+    } } : {}),
   });
   const selectedCandidate =
     result.status === 'RESOLVED'
@@ -489,6 +509,9 @@ for (const resource of version.resources) {
     selected !== null &&
     selected.resourceId === result.resolvedResourceCatalogId &&
     selected.value.toString() === result.sourcePriceValue;
+  const usedDirectionalUnit = resolved &&
+    result.reasonCodes.includes('PROVEN_DIRECTIONAL_PRICE_CONVERSION');
+  const recordedPriceUnitProof = usedDirectionalUnit ? directlyPricedUnit : unitResolution;
   resolutions.push({
     ahspResourceId: resource.id,
     rawAhspResourceRef: resource.resourceId,
@@ -503,22 +526,25 @@ for (const resource of version.resources) {
     selectionMode: resolved ? ProjectAhspSelectionMode.AUTO_SELECTED : null,
     resourceCatalogId: resolved ? result.resolvedResourceCatalogId : null,
     selectedBasicPriceId: resolved ? result.selectedBasicPriceId : null,
-    canonicalUnit: unitResolution?.status === 'RESOLVED'
+    canonicalUnit: resolved ? result.canonicalUnit : unitResolution?.status === 'RESOLVED'
       ? unitResolution.targetUnitDefinition?.code ?? null
       : null,
     sourcePriceValue: resolved ? result.sourcePriceValue : null,
     sourceUnit: resolved ? selected.resource.baseUnit : null,
     adaptedPriceValue: resolved ? result.adaptedPriceValue : null,
     priceMode: resolved ? ProjectAhspPriceMode.BASIC_PRICE : null,
+    // Decimal(18,6) conversionFactor is not wide enough for every certified
+    // Decimal(24,12) rule. Preserve the FULL direction/factor in the existing
+    // quantityFactor + unitConversionRule* provenance columns instead.
     conversionFactor: null,
     sourceUnitDefinitionId:
-      unitResolution?.sourceUnitDefinition?.id ?? null,
+      recordedPriceUnitProof?.sourceUnitDefinition?.id ?? null,
     targetUnitDefinitionId:
-      unitResolution?.targetUnitDefinition?.id ?? null,
-    unitConversionRuleId: unitResolution?.conversionRuleId ?? null,
+      recordedPriceUnitProof?.targetUnitDefinition?.id ?? null,
+    unitConversionRuleId: recordedPriceUnitProof?.conversionRuleId ?? null,
     unitConversionRuleVersion:
-      unitResolution?.conversionRuleVersion ?? null,
-    quantityFactor: unitResolution?.quantityFactor ?? null,
+      recordedPriceUnitProof?.conversionRuleVersion ?? null,
+    quantityFactor: recordedPriceUnitProof?.quantityFactor ?? null,
     selectedSourceOrigin: resolved ? selected.sourceOrigin : null,
     selectedFreshnessStatus: resolved ? selected.freshnessStatus : null,
     selectedEffectiveDate: resolved ? selected.effectiveDate : null,
@@ -527,7 +553,8 @@ for (const resource of version.resources) {
       : ProjectAhspResolutionMethod.DETERMINISTIC_ATTEMPTED,
     reasonCodes: [...result.reasonCodes],
     explanation,
-    policyVersion: E1A_RESOLUTION_POLICY_VERSION,
+    policyVersion: usedDirectionalUnit
+      ? 'E1A_PRICE_DIRECTIONAL_V1' : E1A_RESOLUTION_POLICY_VERSION,
   });
   const sourceName = normalizedAuxiliaryName(facts.rawName);
   const isVerifiedGenericAuxiliary =
