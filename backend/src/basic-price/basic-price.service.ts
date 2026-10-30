@@ -1017,6 +1017,7 @@ export class BasicPriceService {
       sourceOrigin,
       sourceFamily,
       sourceName,
+      assetScope,
       verificationStatus,
       freshnessStatus,
       unit,
@@ -1130,6 +1131,15 @@ export class BasicPriceService {
       (where.AND as Prisma.BasicPriceWhereInput[]).push({
         id: { notIn: olderOffers },
       });
+    }
+
+    // BP-EXPLORER-UI-03: optional collection narrowing on the same canonical
+    // eligible, current, precedence-protected query. No separate list path.
+    if (assetScope !== undefined) {
+      if (assetScope !== 'WORKSPACE_PRIVATE' && assetScope !== 'SIMPROK_CATALOG') {
+        throw new BadRequestException('Invalid Basic Price assetScope filter');
+      }
+      where.assetScope = assetScope;
     }
 
     const resourceFilter: Prisma.ResourceCatalogWhereInput = {

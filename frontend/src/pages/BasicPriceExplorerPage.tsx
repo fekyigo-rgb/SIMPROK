@@ -186,6 +186,8 @@ export function BasicPriceExplorerPage() {
    * so it must not make "Hapus filter" appear or suggest the list is filtered.
    */
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+  // Collection is table-scoped, as is sorting. Empty = unchanged combined list.
+  const [collection, setCollection] = useState<'' | 'WORKSPACE_PRIVATE' | 'SIMPROK_CATALOG'>('');
   const [page, setPage] = useState(1);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [state, setState] = useState<ListState>({ kind: 'loading' });
@@ -247,6 +249,7 @@ export function BasicPriceExplorerPage() {
         resourceType: draft.resourceType || undefined,
         sourceFamily: draft.sourceFamily || undefined,
         sourceName: draft.sourceName || undefined,
+        assetScope: collection || undefined,
         page,
         limit: 20,
         sortBy: 'effectiveDate',
@@ -295,11 +298,11 @@ export function BasicPriceExplorerPage() {
     // eleven fields plus a client-side validity check, so the dependency list
     // could not be stated honestly and the rule was silenced. Four values now
     // decide this request, all four are listed, and the linter agrees.
-  }, [draft, sortOrder, page, reloadNonce]);
+  }, [draft, collection, sortOrder, page, reloadNonce]);
 
   const filtersActive = useMemo(
-    () => JSON.stringify(draft) !== JSON.stringify(EMPTY_DRAFT),
-    [draft],
+    () => JSON.stringify(draft) !== JSON.stringify(EMPTY_DRAFT) || collection !== '',
+    [draft, collection],
   );
 
   const updateDraft = <K extends keyof DraftFilters>(key: K, value: DraftFilters[K]) => {
@@ -316,6 +319,7 @@ export function BasicPriceExplorerPage() {
 
   const resetFilters = () => {
     setDraft(EMPTY_DRAFT);
+    setCollection('');
     replaceSelectedIds(new Set());
     setSelectionNotice(null);
     setPage(1);
@@ -751,7 +755,28 @@ export function BasicPriceExplorerPage() {
           and resource name and price are NOT sortable columns — so no header
           here pretends to be clickable.
         */}
-        <label className="bp-tablebar__sort">
+        <div className="bp-tablebar__controls">
+          <label className="bp-tablebar__sort">
+            Koleksi
+            <select
+              className="bp-select bp-select--inline"
+              value={collection}
+              aria-label="Filter koleksi harga"
+              onChange={(event) => {
+                setCollection(event.target.value as typeof collection);
+                replaceSelectedIds(new Set());
+                setSelectionNotice(null);
+                setPage(1);
+                setOpenDetailId(null);
+                setDetailNotice(null);
+              }}
+            >
+              <option value="">Semua harga</option>
+              <option value="WORKSPACE_PRIVATE">Harga Privat</option>
+              <option value="SIMPROK_CATALOG">Pustaka SIMPROK</option>
+            </select>
+          </label>
+          <label className="bp-tablebar__sort">
           Urutkan
           <select
             className="bp-select bp-select--inline"
@@ -767,7 +792,8 @@ export function BasicPriceExplorerPage() {
             <option value="desc">Tanggal berlaku terbaru</option>
             <option value="asc">Tanggal berlaku terlama</option>
           </select>
-        </label>
+          </label>
+        </div>
       </div>
 
       {selectedRows.length > 0 ? (
@@ -906,7 +932,7 @@ onClick={() => { replaceSelectedIds(new Set()); setPage(1); }}
       {state.kind === 'ready' && state.items.length > 0 ? (
         <>
           <div className="bp-tablewrap">
-            <table className="bp-table">
+            <table className="bp-table bp-table--explorer">
               <caption className="bp-visually-hidden">
                 Daftar harga dasar yang tersedia untuk digunakan
               </caption>
