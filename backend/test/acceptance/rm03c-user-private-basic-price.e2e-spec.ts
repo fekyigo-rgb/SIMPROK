@@ -1078,7 +1078,7 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
   });
 
   describe('SCOPE-03B2: existing authenticated private writer consumes certified rate', () => {
-    it('persists a proven price per canonical unit and retains the original source price', async () => {
+    it('SCOPE-03C: converts imported private price, then persists and rereads its AHSP/RAB cost', async () => {
       const raw = `z03b${tag.toLowerCase()}`;
       const targetCode = `K03B${tag}`;
       const source = await prisma.unitDefinition.create({
@@ -1098,6 +1098,9 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
       let ruleId: string | null = null;
       let batchIdLocal: string | null = null;
       let priceId: string | null = null;
+      let convertedAhspId: string | null = null;
+      let convertedAhspVersionId: string | null = null;
+      let convertedBoqId: string | null = null;
       try {
         for (const entry of [
           { rawAlias: raw, normalizedAlias: raw, unitDefinitionId: source.id },
@@ -1180,7 +1183,122 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
         expect(sourceRow.proposedCanonicalPrice?.toFixed(2)).toBe('80000.00');
         expect(sourceRow.rawUnitText).toBe(raw);
         expect(sourceRow.unitDefinitionId).toBe(target.id);
+
+        // SCOPE-03C: reuse this SAME certified private BasicPrice. The
+        // earlier RM-03C tests prove identity-price LABOR -> CostKernel;
+        // this is the missing CONVERTED imported MATERIAL -> AHSP -> RAB seam.
+        // No fabricated catalogue competitor and no new price publication.
+        expect(await prisma.basicPrice.count({
+          where: { resourceId: catalog.id, assetScope: 'WORKSPACE_PRIVATE', workspaceId: workspaceAId },
+        })).toBe(1);
+        expect(await prisma.basicPrice.count({
+          where: { resourceId: catalog.id, status: 'PUBLISHED', verificationStatus: 'PUBLISHED' },
+        })).toBe(0);
+
+        const ahsp = await prisma.aHSP.create({
+          data: {
+            workspaceId: workspaceAId, workType: `${tag} Converted Unit Cost`,
+            methodType: 'MANUAL', locationType: 'GENERAL', methodName: `${tag} 03C method`,
+          },
+        });
+        convertedAhspId = ahsp.id;
+        const version = await prisma.aHSPVersion.create({
+          data: {
+            ahspId: ahsp.id, workspaceId: workspaceAId, versionNumber: 1,
+            status: 'PUBLISHED', effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
+            outputUnit: 'M1',
+            resources: {
+              create: [{
+                resourceId: `${tag} Converted Material`,
+                resourceType: 'MATERIAL', coefficient: '2.000000',
+                baseUnit: targetCode,
+              }],
+            },
+          },
+        });
+        convertedAhspVersionId = version.id;
+        const boq = await prisma.boqItem.create({
+          data: {
+            boqStructureId, wbsCode: '8.3',
+            name: `${tag} Converted Unit Cost`, itemType: 'WORK_ITEM',
+            quantity: '5', unit: 'M1',
+          },
+        });
+        convertedBoqId = boq.id;
+
+        const selected = await request(server())
+          .post(`/projects/${projectId}/ahsp-occurrences/boq-items/${boq.id}/select-ahsp`)
+          .set('Authorization', `Bearer ${rabEditorToken}`)
+          .send({
+            ahspVersionId: version.id,
+            businessPricingAsOfDate: asOfDate,
+            referenceRegionId: regionId,
+            idempotencyKey: `${tag}-converted-private-rab-chain`,
+          })
+          .expect(201);
+        expect(selected.body.ahspVersionId).toBe(version.id);
+        const resolution = await prisma.projectAhspResourceResolution.findFirstOrThrow({
+          where: { occurrence: { ahspVersionId: version.id, projectId } },
+        });
+        expect(resolution).toMatchObject({
+          status: 'RESOLVED',
+          selectedBasicPriceId: price.id,
+          selectedSourceOrigin: 'STORE',
+        });
+        expect(resolution.sourcePriceValue?.toFixed(2)).toBe('2000.00');
+        expect(resolution.adaptedPriceValue?.toFixed(2)).toBe('2000.00');
+
+        const result = await request(server())
+          .post(`/projects/${projectId}/boq/items/${boq.id}/cost-calculation/persist`)
+          .set('Authorization', `Bearer ${rabEditorToken}`)
+          .send({ calculationAsOfDate: asOfDate })
+          .expect(201);
+        expect(result.body).toMatchObject({
+          boqItemId: boq.id,
+          unitPrice: '4000.00',
+          lineTotal: '20000.00',
+          priceOrigin: 'SERVER_COST_KERNEL',
+        });
+        const stored = await prisma.boqItem.findUniqueOrThrow({ where: { id: boq.id } });
+        expect(stored.unitPrice?.toFixed(2)).toBe('4000.00');
+        expect(stored.lineTotal?.toFixed(2)).toBe('20000.00');
+        const verified = await request(server())
+          .get(`/projects/${projectId}/boq/items/${boq.id}/persisted-calculation`)
+          .set('Authorization', `Bearer ${rabEditorToken}`)
+          .expect(200);
+        expect(verified.body).toMatchObject({
+          status: 'VERIFIED',
+          stored: { unitPrice: '4000.00', lineTotal: '20000.00' },
+          recomputed: { unitPrice: '4000.00', lineTotal: '20000.00' },
+          integrity: { unitPriceMatches: true, lineTotalMatches: true },
+        });
+        expect(verified.body.resources[0].selectedBasicPriceId).toBe(price.id);
+        // Proof source remains 80,000/package; only ONE canonical price per
+        // target unit exists, and the RAB used that exact 2,000/unit value.
+        expect((await prisma.basicPriceImportRow.findUniqueOrThrow({
+          where: { id: row.id },
+        })).proposedCanonicalPrice?.toFixed(2)).toBe('80000.00');
       } finally {
+        // Clean precisely the 03C extension before releasing its private
+        // price/rule. Never touch the older RM-03C project or AHSP fixtures.
+        if (convertedBoqId) {
+          await prisma.boqItem.deleteMany({ where: { id: convertedBoqId } });
+        }
+        if (convertedAhspVersionId) {
+          await prisma.projectAhspResourceResolution.deleteMany({
+            where: { occurrence: { ahspVersionId: convertedAhspVersionId } },
+          });
+          await prisma.projectAhspOccurrence.deleteMany({
+            where: { ahspVersionId: convertedAhspVersionId },
+          });
+          await prisma.aHSPResource.deleteMany({
+            where: { ahspVersionId: convertedAhspVersionId },
+          });
+          await prisma.aHSPVersion.deleteMany({ where: { id: convertedAhspVersionId } });
+        }
+        if (convertedAhspId) {
+          await prisma.aHSP.deleteMany({ where: { id: convertedAhspId } });
+        }
         if (priceId) await prisma.basicPrice.delete({ where: { id: priceId } });
         if (batchIdLocal) {
           await prisma.basicPriceImportRow.deleteMany({ where: { batchId: batchIdLocal } });
@@ -1191,7 +1309,7 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
         await prisma.unitAlias.deleteMany({ where: { id: { in: aliases } } });
         await prisma.unitDefinition.deleteMany({ where: { id: { in: [source.id, target.id] } } });
       }
-    }, 60_000);
+    }, 100_000);
   });
 
   // ── 7. The incremental gate ──────────────────────────────────────────────
