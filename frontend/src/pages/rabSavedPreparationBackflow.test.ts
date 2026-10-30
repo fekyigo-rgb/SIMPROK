@@ -8,8 +8,14 @@ const preparation = readFileSync('src/pages/ProjectSetupPage.tsx', 'utf8');
 
 test('saved RAB has one canonical Preparation route behind Project permissions', () => {
   assert.match(routes, /project\/:projectId\/rab\/preparation/);
-  assert.match(routes, /permission="PROJECT_VIEW"><PermissionRoute permission="PROJECT_CREATE"><ProjectSetupPage/);
+  assert.match(routes, /permission="PROJECT_VIEW"><ProjectSetupPage/);
   assert.match(routes, /project\/:projectId\/rab\/workspace/);
+});
+
+test('RAB-37: saved Preparation can be READ by PROJECT_VIEW without PROJECT_CREATE; edits stay gated', () => {
+  assert.match(preparation, /hasPermission\('PROJECT_CREATE'\)/);
+  assert.match(preparation, /rabLifecycle\?\.canEditDraft === true/);
+  assert.match(preparation, /!contextEditable \|\| !changed/);
 });
 
 test('saved RAB navigation targets its own project and reuses unsaved blocker', () => {

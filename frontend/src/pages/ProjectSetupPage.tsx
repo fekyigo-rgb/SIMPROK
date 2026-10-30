@@ -477,7 +477,7 @@ const sameSavedRegionIds = (a: readonly string[], b: readonly string[]) =>
 
 function SavedRabPreparation({ projectId }: { projectId: string }) {
   const navigate = useNavigate();
-  const { token, activeWorkspaceId } = useAuth();
+  const { token, activeWorkspaceId, hasPermission } = useAuth();
   const returnPath = `/project/${projectId}/rab/workspace`;
   const [loaded, setLoaded] = useState<{
     project: SavedProjectIdentity;
@@ -541,7 +541,10 @@ function SavedRabPreparation({ projectId }: { projectId: string }) {
   const specChanged = loaded !== null &&
     mainMaterialSpec.trim() !== (loaded.context.mainMaterialSpec ?? '').trim();
   const changed = locationChanged || budgetChanged || specChanged;
-  const contextEditable = loaded?.project.rabLifecycle?.canEditDraft !== false;
+  // Read-only opening is lawful for PROJECT_VIEW; editing still requires
+  // the existing backend-matched PROJECT_CREATE permission and lifecycle.
+  const contextEditable = hasPermission('PROJECT_CREATE') &&
+    loaded?.project.rabLifecycle?.canEditDraft === true;
   const preparedFields = loaded?.project.description
     ? readDraftPreparationFields(loaded.project.description) : null;
 
@@ -659,6 +662,7 @@ function SavedRabPreparation({ projectId }: { projectId: string }) {
                 <p>Tahun Anggaran / Tahun Harga: {preparedFields?.year ?? 'Belum tersedia'}</p>
                 <p>Pemilik / Instansi: {preparedFields?.owner ?? 'Belum tersedia'}</p>
                 <p>Identitas proyek tersimpan tetap; perubahan nama atau klasifikasi memerlukan kewenangan proyek tersendiri.</p>
+                {!hasPermission('PROJECT_CREATE') ? <p role="status">Mode baca saja: akun ini tidak memiliki izin mengubah persiapan proyek.</p> : null}
                 <label className="simprok-rab-field">
                   <span>Pagu Anggaran (opsional)</span>
                   <input value={budgetCeiling} disabled={saving || !contextEditable}
