@@ -691,6 +691,16 @@ describe('BasicPriceService — BP-UX-FINAL-01C truth closure', () => {
       id,
       value,
       effectiveDate: new Date(date),
+      createdAt: new Date(date),
+      workspaceId,
+      assetScope: 'SIMPROK_CATALOG',
+      recordsNewObservation: false,
+      resourceId: 'rc-01',
+      regionId: null,
+      regionCoverageSetId: null,
+      sourceSubmission: null,
+      sourceImportRow: null,
+      provenanceCorrections: [],
       supersedesBasicPriceId: supersedes,
     });
 
@@ -802,7 +812,42 @@ describe('BasicPriceService — BP-UX-FINAL-01C truth closure', () => {
       ]);
     });
 
-    it('D9 — the history costs ONE extra query, never one per generation', async () => {
+    it('HISTORY-ASOF-01 — a direct Detail for a non-current row cannot claim Terkini', async () => {
+      prisma.basicPrice.findFirst
+        .mockResolvedValueOnce(detailRow)
+        .mockResolvedValueOnce(null);
+      prisma.basicPrice.findMany.mockResolvedValue([
+        lineage('bp-01', '150000.00', '2026-01-01', null),
+      ]);
+
+      const detail = await service.findDetailForWorkspace(
+        'bp-01', workspaceId, '2026-05-01',
+      );
+      expect(detail.priceHistory.entries[0].isCurrent).toBe(false);
+      expect(detail.priceHistory.entries[0].changeLabel).not.toBe('Terkini');
+      expect(detail.priceHistory.entries[0].actionLabel).toBe('Harga Awal');
+      const asOfQuery = (prisma.basicPrice.findFirst.mock.calls[1] as [FindFirstArgs])[0];
+      expect(asOfQuery.where.id).toBe('bp-01');
+      expectTwoBranchEligibility(asOfQuery.where);
+      expect(JSON.stringify(asOfQuery.where)).toContain('2026-05-01');
+      expect(prisma.$queryRaw).not.toHaveBeenCalled();
+    });
+
+    it('HISTORY-ASOF-02 — an as-of eligible Detail gets the Terkini badge from backend', async () => {
+      prisma.basicPrice.findFirst.mockResolvedValue(detailRow);
+      prisma.basicPrice.findMany.mockResolvedValue([
+        lineage('bp-01', '150000.00', '2026-01-01', null),
+      ]);
+
+      const detail = await service.findDetailForWorkspace(
+        'bp-01', workspaceId, '2026-05-01',
+      );
+      expect(detail.priceHistory.entries[0].isCurrent).toBe(true);
+      expect(detail.priceHistory.entries[0].changeLabel).toBe('Terkini');
+      expect(prisma.$queryRaw).toHaveBeenCalled();
+    });
+
+    it('D9 — each lineage costs ONE bounded query, never one per generation', async () => {
       prisma.basicPrice.findFirst.mockResolvedValue(detailRow);
       prisma.basicPrice.findMany.mockResolvedValue([
         lineage('bp-01', '150000.00', '2026-01-01', 'g2'),
@@ -813,8 +858,11 @@ describe('BasicPriceService — BP-UX-FINAL-01C truth closure', () => {
       const detail = await service.findDetailForWorkspace('bp-01', workspaceId);
 
       expect(detail.corrections.entries).toHaveLength(3);
-      expect(prisma.basicPrice.findFirst).toHaveBeenCalledTimes(1);
-      expect(prisma.basicPrice.findMany).toHaveBeenCalledTimes(1);
+      expect(prisma.basicPrice.findFirst).toHaveBeenCalledTimes(2);
+      // The second query reuses canonical currentness for the Terkini badge.
+      // Old correction-only lineage remains exactly one query; new observation
+      // lineage adds exactly one, not N+1 or one query per generation.
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledTimes(2);
     });
 
     it('the lineage read is tenant-filtered, bounded, and scoped to ONE context', async () => {
@@ -1172,18 +1220,58 @@ describe('BasicPriceService — BP-UX-FINAL-01C truth closure', () => {
       expect(detail.corrections.truncated).toBe(true);
     });
 
-    it('HBOUND-02 — the read asks for exactly ONE row past the ceiling, and only one query', async () => {
+    it('HBOUND-02 — BOTH reads remain independently bounded, not one query per generation', async () => {
       prisma.basicPrice.findFirst.mockResolvedValue(detailRow);
       prisma.basicPrice.findMany.mockResolvedValue([]);
 
       await service.findDetailForWorkspace('bp-01', workspaceId);
 
-      const call = listArgs();
-      // Bounded — never an unbounded backwards walk, never a whole-catalog read.
-      expect(call.take).toBe(HISTORY_BOUND + 1);
-      // HBOUND-05 — and still exactly one query, whatever the depth.
-      expect(prisma.basicPrice.findMany).toHaveBeenCalledTimes(1);
-      expect(prisma.basicPrice.findFirst).toHaveBeenCalledTimes(1);
+      const correctionCall = listArgs();
+      expect(correctionCall.take).toBe(HISTORY_BOUND + 1);
+      const fullHistoryCall =
+        (prisma.basicPrice.findMany.mock.calls[1] as [FindManyArgs])[0];
+      expect(fullHistoryCall.take).toBe(501);
+      expectTwoBranchEligibility(fullHistoryCall.where);
+      expect(fullHistoryCall.where.resourceId).toBe('rc-01');
+      expect(fullHistoryCall.where.regionId).toBeNull();
+      // A lawful published correction may replace a later-effective row.
+      // Candidate membership is decided by exact pointers, NOT by <= anchor date.
+      expect(fullHistoryCall.where).not.toHaveProperty('effectiveDate');
+      expect(fullHistoryCall).toMatchObject({
+        select: {
+          kdnPercent: true,
+          kdnEstablishment: true,
+          publicationAudits: {
+            where: { action: 'PUBLISH' },
+            take: 1,
+            select: { createdAt: true },
+          },
+        },
+      });
+      // One Detail row + one canonical correction read + one proven event read.
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledTimes(2);
+      expect(prisma.basicPrice.findFirst).toHaveBeenCalledTimes(2);
+    });
+
+    it('HISTORY-CAP-01 — the scoped anchor is recovered when 500 unrelated prices crowd it out', async () => {
+      prisma.basicPrice.findFirst.mockResolvedValue({
+        ...detailRow,
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+      });
+      prisma.basicPrice.findMany
+        .mockResolvedValueOnce([]) // Existing correction-only lineage
+        .mockResolvedValueOnce(Array.from({ length: 501 }, (_, index) => ({
+          ...lineage('unrelated-' + index, '130000.00', '2026-01-01', null),
+          sourceType: 'MARKET_SURVEY',
+          sourceOrigin: 'GOVERNMENT',
+        })));
+      const detail = await service.findDetailForWorkspace('bp-01', workspaceId);
+      expect(detail.priceHistory.entries[0].price).toBe('150000.00');
+      expect(detail.priceHistory.truncated).toBe(true);
+      expect(prisma.basicPrice.findMany).toHaveBeenCalledTimes(2);
+      // Initial Detail, exceptional scoped anchor rescue, canonical as-of check.
+      expect(prisma.basicPrice.findFirst).toHaveBeenCalledTimes(3);
+      expectTwoBranchEligibility((prisma.basicPrice.findFirst.mock.calls[1] as [FindFirstArgs])[0].where);
     });
 
     it('HBOUND-06 — a corrupted self-referential chain stays bounded and truthful', async () => {
@@ -1405,8 +1493,9 @@ describe('BasicPriceService — BP-UX-FINAL-01C truth closure', () => {
       const detail = await service.findDetailForWorkspace('bp-01', workspaceId);
       expect(detail.domesticContent.kdnPercent).toBe('72.50');
 
-      // ONE read produced both the money and the %KDN, and it was tenant-gated.
-      expect(prisma.basicPrice.findFirst).toHaveBeenCalledTimes(1);
+      // The first read produced both money and %KDN, tenant-gated; the
+      // second verifies active offer meaning, never queries KDN separately.
+      expect(prisma.basicPrice.findFirst).toHaveBeenCalledTimes(2);
       const call = firstArgs();
       expectTwoBranchEligibility(call.where);
       expect((call.select as { kdnPercent?: boolean }).kdnPercent).toBe(true);

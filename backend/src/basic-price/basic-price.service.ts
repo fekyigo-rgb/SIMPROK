@@ -46,6 +46,12 @@ import {
   BASIC_PRICE_HISTORY_MAX_GENERATIONS,
   buildSupersessionTimeline,
 } from './basic-price-history';
+import {
+  BASIC_PRICE_PROVEN_HISTORY_MAX_CANDIDATES,
+  buildProvenPriceHistory,
+  type ProvenHistoryRow,
+} from './basic-price-proven-history';
+import { toDecimalString2 } from '../common/money';
 
 const EXPLORER_ROW_SELECT = {
   id: true,
@@ -1467,7 +1473,9 @@ export class BasicPriceService {
   async findDetailForWorkspace(
     id: string,
     workspaceId: string,
+    asOfInput?: string,
   ): Promise<BasicPriceDetail> {
+    const asOf = asOfInput ? parseDateOnlyUtc(asOfInput, 'asOf') : new Date();
     const row = await this.prisma.basicPrice.findFirst({
       where: {
         id,
@@ -1502,7 +1510,7 @@ export class BasicPriceService {
 
     // The Detail and Explorer must project the same proven source identity.
     // Neither projection inherits the predecessor's MONEY or document bytes.
-    const displayedPrice = mapExplorerItem(row, workspaceId, new Date());
+    const displayedPrice = mapExplorerItem(row, workspaceId, asOf);
     const unitDisplays = await this.explorerVerifiedPriceUnitDisplays([row]);
     displayedPrice.resource = {
       ...displayedPrice.resource,
@@ -1537,7 +1545,150 @@ export class BasicPriceService {
       // as one with a stated 80%.
       domesticContent: mapBasicPriceDomesticContent(row),
       corrections: await this.readCorrectionLineage(row, workspaceId),
+      priceHistory: await this.readProvenPriceHistory(row, workspaceId, asOf),
     };
+  }
+
+  /**
+   * BP-HISTORY-ONE-TRUTH: add the proven same-source observation chain to
+   * Detail WITHOUT altering its already-PASS correction-only contract.
+   * All source names come from the existing canonical projection and its
+   * guarded ancestor reader; never infer a source from similar names.
+   *
+   * A bounded candidate read is NOT proof of full history by itself.
+   * The pure walker follows only exact correction pointers or existing
+   * NEW_OBSERVATION birth-audit links, and reports any gap honestly.
+   */
+  private async readProvenPriceHistory(
+    anchor: {
+      id: string;
+      resourceId: string;
+      regionId: string | null;
+      effectiveDate: Date;
+    },
+    workspaceId: string,
+    asOf: Date,
+  ): Promise<BasicPriceDetail['priceHistory']> {
+    const candidates = await this.prisma.basicPrice.findMany({
+      where: {
+        ...this.eligibility.usableWhere(workspaceId),
+        resourceId: anchor.resourceId,
+        regionId: anchor.regionId,
+        // The exact superseded predecessor may carry a LATER business
+        // effectiveDate than its lawful correction. Time filtering this
+        // candidate superset would sever that canonical correction pointer.
+        // Only backward, proven pointers enter the emitted history.
+      },
+      select: {
+        ...EXPLORER_ROW_SELECT,
+        resourceId: true,
+        regionId: true,
+        regionCoverageSetId: true,
+        createdAt: true,
+        recordsNewObservation: true,
+        kdnPercent: true,
+        kdnEstablishment: true,
+        publicationAudits: {
+          where: { action: 'PUBLISH' },
+          orderBy: { createdAt: 'desc' },
+          take: 1,
+          select: { createdAt: true },
+        },
+      },
+      orderBy: [{ effectiveDate: 'desc' }, { createdAt: 'desc' }],
+      take: BASIC_PRICE_PROVEN_HISTORY_MAX_CANDIDATES + 1,
+    });
+    const bounded = candidates.slice(
+      0,
+      BASIC_PRICE_PROVEN_HISTORY_MAX_CANDIDATES,
+    );
+    // A crowded catalog may hold 500 newer unrelated prices for this same
+    // resource+region. The selected ID must still appear as the first history
+    // fact; make one scoped recovery query ONLY when the capped read omitted it.
+    // Missing/inaccessible parent facts remain explicitly truncated.
+    let anchorWasOmitted = false;
+    if (
+      candidates.length > BASIC_PRICE_PROVEN_HISTORY_MAX_CANDIDATES &&
+      !bounded.some((candidate) => candidate.id === anchor.id)
+    ) {
+      anchorWasOmitted = true;
+      const anchored = await this.prisma.basicPrice.findFirst({
+        where: { id: anchor.id, ...this.eligibility.usableWhere(workspaceId) },
+        select: {
+          ...EXPLORER_ROW_SELECT,
+          resourceId: true,
+          regionId: true,
+          regionCoverageSetId: true,
+          createdAt: true,
+          recordsNewObservation: true,
+          kdnPercent: true,
+          kdnEstablishment: true,
+          publicationAudits: {
+            where: { action: 'PUBLISH' },
+            orderBy: { createdAt: 'desc' },
+            take: 1,
+            select: { createdAt: true },
+          },
+        },
+      });
+      if (anchored) bounded.push(anchored);
+    }
+    // Project the row's own proven source, then the pure walker may inherit
+    // a missing source name ONLY across its exact private same-source edge.
+    // No candidate-wide ancestor scans or N+1 reads for unrelated prices.
+    const facts: ProvenHistoryRow[] = bounded.map((row) => ({
+      id: row.id,
+      workspaceId: row.workspaceId,
+      assetScope: row.assetScope,
+      recordsNewObservation: row.recordsNewObservation,
+      sourceOrigin: row.sourceOrigin,
+      sourceType: row.sourceType,
+      resourceId: row.resourceId,
+      regionId: row.regionId,
+      regionCoverageSetId: row.regionCoverageSetId,
+      supersedesBasicPriceId: row.supersedesBasicPriceId,
+      createdAt: row.createdAt,
+      effectiveDate: row.effectiveDate,
+      price: toDecimalString2(row.value),
+      kdnPercent: row.kdnPercent?.toString() ?? null,
+      kdnEstablishment: row.kdnEstablishment,
+      publicationAt: row.publicationAudits?.[0]?.createdAt ?? null,
+      sourceName: deriveExplorerSourceName(row),
+      provenanceCorrections: row.provenanceCorrections,
+    }));
+    // Reuse the same eligibility, precedence, currentness, applicability,
+    // and same-source offer suppression that powers the canonical Explorer.
+    // An arbitrary direct Detail GET cannot label a historical id Terkini.
+    const precedence = promotionLineagePrecedenceWhere(workspaceId);
+    const activeAtReference = await this.prisma.basicPrice.findFirst({
+      where: {
+        id: anchor.id,
+        ...this.eligibility.usableWhere(workspaceId),
+        ...precedence,
+        ...mergeCurrentnessAnd(basicPriceCurrentnessWhere({ asOf }), [
+          ...basicPriceApplicabilityAnd({ asOf }),
+        ]),
+      },
+      select: { id: true },
+    });
+    const excludedByLaterSameSource = activeAtReference
+      ? (
+          await BasicPriceService.olderSameSourceObservationOfferIds(
+            this.prisma,
+            this.eligibility,
+            workspaceId,
+            asOf,
+            precedence,
+          )
+        ).includes(anchor.id)
+      : false;
+    return buildProvenPriceHistory(
+      anchor.id,
+      facts,
+      candidates.length > BASIC_PRICE_PROVEN_HISTORY_MAX_CANDIDATES ||
+        anchorWasOmitted,
+      !!activeAtReference && !excludedByLaterSameSource,
+    );
   }
 
   /**

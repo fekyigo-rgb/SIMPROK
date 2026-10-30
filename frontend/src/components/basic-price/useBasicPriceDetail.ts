@@ -47,8 +47,10 @@ interface FetchOutcome {
 export function useBasicPriceDetail(
   basicPriceId: string | null,
   epoch = 0,
+  asOf?: string,
 ): BasicPriceDetailState {
   const [outcome, setOutcome] = useState<FetchOutcome | null>(null);
+  const cacheKey = basicPriceId ? `${basicPriceId}|${asOf ?? 'PRESENT'}` : null;
 
   /**
    * NOTHING IS SET SYNCHRONOUSLY IN THIS EFFECT, DELIBERATELY.
@@ -63,22 +65,23 @@ export function useBasicPriceDetail(
     if (!basicPriceId) return;
     // epoch 0 may reuse the memo. A later epoch is a deliberate re-read after
     // a human write, so a stale memo must not answer.
-    if (epoch === 0 && detailCache.has(basicPriceId)) return;
+    if (epoch === 0 && cacheKey && detailCache.has(cacheKey)) return;
 
     const controller = new AbortController();
 
     void (async () => {
       try {
-        const detail = await fetchBasicPriceDetail(basicPriceId, controller.signal);
+        const detail = await fetchBasicPriceDetail(basicPriceId, controller.signal, asOf);
         if (controller.signal.aborted) return;
-        detailCache.set(basicPriceId, detail);
-        setOutcome({ id: basicPriceId, epoch, state: { kind: 'ready', detail } });
+        if (!cacheKey) return;
+        detailCache.set(cacheKey, detail);
+        setOutcome({ id: cacheKey, epoch, state: { kind: 'ready', detail } });
       } catch (error) {
         // An abort is not a failure — the person closed the layer or moved to
         // another row, and reporting an error there would blame them for it.
         if (controller.signal.aborted) return;
         setOutcome({
-          id: basicPriceId,
+          id: cacheKey ?? basicPriceId,
           epoch,
           state: {
             kind: 'error',
@@ -89,18 +92,18 @@ export function useBasicPriceDetail(
     })();
 
     return () => controller.abort();
-  }, [basicPriceId, epoch]);
+  }, [basicPriceId, epoch, asOf, cacheKey]);
 
   if (!basicPriceId) return IDLE;
 
   // A cache hit answers without any state at all, so reopening a layer is
   // instant and costs no request. After a write, epoch > 0 waits for the
   // matching fetch rather than flashing the pre-write memo.
-  const cached = detailCache.get(basicPriceId);
+  const cached = cacheKey ? detailCache.get(cacheKey) : undefined;
   if (cached && epoch === 0) return { kind: 'ready', detail: cached };
 
   // An outcome from a PREVIOUS id or epoch must never be shown against this one.
-  if (outcome && outcome.id === basicPriceId && outcome.epoch === epoch) {
+  if (outcome && outcome.id === cacheKey && outcome.epoch === epoch) {
     return outcome.state;
   }
 
@@ -117,5 +120,7 @@ export function __clearBasicPriceDetailCache(): void {
 
 /** Drop one memo so the next epoch re-reads the lawful detail projection. */
 export function forgetBasicPriceDetail(basicPriceId: string): void {
-  detailCache.delete(basicPriceId);
+  for (const key of detailCache.keys()) {
+    if (key.startsWith(basicPriceId + '|')) detailCache.delete(key);
+  }
 }

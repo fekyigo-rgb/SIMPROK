@@ -448,8 +448,10 @@ describe('promotion lineage precedence', () => {
         /promotionLineagePrecedenceWhere\(/g,
       )?.length ?? 0;
 
-    // Explorer list + by-resource list.
-    expect(uses('basic-price/basic-price.service.ts')).toBe(2);
+    // Explorer list + by-resource list + Detail current-at-selected-date
+    // check. Detail uses canonical precedence ONLY to label Terkini; it does
+    // not apply that filter to the raw-lawful by-id read or history chain.
+    expect(uses('basic-price/basic-price.service.ts')).toBe(3);
     // The AHSP candidate OFFER — exactly one site; the re-read beneath it is
     // deliberately raw-lawful.
     expect(uses('project-ahsp/ahsp-resource-resolution.orchestrator.ts')).toBe(

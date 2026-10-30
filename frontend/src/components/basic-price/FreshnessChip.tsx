@@ -85,7 +85,10 @@ export function FreshnessChip({
   const label = FRESHNESS_VIEW_LABELS[view];
 
   // Null while closed: a collapsed chip must cost nothing.
-  const detail = useBasicPriceDetail(open ? basicPriceId : null);
+  const detail = useBasicPriceDetail(
+    open ? basicPriceId : null, 0,
+    temporal.mode === 'AS_OF' ? temporal.instant.toISOString().slice(0, 10) : undefined,
+  );
 
   /*
    * A LAYER THAT CANNOT BE DISMISSED IS A MODAL WEARING A POPOVER'S CLOTHES.

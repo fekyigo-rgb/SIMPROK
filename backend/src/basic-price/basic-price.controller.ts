@@ -144,9 +144,12 @@ export class BasicPriceController {
     // The shape is exactly what `PermissionsGuard` puts on the request.
     @Req() request: WorkspaceScopedRequest,
     @Param('id') id: string,
+    @Query('asOf') asOf?: string,
   ) {
     const workspaceId = request.workspaceContext?.workspaceId as string;
-    return this.basicPriceService.findDetailForWorkspace(id, workspaceId);
+    return asOf
+      ? this.basicPriceService.findDetailForWorkspace(id, workspaceId, asOf)
+      : this.basicPriceService.findDetailForWorkspace(id, workspaceId);
   }
 
   /**

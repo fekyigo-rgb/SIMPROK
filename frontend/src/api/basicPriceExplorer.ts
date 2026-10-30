@@ -80,9 +80,10 @@ export const fetchBasicPriceExplorer = (
 export const fetchBasicPriceDetail = (
   basicPriceId: string,
   signal?: AbortSignal,
+  asOf?: string,
 ): Promise<BasicPriceDetail> =>
   requestJson<BasicPriceDetail>(
-    `/basic-prices/${encodeURIComponent(basicPriceId)}/detail`,
+    withQuery(`/basic-prices/${encodeURIComponent(basicPriceId)}/detail`, asOf ? { asOf } : {}),
     { signal },
   );
 

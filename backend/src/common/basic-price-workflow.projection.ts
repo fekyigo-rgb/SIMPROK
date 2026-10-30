@@ -807,12 +807,34 @@ export interface BasicPriceDomesticContent {
   kdnPercent: string | null;
 }
 
+/** A single proven price event. All meanings are resolved by Backend. */
+export interface BasicPriceProvenHistoryEntry {
+  price: string;
+  changeLabel:
+    | 'Terkini'
+    | 'Diperbarui'
+    | 'Dikoreksi'
+    | 'Harga Awal'
+    | 'Belum terverifikasi';
+  actionLabel: 'Diperbarui' | 'Dikoreksi' | 'Harga Awal' | null;
+  recordedAt: string | null;
+  sourceName: string | null;
+  isCurrent: boolean;
+}
+
+export interface BasicPriceProvenHistory {
+  entries: BasicPriceProvenHistoryEntry[];
+  truncated: boolean;
+}
+
 export interface BasicPriceDetail {
   price: BasicPriceExplorerItem;
   /** Existing, workspace-scoped submission status. Null means not proven. */
   proposalStatus: string | null;
   evidence: BasicPriceEvidenceFacts;
   corrections: BasicPriceCorrectionHistory;
+  /** ADDITIVE: observation + correction history; existing corrections stays untouched. */
+  priceHistory: BasicPriceProvenHistory;
   domesticContent: BasicPriceDomesticContent;
 }
 

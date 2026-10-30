@@ -63,13 +63,7 @@ import {
   type DetailSubjectOffer,
 } from '../../utils/basicPriceDetailChange';
 import {
-  CORRECTION_HISTORY_PARTIAL_NOTE,
-  CORRECTION_HISTORY_UNAVAILABLE,
   FRESHNESS_VIEW_LABELS,
-  NO_CORRECTION_RECORDED,
-  anchorCorrectionRow,
-  correctionHistoryLabel,
-  correctionHistoryRows,
   freshnessMeaning,
   freshnessView,
   type TemporalContext,
@@ -95,6 +89,21 @@ const TABS: { key: TabKey; label: string }[] = [
   { key: 'SUMBER', label: 'Sumber & Bukti' },
   { key: 'RIWAYAT', label: 'Riwayat' },
 ];
+
+/** Display a server-recorded INSTANT in the reader's local calendar zone.
+ * Unlike effectiveDate (a UTC-encoded business date), recordedAt represents
+ * the moment the update/correction was saved and must not be UTC-sliced.
+ */
+function formatPriceEventDate(iso: string | null): string {
+  if (!iso) return 'Tanggal tindakan belum tercatat';
+  const recordedAt = new Date(iso);
+  if (Number.isNaN(recordedAt.getTime())) return 'Tanggal belum tersedia';
+  return new Intl.DateTimeFormat('id-ID', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  }).format(recordedAt);
+}
 
 /**
  * BP-UX-FINAL-01C §10/§12 — BASIC PRICE DETAIL, LAYERED AND HONEST.
@@ -138,6 +147,7 @@ export function BasicPriceDetailPanel({
   onSavedNotice,
 }: BasicPriceDetailPanelProps) {
   const [tab, setTab] = useState<TabKey>('RINGKASAN');
+  const [visibleHistoryCount, setVisibleHistoryCount] = useState(5);
   const [detailEpoch, setDetailEpoch] = useState(0);
   const [changeOpen, setChangeOpen] = useState(false);
   const [alreadyProposed, setAlreadyProposed] = useState(false);
@@ -156,7 +166,10 @@ export function BasicPriceDetailPanel({
   const [nameSourceReference, setNameSourceReference] = useState('');
   const navigate = useNavigate();
   const { hasPermission } = useAuth();
-  const detail = useBasicPriceDetail(item.basicPriceId, detailEpoch);
+  const detail = useBasicPriceDetail(
+    item.basicPriceId, detailEpoch,
+    temporal.mode === 'AS_OF' ? temporal.instant.toISOString().slice(0, 10) : undefined,
+  );
   const kdnPercent =
     detail.kind === 'ready' ? detail.detail.domesticContent.kdnPercent : undefined;
   const completionDoor = kdnCompletionDoor({
@@ -190,10 +203,9 @@ export function BasicPriceDetailPanel({
   const statusMeaning = freshnessMeaning(item, temporal, formatDate);
 
   const evidence = detail.kind === 'ready' ? detail.detail.evidence : null;
-  const corrections = detail.kind === 'ready' ? detail.detail.corrections : null;
-  const correctionRows = corrections
-    ? correctionHistoryRows(corrections.entries, formatDate)
-    : [anchorCorrectionRow(item, formatDate)];
+  // The Backend owns both event membership and wording. No client-side
+  // source pairing, price sorting, or guessed observation classification.
+  const priceHistory = detail.kind === 'ready' ? detail.detail.priceHistory : null;
   const derivationLabel = effectiveDateProvenanceLabel(
     evidence?.effectiveDateProvenance,
   );
@@ -693,43 +705,55 @@ export function BasicPriceDetailPanel({
           aria-labelledby="bp-tab-RIWAYAT"
         >
           {/*
-            THE TAB IS RIWAYAT ONLY. Pembanding is not a live Detail capability,
-            so it is not advertised here.
-
-            Everything below comes from `supersedesBasicPriceId` — corrections,
-            and only corrections — and says "Terbaru" when the server's bounded
-            read could not reach the end of the chain.
+            BP-HISTORY-ONE-TRUTH. This panel only FORMATS Backend decisions:
+            price, Terkini, Diperbarui, Dikoreksi, Harga Awal, source and order
+            are ALL selected by canonical Backend readback. No browser pairing.
           */}
-          <span className="bp-pop__label">
-            {correctionHistoryLabel(Boolean(corrections?.truncated))}
-          </span>
-          <div className="bp-history" style={{ marginBottom: '12px' }}>
-            {correctionRows.map((entry) => (
-              <div className="bp-history__row" key={entry.key}>
-                <span className="bp-history__date">{entry.date}</span>
-                <span className="bp-history__price">{entry.price}</span>
-                <span className="bp-history__tag">{entry.tag}</span>
+          <span className="bp-pop__label">Riwayat Harga</span>
+          {priceHistory ? (
+            <>
+              <div className="bp-history" style={{ marginBottom: '12px' }}>
+                {priceHistory.entries.slice(0, visibleHistoryCount).map((entry, index) => (
+                  <div className="bp-history__row bp-history__row--events" key={`price-event-${index}`}>
+                    <span className="bp-history__price">{formatExplorerPrice(entry.price)}</span>
+                    {entry.isCurrent ? (
+                      <span className="bp-history__tag">{entry.changeLabel}</span>
+                    ) : null}
+                    <span className="bp-history__date">
+                      {entry.actionLabel === 'Harga Awal'
+                        ? 'Harga Awal'
+                        : entry.actionLabel
+                          ? `${entry.actionLabel} · ${formatPriceEventDate(entry.recordedAt)}`
+                          : 'Riwayat belum lengkap'}
+                    </span>
+                    <span className="bp-history__date">
+                      Sumber: {entry.sourceName ?? 'Belum tercatat'}
+                    </span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          {detail.kind === 'loading' ? (
+              {visibleHistoryCount < priceHistory.entries.length ? (
+                <button
+                  type="button"
+                  className="bp-btn bp-btn--sm"
+                  onClick={() => setVisibleHistoryCount((count) => count + 5)}
+                >
+                  Lihat riwayat lainnya
+                </button>
+              ) : null}
+              {priceHistory.truncated ? (
+                <p className="bp-field__help" role="status">
+                  Sebagian riwayat belum dapat dibuktikan lengkap dari sumber canonical.
+                </p>
+              ) : null}
+            </>
+          ) : detail.kind === 'loading' ? (
+            <p className="bp-field__help" role="status">Memuat riwayat harga...</p>
+          ) : (
             <p className="bp-field__help" role="status">
-              Memuat riwayat koreksi...
+              Riwayat harga lengkap belum tersedia dari Backend.
             </p>
-          ) : null}
-          {detail.kind === 'error' ? (
-            <p className="bp-field__help" role="status">
-              {CORRECTION_HISTORY_UNAVAILABLE}
-            </p>
-          ) : null}
-          {corrections?.truncated ? (
-            <p className="bp-field__help">{CORRECTION_HISTORY_PARTIAL_NOTE}</p>
-          ) : null}
-          {corrections &&
-          corrections.entries.length === 1 &&
-          !corrections.truncated ? (
-            <p className="bp-field__help">{NO_CORRECTION_RECORDED}</p>
-          ) : null}
+          )}
         </div>
       ) : null}
     </section>
