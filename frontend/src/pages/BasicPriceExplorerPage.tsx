@@ -998,7 +998,7 @@ onClick={() => { replaceSelectedIds(new Set()); setPage(1); }}
                     </button>
                   </th>
                   <th scope="col" className="bp-col-unit">Satuan</th>
-                  <th scope="col" className="bp-col-region">Wilayah</th>
+                  <th scope="col" className="bp-col-region">Wilayah Berlaku</th>
                   <th scope="col" className="bp-col-source">Sumber</th>
                   <th scope="col" className="bp-col-status">Status</th>
                   <th scope="col" className="bp-th-right bp-col-detail">
@@ -1039,7 +1039,7 @@ onClick={() => { replaceSelectedIds(new Set()); setPage(1); }}
                         {explorerVerifiedUnitLabel(item.resource)}
                       </span>
                     </td>
-                    <td data-label="Wilayah" className="bp-cell-region">
+                    <td data-label="Wilayah Berlaku" className="bp-cell-region">
                       {basicPriceRegionLabel(item)}
                     </td>
                     {/*

@@ -185,7 +185,7 @@ test("X-10. Owner-approved checkbox precedes the same seven locked data columns"
     "Item",
     "Harga",
     "Satuan",
-    "Wilayah",
+    "Wilayah Berlaku",
     "Sumber",
     "Status",
     "Detail",
@@ -309,4 +309,8 @@ test("X-17. an as-of lens is announced, so it cannot be read as today's list", (
   // in it may be a historical truth rather than a current one.
   assert.match(page, /asOfContextLine/u);
   assert.match(renderable, /\{draft\.effectiveOn \? \(/u);
+});
+
+test("P3. responsive wilayah label matches the visible heading", () => {
+  assert.match(renderable, /<td data-label="Wilayah Berlaku" className="bp-cell-region">/u);
 });

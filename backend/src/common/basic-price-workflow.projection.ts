@@ -379,6 +379,8 @@ export interface BasicPriceExplorerItem {
   basicPriceId: string;
   resource: ExplorerResourceIdentity;
   region: RegionIdentity | null;
+  /** Existing Region parent chain, with verified levels only; never guessed from names. */
+  regionPath?: Array<{ id: string; name: string; administrativeLevel: string | null }> | null;
   /** Compact truthful text for explicit multi-Village coverage only. */
   regionCoverageSummary?: string | null;
   /** Exact decimal string, two digits. */
@@ -433,6 +435,34 @@ interface ImportBatchSourceNames {
   sourceVendorName: string | null;
 }
 
+/** Region path reads the canonical self-relation already present in Region Kernel. */
+interface ExplorerRegionPathSource {
+  id: string;
+  code: string;
+  name: string;
+  administrativeLevel?: string | null;
+  parent?: ExplorerRegionPathSource | null;
+}
+
+function explorerRegionPath(
+  region: ExplorerRegionPathSource | null,
+): Array<{ id: string; name: string; administrativeLevel: string | null }> | null {
+  if (!region) return null;
+  const nodes: Array<{ id: string; name: string; administrativeLevel: string | null }> = [];
+  let current: ExplorerRegionPathSource | null | undefined = region;
+  const visited = new Set<string>();
+  while (current && nodes.length < 5 && !visited.has(current.id)) {
+    visited.add(current.id);
+    nodes.unshift({
+      id: current.id,
+      name: current.name,
+      administrativeLevel: current.administrativeLevel ?? null,
+    });
+    current = current.parent;
+  }
+  return nodes;
+}
+
 /** Structural subset of the Prisma-included BasicPrice row for the Explorer. */
 export interface ExplorerRowSource {
   id: string;
@@ -467,7 +497,7 @@ export interface ExplorerRowSource {
     type: string;
     baseUnit: string;
   };
-  region: { id: string; code: string; name: string } | null;
+  region: ExplorerRegionPathSource | null;
   regionCoverageSet?: {
     members: Array<{ regionId: string }>;
   } | null;
@@ -612,6 +642,7 @@ export function mapExplorerItem(
     basicPriceId: row.id,
     resource: mapExplorerResourceIdentity(row.resource),
     region: mapRegionIdentity(row.region),
+    regionPath: explorerRegionPath(row.region),
     ...(row.region && (row.regionCoverageSet?.members.length ?? 0) >= 2
       ? {
           regionCoverageSummary: `${row.regionCoverageSet?.members.length} Desa/Kelurahan di ${row.region.name}`,
@@ -834,6 +865,8 @@ export interface BasicPriceProvenHistory {
 
 export interface BasicPriceDetail {
   price: BasicPriceExplorerItem;
+  /** Immutable Region coverage members, available only on the Detail read. */
+  coverageMembers?: Array<{ name: string; administrativeLevel: string | null }> | null;
   /** Existing, workspace-scoped submission status. Null means not proven. */
   proposalStatus: string | null;
   evidence: BasicPriceEvidenceFacts;

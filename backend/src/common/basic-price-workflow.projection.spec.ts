@@ -374,6 +374,7 @@ describe('basic-price workflow projections (RM-02D2A2)', () => {
           baseUnit: 'Zak',
         },
         region: { id: 'reg1', code: 'ID-JK', name: 'DKI Jakarta' },
+        regionPath: [{ id: 'reg1', name: 'DKI Jakarta', administrativeLevel: null }],
         price: '125000.00',
         effectiveDate: '2026-01-15T00:00:00.000Z',
         validUntil: '2026-12-31T00:00:00.000Z',

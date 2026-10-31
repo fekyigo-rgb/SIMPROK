@@ -1,3 +1,4 @@
+import { randomUUID, createHash } from 'node:crypto';
 import { INestApplication } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { PrismaClient } from '@prisma/client';
@@ -812,4 +813,109 @@ describe('Basic Price Public Eligibility (e2e)', () => {
       }
     });
   });
+  it('PR254 P1: authenticated Detail resolves exact persisted multi-village membership', async () => {
+    // Disposable fixture in isolated E2E PostgreSQL only, never in simprok_db.
+    const suffix = randomUUID().slice(0, 8);
+    const createdRegionIds: string[] = [];
+    let priceId: string | null = null;
+    let resourceId: string | null = null;
+    let coverageSetId: string | null = null;
+    const createRegion = async (
+      level: 'PROVINCE' | 'REGENCY_CITY' | 'DISTRICT' | 'VILLAGE',
+      name: string,
+      parentId?: string,
+    ) => {
+      const region = await prisma.region.create({
+        data: {
+          code: 'PR254-' + suffix + '-' + String(createdRegionIds.length + 1),
+          name,
+          administrativeLevel: level,
+          isActive: true,
+          ...(parentId ? { parentId } : {}),
+        },
+      });
+      createdRegionIds.push(region.id);
+      return region;
+    };
+    try {
+      const province = await createRegion('PROVINCE', 'Provinsi Uji PR254');
+      const city = await createRegion('REGENCY_CITY', 'Kota Uji PR254', province.id);
+      const district = await createRegion('DISTRICT', 'Kecamatan Uji PR254', city.id);
+      const villages = [];
+      for (const name of ['Duren Tiga', 'Kalibata', 'Pengadegan']) {
+        villages.push(await createRegion('VILLAGE', name, district.id));
+      }
+      const coverage = await prisma.basicPriceRegionCoverageSet.create({
+        data: {
+          anchorRegionId: district.id,
+          deterministicDigest: createHash('sha256').update('pr254-coverage-' + suffix).digest('hex'),
+          members: { create: villages.map((region) => ({ regionId: region.id })) },
+        },
+      });
+      coverageSetId = coverage.id;
+      const resource = await prisma.resourceCatalog.create({
+        data: {
+          workspaceId: workspaceAId,
+          code: 'MAT-PR254-' + suffix,
+          name: 'Material isolated PR254',
+          type: 'MATERIAL',
+          baseUnit: 'm3',
+        },
+      });
+      resourceId = resource.id;
+      const price = await prisma.basicPrice.create({
+        data: {
+          workspaceId: workspaceAId,
+          resourceId: resource.id,
+          regionId: district.id,
+          regionCoverageSetId: coverage.id,
+          status: 'PUBLISHED',
+          verificationStatus: 'PUBLISHED',
+          freshnessStatus: 'CURRENT',
+          effectiveDate: new Date('2026-09-01T00:00:00Z'),
+          value: 125000,
+          sourceOrigin: 'SUPPLIER',
+          sourceType: 'MARKET_SURVEY',
+        },
+      });
+      priceId = price.id;
+      const detail = await request(app.getHttpServer())
+        .get('/basic-prices/' + price.id + '/detail')
+        .set('Authorization', 'Bearer ' + tokenA)
+        .set('X-Workspace-ID', workspaceAId)
+        .expect(200);
+      expect(detail.body.price.region.code).toBe(district.code);
+      expect(detail.body.price.regionPath.map((n: { name: string }) => n.name)).toEqual([
+        'Provinsi Uji PR254', 'Kota Uji PR254', 'Kecamatan Uji PR254',
+      ]);
+      expect(detail.body.coverageMembers.map((m: { name: string }) => m.name).sort()).toEqual([
+        'Duren Tiga', 'Kalibata', 'Pengadegan',
+      ]);
+      expect(detail.body.coverageMembers.every((m: { administrativeLevel: string }) =>
+        m.administrativeLevel === 'VILLAGE')).toBe(true);
+      const listed = await request(app.getHttpServer())
+        .get('/basic-prices?resourceId=' + resource.id)
+        .set('Authorization', 'Bearer ' + tokenA)
+        .set('X-Workspace-ID', workspaceAId)
+        .expect(200);
+      const compactRow = listed.body.data.find((row: { basicPriceId: string }) =>
+        row.basicPriceId === price.id);
+      expect(compactRow).toBeDefined();
+      expect(compactRow.regionCoverageSummary).toBe('3 Desa/Kelurahan di Kecamatan Uji PR254');
+      expect(compactRow).not.toHaveProperty('coverageMembers');
+    } finally {
+      if (priceId) await prisma.basicPrice.delete({ where: { id: priceId } });
+      if (resourceId) await prisma.resourceCatalog.delete({ where: { id: resourceId } });
+      if (coverageSetId) {
+        await prisma.basicPriceRegionCoverageMember.deleteMany({
+          where: { coverageSetId },
+        });
+        await prisma.basicPriceRegionCoverageSet.delete({ where: { id: coverageSetId } });
+      }
+      for (const id of createdRegionIds.reverse()) {
+        await prisma.region.delete({ where: { id } });
+      }
+    }
+  });
+
 });
