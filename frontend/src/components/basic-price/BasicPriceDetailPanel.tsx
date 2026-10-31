@@ -312,7 +312,11 @@ export function BasicPriceDetailPanel({
             ) : null}
             <Fact label="Kategori" value={resourceTypeLabel(item.resource.type)} />
             <Fact label="Wilayah berlaku" value={basicPriceRegionLabel(item)} />
-            {basicPriceRegionDetailFacts(item).map((field) => (
+            {basicPriceRegionDetailFacts(
+              item,
+              detail.kind === 'ready' ? detail.detail.coverageMembers : undefined,
+              detail.kind === 'error',
+            ).map((field) => (
               <Fact key={field.label} label={field.label} value={field.value} />
             ))}
             <Fact label="Sumber" value={explorerSourceNameLabel(item.sourceName)} />

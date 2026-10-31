@@ -48,3 +48,42 @@ test('general scope carries no invented administrative facts', () => {
   const item: BasicPriceExplorerItem = { ...base, region: null, regionPath: null };
   assert.deepEqual(basicPriceRegionDetailFacts(item), [{ label: 'Cakupan wilayah', value: 'Umum (tanpa wilayah)' }]);
 });
+
+test('P1: multiple stored villages are displayed by name and alphabetical order', () => {
+  const item: BasicPriceExplorerItem = { ...base, regionCoverageSummary: '3 Desa/Kelurahan di Pancoran',
+    regionPath: [{ id: 'district-id', name: 'Pancoran', administrativeLevel: 'DISTRICT' }] };
+  const facts = basicPriceRegionDetailFacts(item, [
+    { name: 'Kalibata', administrativeLevel: 'VILLAGE' },
+    { name: 'Duren Tiga', administrativeLevel: 'VILLAGE' },
+    { name: 'Pengadegan', administrativeLevel: 'VILLAGE' },
+  ]);
+  assert.equal(facts.find(f=>f.label==='Kelurahan/Desa')?.value,
+    'Duren Tiga, Kalibata, Pengadegan');
+  assert.ok(!facts.some(f => f.label==='Rincian anggota cakupan'));
+});
+test('P1: one coverage member is not lost through summary count threshold', () => {
+  assert.equal(basicPriceRegionDetailFacts(base, [
+    { name: 'Senen', administrativeLevel: 'VILLAGE' },
+  ]).find(f=>f.label==='Kelurahan/Desa')?.value, 'Senen');
+});
+test('P1: city-wide scope does not invent district or village', () => {
+  const item: BasicPriceExplorerItem = { ...base,
+    region: { id: '31.71', code: '31.71', name: 'Kota Administrasi Jakarta Pusat' },
+    regionPath: [
+      { id: '31', name: 'DKI Jakarta', administrativeLevel: 'PROVINCE' },
+      { id: '31.71', name: 'Kota Administrasi Jakarta Pusat', administrativeLevel: 'REGENCY_CITY' },
+    ],
+  };
+  assert.equal(basicPriceRegionDetailFacts(item,null).find(f=>f.label==='Kelurahan/Desa')?.value,
+    'Tidak ditentukan');
+});
+test('P1: pending and error states do not invent coverage names', () => {
+  const item: BasicPriceExplorerItem = { ...base, regionCoverageSummary: '3 Desa/Kelurahan di Pancoran' };
+  assert.equal(basicPriceRegionDetailFacts(item).find(f=>f.label==='Rincian anggota cakupan')?.value, 'Memuat...');
+  assert.equal(basicPriceRegionDetailFacts(item,undefined,true).find(f=>f.label==='Rincian anggota cakupan')?.value, 'Belum dapat dimuat');
+});
+test('P1: unverified member is not silently declared a village', () => {
+  const facts=basicPriceRegionDetailFacts(base,[{name:'Wilayah Legacy',administrativeLevel:null}]);
+  assert.equal(facts.find(f=>f.label==='Kelurahan/Desa')?.value,'Tidak ditentukan');
+  assert.equal(facts.find(f=>f.label==='Anggota cakupan lainnya')?.value,'Wilayah Legacy');
+});

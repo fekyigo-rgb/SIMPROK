@@ -310,3 +310,7 @@ test("X-17. an as-of lens is announced, so it cannot be read as today's list", (
   assert.match(page, /asOfContextLine/u);
   assert.match(renderable, /\{draft\.effectiveOn \? \(/u);
 });
+
+test("P3. responsive wilayah label matches the visible heading", () => {
+  assert.match(renderable, /<td data-label="Wilayah Berlaku" className="bp-cell-region">/u);
+});

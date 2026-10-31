@@ -1039,7 +1039,7 @@ onClick={() => { replaceSelectedIds(new Set()); setPage(1); }}
                         {explorerVerifiedUnitLabel(item.resource)}
                       </span>
                     </td>
-                    <td data-label="Wilayah" className="bp-cell-region">
+                    <td data-label="Wilayah Berlaku" className="bp-cell-region">
                       {basicPriceRegionLabel(item)}
                     </td>
                     {/*

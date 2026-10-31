@@ -95,18 +95,40 @@ export const basicPriceRegionLabel = (item: BasicPriceExplorerItem): string =>
   item.regionCoverageSummary?.trim() || item.region?.name || 'Umum (tanpa wilayah)';
 
 /** Detail-only, truth-preserving region hierarchy. Blank ancestors are not invented. */
+export interface BasicPriceCoverageMember {
+  name: string;
+  administrativeLevel: string | null;
+}
+
+/** Detail-only composition of canonical Region and immutable coverage members. */
 export const basicPriceRegionDetailFacts = (
   item: BasicPriceExplorerItem,
+  coverageMembers?: BasicPriceCoverageMember[] | null,
+  detailFailed = false,
 ): Array<{ label: string; value: string }> => {
   if (!item.region) return [{ label: 'Cakupan wilayah', value: 'Umum (tanpa wilayah)' }];
   const path = item.regionPath ?? [];
   const at = (level: string): string =>
     path.find((node) => node.administrativeLevel === level)?.name ?? 'Tidak ditentukan';
+  const villageNames = (coverageMembers ?? [])
+    .filter((member) => member.administrativeLevel === 'VILLAGE')
+    .map((member) => member.name).sort((a, b) => a.localeCompare(b, 'id'));
+  const otherMembers = (coverageMembers ?? [])
+    .filter((member) => member.administrativeLevel !== 'VILLAGE')
+    .map((member) => member.name).sort((a, b) => a.localeCompare(b, 'id'));
+  const awaitingMembers = coverageMembers === undefined && Boolean(item.regionCoverageSummary);
   return [
     { label: 'Provinsi', value: at('PROVINCE') },
     { label: 'Kabupaten/Kota', value: at('REGENCY_CITY') },
     { label: 'Kecamatan', value: at('DISTRICT') },
-    { label: 'Kelurahan/Desa', value: at('VILLAGE') },
+    { label: 'Kelurahan/Desa', value: villageNames.length ? villageNames.join(', ') : at('VILLAGE') },
+    ...(otherMembers.length ? [{ label: 'Anggota cakupan lainnya', value: otherMembers.join(', ') }] : []),
+    ...(awaitingMembers
+      ? [{ label: 'Rincian anggota cakupan', value: detailFailed ? 'Belum dapat dimuat' : 'Memuat...' }]
+      : []),
+    ...(coverageMembers?.length === 0 && item.regionCoverageSummary
+      ? [{ label: 'Rincian anggota cakupan', value: 'Tidak ditemukan dalam data tersimpan' }]
+      : []),
     ...(path.some((node) => node.administrativeLevel === null)
       ? [{ label: 'Catatan wilayah', value: 'Ada tingkat administratif yang belum terverifikasi' }]
       : []),
@@ -238,6 +260,8 @@ export interface BasicPriceProvenHistory {
 
 export interface BasicPriceDetail {
   price: BasicPriceExplorerItem;
+  /** Members of immutable Region coverage, resolved only on the Detail read. */
+  coverageMembers?: BasicPriceCoverageMember[] | null;
   /** Status from the existing workspace-scoped submission, never guessed. */
   proposalStatus?: string | null;
   evidence: BasicPriceEvidenceFacts;

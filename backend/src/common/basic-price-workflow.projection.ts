@@ -865,6 +865,8 @@ export interface BasicPriceProvenHistory {
 
 export interface BasicPriceDetail {
   price: BasicPriceExplorerItem;
+  /** Immutable Region coverage members, available only on the Detail read. */
+  coverageMembers?: Array<{ name: string; administrativeLevel: string | null }> | null;
   /** Existing, workspace-scoped submission status. Null means not proven. */
   proposalStatus: string | null;
   evidence: BasicPriceEvidenceFacts;

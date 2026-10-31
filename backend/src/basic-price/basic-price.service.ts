@@ -1600,6 +1600,19 @@ export class BasicPriceService {
       },
       select: {
         ...EXPLORER_ROW_SELECT,
+        // Read immutable coverage names only when Detail is opened.
+        // Keep the existing Explorer list projection and pagination compact.
+        regionCoverageSet: {
+          select: {
+            members: {
+              orderBy: { regionId: 'asc' },
+              select: {
+                regionId: true,
+                region: { select: { name: true, administrativeLevel: true } },
+              },
+            },
+          },
+        },
         // Detail's two provenance branches go one column deeper than the
         // list's, so the evidence sentence can distinguish "linked to a batch"
         // from "the original bytes are retained". Declared AFTER the spread so
@@ -1649,6 +1662,12 @@ export class BasicPriceService {
             ? proposedIds.has(row.id)
             : null,
       },
+      coverageMembers: row.regionCoverageSet
+        ? row.regionCoverageSet.members.map((member) => ({
+            name: member.region.name,
+            administrativeLevel: member.region.administrativeLevel,
+          }))
+        : null,
       proposalStatus:
         row.assetScope === 'WORKSPACE_PRIVATE' &&
         proposedIds.has(row.id) &&
