@@ -148,6 +148,17 @@ export const canProposePrivateExplorerItem = (
 export const privateProposalIsNotPublication = (reply: { status: string }): boolean =>
   reply.status !== 'PUBLISHED';
 
+/** Server-authoritative Region index over the complete eligible result set. */
+export interface BasicPriceRegionIndex {
+  total: number;
+  provinces: Array<{
+    id: string; name: string; priceCount: number;
+    provinceOnly: { key: string; count: number; scopeRegionIds: string[] };
+    cities: Array<{ key: string; regionId: string; name: string; priceCount: number; scopeRegionIds: string[] }>;
+  }>;
+  unverified: { key: 'unverified'; count: number; regions: Array<{ id: string; name: string; count: number }> };
+  general: { key: 'general'; count: number };
+}
 export interface ExplorerPageMeta {
   total: number;
   page: number;
@@ -326,6 +337,8 @@ export interface ExplorerFilters {
   limit?: number;
   sortBy?: 'effectiveDate' | 'createdAt' | 'updatedAt' | 'resourceName' | 'price';
   sortOrder?: 'asc' | 'desc';
+  regionBrowse?: 'true';
+  regionGroup?: string;
 }
 
 /** Only the non-empty, defined fields become query params — never a literal "undefined". */
@@ -353,6 +366,8 @@ export function buildExplorerQueryParams(filters: ExplorerFilters): Record<strin
   put('limit', filters.limit);
   put('sortBy', filters.sortBy);
   put('sortOrder', filters.sortOrder);
+  put('regionBrowse', filters.regionBrowse);
+  put('regionGroup', filters.regionGroup);
   return params;
 }
 

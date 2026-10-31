@@ -14,6 +14,7 @@ import type {
   BasicPriceExplorerItem,
   ExplorerFilters,
   ExplorerPageMeta,
+  BasicPriceRegionIndex,
   RegionLookupItem,
 } from '../utils/basicPriceExplorerDisplay';
 
@@ -25,6 +26,7 @@ export type {
   BasicPriceExplorerItem,
   ExplorerFilters,
   ExplorerPageMeta,
+  BasicPriceRegionIndex,
   RegionLookupItem,
 };
 
@@ -55,6 +57,8 @@ const withQuery = (path: string, params: Record<string, string>): string => {
 export interface ExplorerPage {
   data: BasicPriceExplorerItem[];
   meta: ExplorerPageMeta;
+  regionIndex?: BasicPriceRegionIndex;
+  selectedRegionGroup?: string | null;
 }
 
 export const fetchBasicPriceExplorer = (

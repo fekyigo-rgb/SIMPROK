@@ -918,4 +918,22 @@ describe('Basic Price Public Eligibility (e2e)', () => {
     }
   });
 
+  it('BP-REGION-FIRST E2E: same authorized offers, truthful group count, no cross-region widening', async () => {
+    const ordinary = await listAsA(`?search=${TAG}&sortBy=resourceName&sortOrder=asc`).expect(200);
+    const grouped = await listAsA(
+      `?search=${TAG}&sortBy=resourceName&sortOrder=asc&regionBrowse=true&regionGroup=first`,
+    ).expect(200);
+    expect(grouped.body.regionIndex.total).toBe(ordinary.body.meta.total);
+    expect(grouped.body.regionIndex.provinces).toEqual([]);
+    expect(grouped.body.regionIndex.unverified.count).toBe(0);
+    expect(grouped.body.regionIndex.general.count).toBe(ordinary.body.meta.total);
+    expect(grouped.body.selectedRegionGroup).toBe('general');
+    expect(grouped.body.data.map((p: { basicPriceId: string }) => p.basicPriceId))
+      .toEqual(ordinary.body.data.map((p: { basicPriceId: string }) => p.basicPriceId));
+    await listAsA(
+      `?search=${TAG}&regionBrowse=true&regionGroup=city:99999999-9999-4999-8999-999999999999`,
+    ).expect(400);
+    await listAsA(`?search=${TAG}&regionGroup=general`).expect(400);
+  });
+
 });
