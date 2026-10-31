@@ -936,4 +936,67 @@ describe('Basic Price Public Eligibility (e2e)', () => {
     await listAsA(`?search=${TAG}&regionGroup=general`).expect(400);
   });
 
+  it('BP ITEM SUMMARY E2E: same-name distinct Resources and full raw price pages', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const term = 'BPI256' + suffix;
+    const resources: string[] = [];
+    const prices: string[] = [];
+    try {
+      for (const code of ['A', 'B']) {
+        const resource = await prisma.resourceCatalog.create({
+          data: {
+            workspaceId: workspaceAId,
+            code: term + '-' + code,
+            name: 'Agregat Halus ' + term,
+            type: 'MATERIAL',
+            baseUnit: 'm3',
+          },
+        });
+        resources.push(resource.id);
+      }
+      for (let i = 0; i < 4; i += 1) {
+        const price = await prisma.basicPrice.create({
+          data: {
+            workspaceId: workspaceAId,
+            resourceId: i < 3 ? resources[0] : resources[1],
+            status: 'PUBLISHED',
+            verificationStatus: 'PUBLISHED',
+            freshnessStatus: 'CURRENT',
+            value: 100000 + i * 5000,
+            effectiveDate: new Date('2026-08-' + String(i + 1).padStart(2, '0') + 'T00:00:00Z'),
+            sourceOrigin: 'SUPPLIER',
+            sourceType: 'MARKET_SURVEY',
+          },
+        });
+        prices.push(price.id);
+      }
+      const common = '?search=' + term + '&regionBrowse=true&regionGroup=general&itemBrowse=true';
+      const first = await listAsA(common + '&itemGroup=first&sortBy=resourceName&sortOrder=asc&page=1&limit=2').expect(200);
+      expect(first.body.regionIndex.general.count).toBe(4);
+      expect(first.body.itemIndex.totalPrices).toBe(4);
+      expect(first.body.itemIndex.totalItems).toBe(2);
+      expect(first.body.itemIndex.items.map((x: { priceCount: number }) => x.priceCount)).toEqual([3, 1]);
+      const selected = first.body.selectedItemId;
+      expect(selected).toBe(resources[0]);
+      expect(first.body.meta.total).toBe(3);
+      expect(first.body.meta.totalPages).toBe(2);
+      expect(first.body.data).toHaveLength(2);
+      expect(first.body.data.every((x: { resource: { id: string } }) => x.resource.id === selected)).toBe(true);
+      const secondPage = await listAsA(common + '&itemGroup=' + selected + '&sortBy=resourceName&sortOrder=asc&page=2&limit=2').expect(200);
+      expect(secondPage.body.meta.total).toBe(3);
+      expect(secondPage.body.data).toHaveLength(1);
+      const rawIds = [...first.body.data, ...secondPage.body.data]
+        .map((x: { basicPriceId: string }) => x.basicPriceId);
+      expect([...rawIds].sort()).toEqual(prices.slice(0, 3).sort());
+      const other = await listAsA(common + '&itemGroup=' + resources[1] + '&limit=50').expect(200);
+      expect(other.body.meta.total).toBe(1);
+      expect(other.body.data.map((x: { basicPriceId: string }) => x.basicPriceId)).toEqual([prices[3]]);
+      await listAsA(common + '&itemGroup=99999999-9999-4999-8999-999999999999').expect(400);
+      await listAsA('?search=' + term + '&itemBrowse=true&itemGroup=first').expect(400);
+    } finally {
+      if (prices.length) await prisma.basicPrice.deleteMany({ where: { id: { in: prices } } });
+      if (resources.length) await prisma.resourceCatalog.deleteMany({ where: { id: { in: resources } } });
+    }
+  });
+
 });

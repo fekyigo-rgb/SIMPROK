@@ -10,6 +10,7 @@ import {
   type ExplorerFilters,
   type ExplorerPageMeta,
   type BasicPriceRegionIndex,
+  type BasicPriceItemIndex,
   type RegionLookupItem,
 } from '../api/basicPriceExplorer';
 import { ExplorerRegionFilterSelect } from '../components/basic-price/ExplorerRegionFilterSelect';
@@ -107,6 +108,8 @@ type ListState =
       meta: ExplorerPageMeta;
       regionIndex?: BasicPriceRegionIndex;
       selectedRegionGroup?: string | null;
+      itemIndex?: BasicPriceItemIndex;
+      selectedItemId?: string | null;
       /**
        * BP-UX-FINAL-01D GAP-D — THE TEMPORAL CONTEXT THESE EXACT ROWS WERE
        * SELECTED FOR, carried WITH them rather than re-read from the draft.
@@ -201,6 +204,8 @@ export function BasicPriceExplorerPage() {
   const [page, setPage] = useState(1);
   /** The first region group is server-selected from the canonical eligible set. */
   const [regionGroup, setRegionGroup] = useState('first');
+  const [itemGroup, setItemGroup] = useState('first');
+  const [itemPage, setItemPage] = useState(1);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [state, setState] = useState<ListState>({ kind: 'loading' });
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
@@ -266,6 +271,9 @@ export function BasicPriceExplorerPage() {
         limit: 50,
         regionBrowse: 'true',
         regionGroup,
+        itemBrowse: 'true',
+        itemGroup,
+        itemPage,
         sortBy,
         sortOrder: sortDirection,
       };
@@ -293,6 +301,8 @@ export function BasicPriceExplorerPage() {
             temporal,
             regionIndex: result.regionIndex,
             selectedRegionGroup: result.selectedRegionGroup,
+            itemIndex: result.itemIndex,
+            selectedItemId: result.selectedItemId,
           });
         } catch (error) {
           if (!requestGate.current.isLatest(sequence)) return;
@@ -314,7 +324,7 @@ export function BasicPriceExplorerPage() {
     // eleven fields plus a client-side validity check, so the dependency list
     // could not be stated honestly and the rule was silenced. Four values now
     // decide this request, all four are listed, and the linter agrees.
-  }, [draft, collection, sortOrder, page, reloadNonce, regionGroup]);
+  }, [draft, collection, sortOrder, page, reloadNonce, regionGroup, itemGroup, itemPage]);
 
   const filtersActive = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(EMPTY_DRAFT) || collection !== '',
@@ -327,6 +337,8 @@ export function BasicPriceExplorerPage() {
     setSelectionNotice(null);
     setPage(1);
     setRegionGroup('first');
+    setItemGroup('first');
+    setItemPage(1);
     // A detail panel describes ONE row. When the list beneath it changes, the
     // row it describes may no longer be there, so the panel closes rather than
     // lingering over a table that no longer contains its subject.
@@ -338,6 +350,8 @@ export function BasicPriceExplorerPage() {
     setDraft(EMPTY_DRAFT);
     setCollection('');
     setRegionGroup('first');
+    setItemGroup('first');
+    setItemPage(1);
     setSortOrder('resourceName:asc');
     replaceSelectedIds(new Set());
     setSelectionNotice(null);
@@ -367,12 +381,33 @@ export function BasicPriceExplorerPage() {
 
   const chooseRegionGroup = (key: string) => {
     setRegionGroup(key);
+    setItemGroup('first');
+    setItemPage(1);
     replaceSelectedIds(new Set());
     setSelectionNotice(null);
     setPage(1);
     setOpenDetailId(null);
     setDetailNotice(null);
   };
+  const chooseItemPage = (nextPage: number) => {
+    setItemPage(nextPage);
+    setItemGroup('first');
+    replaceSelectedIds(new Set());
+    setSelectionNotice(null);
+    setPage(1);
+    setOpenDetailId(null);
+    setDetailNotice(null);
+  };
+
+  const chooseItemGroup = (id: string) => {
+    setItemGroup(id);
+    replaceSelectedIds(new Set());
+    setSelectionNotice(null);
+    setPage(1);
+    setOpenDetailId(null);
+    setDetailNotice(null);
+  };
+
   const openDetailItem =
     state.kind === 'ready' && openDetailId
       ? (state.items.find((item) => item.basicPriceId === openDetailId) ?? null)
@@ -827,6 +862,48 @@ export function BasicPriceExplorerPage() {
         </nav>
       ) : null}
 
+      {state.kind === 'ready' && state.itemIndex ? (
+        <section className="bp-item-summary" aria-label="Item harga pada wilayah terpilih">
+          <div className="bp-item-summary__heading">
+            <strong>Item A–Z</strong>
+            <span>{state.itemIndex.totalItems} item · {state.itemIndex.totalPrices} catatan harga</span>
+          </div>
+          <ul className="bp-item-summary__list">
+            {state.itemIndex.items.map((item) => (
+              <li key={item.id}>
+                <button type="button" className="bp-item-summary__button"
+                  aria-pressed={state.selectedItemId === item.id}
+                  aria-label={`Buka ${item.priceCount} catatan harga ${item.name}${item.duplicateName ? `, kode ${item.code ?? item.id.slice(0, 8)}` : ''}`}
+                  onClick={() => chooseItemGroup(item.id)}>
+                  <span className="bp-item-summary__identity">
+                    <strong>{item.name}</strong>
+                    <small>{resourceTypeLabel(item.type)} · {item.baseUnit}
+                      {item.duplicateName
+                        ? ` · ${item.code ?? 'Ref. ' + item.id.slice(0, 8)}` : ''}
+                    </small>
+                  </span>
+                  <span className="bp-item-summary__count">{item.priceCount} harga</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+          {(state.itemIndex.totalPages ?? 0) > 1 ? (
+            <div className="bp-item-summary__pager" aria-label="Halaman daftar item">
+              <button type="button" disabled={(state.itemIndex.page ?? 1) <= 1}
+                onClick={() => chooseItemPage((state.itemIndex!.page ?? 1) - 1)}>
+                Sebelumnya
+              </button>
+              <span>Item halaman {state.itemIndex.page} dari {state.itemIndex.totalPages}</span>
+              <button type="button"
+                disabled={(state.itemIndex.page ?? 1) >= (state.itemIndex.totalPages ?? 1)}
+                onClick={() => chooseItemPage((state.itemIndex!.page ?? 1) + 1)}>
+                Berikutnya
+              </button>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
       <div className="bp-tablebar">
         <span aria-live="polite">
           {state.kind === 'ready'
@@ -854,6 +931,8 @@ export function BasicPriceExplorerPage() {
                 setSelectionNotice(null);
                 setPage(1);
                 setRegionGroup('first');
+    setItemGroup('first');
+    setItemPage(1);
                 setOpenDetailId(null);
                 setDetailNotice(null);
               }}
