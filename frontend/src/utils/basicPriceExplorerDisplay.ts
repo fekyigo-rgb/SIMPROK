@@ -49,6 +49,8 @@ export interface BasicPriceExplorerItem {
   basicPriceId: string;
   resource: ExplorerResourceIdentity;
   region: RegionIdentity | null;
+  /** Canonical hierarchy resolved by the existing Region parent relation. */
+  regionPath?: Array<{ id: string; name: string; administrativeLevel: string | null }> | null;
   regionCoverageSummary?: string | null;
   price: string;
   effectiveDate: string;
@@ -91,6 +93,25 @@ export interface BasicPriceExplorerItem {
 // filters and disambiguation in region-pickers; do not weaken those paths.
 export const basicPriceRegionLabel = (item: BasicPriceExplorerItem): string =>
   item.regionCoverageSummary?.trim() || item.region?.name || 'Umum (tanpa wilayah)';
+
+/** Detail-only, truth-preserving region hierarchy. Blank ancestors are not invented. */
+export const basicPriceRegionDetailFacts = (
+  item: BasicPriceExplorerItem,
+): Array<{ label: string; value: string }> => {
+  if (!item.region) return [{ label: 'Cakupan wilayah', value: 'Umum (tanpa wilayah)' }];
+  const path = item.regionPath ?? [];
+  const at = (level: string): string =>
+    path.find((node) => node.administrativeLevel === level)?.name ?? 'Tidak ditentukan';
+  return [
+    { label: 'Provinsi', value: at('PROVINCE') },
+    { label: 'Kabupaten/Kota', value: at('REGENCY_CITY') },
+    { label: 'Kecamatan', value: at('DISTRICT') },
+    { label: 'Kelurahan/Desa', value: at('VILLAGE') },
+    ...(path.some((node) => node.administrativeLevel === null)
+      ? [{ label: 'Catatan wilayah', value: 'Ada tingkat administratif yang belum terverifikasi' }]
+      : []),
+  ];
+};
 
 export type BasicPriceAssetScope = 'WORKSPACE_PRIVATE' | 'SIMPROK_CATALOG';
 

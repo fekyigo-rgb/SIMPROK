@@ -15,6 +15,7 @@ import {
   kdnLabel,
   observationBasisLabel,
   basicPriceRegionLabel,
+  basicPriceRegionDetailFacts,
   privateProposalIsNotPublication,
   resourceLabel,
   resourceTypeLabel,
@@ -310,7 +311,10 @@ export function BasicPriceDetailPanel({
               <Fact label="Satuan katalog asal" value={item.resource.baseUnit} />
             ) : null}
             <Fact label="Kategori" value={resourceTypeLabel(item.resource.type)} />
-            <Fact label="Wilayah" value={basicPriceRegionLabel(item)} />
+            <Fact label="Wilayah berlaku" value={basicPriceRegionLabel(item)} />
+            {basicPriceRegionDetailFacts(item).map((field) => (
+              <Fact key={field.label} label={field.label} value={field.value} />
+            ))}
             <Fact label="Sumber" value={explorerSourceNameLabel(item.sourceName)} />
             {/*
               KDN — THIS PRICE OBSERVATION's domestic-content fact (Owner Lock).

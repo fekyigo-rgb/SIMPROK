@@ -99,6 +99,19 @@ const EXPLORER_ROW_SELECT = {
       id: true,
       code: true,
       name: true,
+      administrativeLevel: true,
+      parent: { select: {
+        id: true, code: true, name: true, administrativeLevel: true,
+        parent: { select: {
+          id: true, code: true, name: true, administrativeLevel: true,
+          parent: { select: {
+            id: true, code: true, name: true, administrativeLevel: true,
+            parent: { select: {
+              id: true, code: true, name: true, administrativeLevel: true,
+            } },
+          } },
+        } },
+      } },
     },
   },
   regionCoverageSet: {
