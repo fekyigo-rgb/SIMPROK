@@ -290,9 +290,9 @@ export function BasicPriceExplorerPage() {
             kind: 'ready',
             items: result.data,
             meta: result.meta,
+            temporal,
             regionIndex: result.regionIndex,
             selectedRegionGroup: result.selectedRegionGroup,
-            temporal,
           });
         } catch (error) {
           if (!requestGate.current.isLatest(sequence)) return;
