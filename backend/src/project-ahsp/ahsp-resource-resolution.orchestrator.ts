@@ -138,6 +138,22 @@ export class AhspResourceResolutionOrchestrator {
     input: ResolveVersionResourcesInput,
   ): Promise<ResolutionCreate[]> {
     const { asOf, version } = input;
+    // F03B: preference belongs to the canonical Project, in the SAME caller
+    // transaction as the RAB selection or pre-lock re-proof. Missing/unversioned
+    // preference never grants price-selection power. The optional delegate is
+    // only for old Phase-1 unit mocks that predate the Project read.
+    const priceIntent = await tx.project?.findFirst?.({
+      where: { id: input.projectId, workspaceId: input.workspaceId },
+      select: {
+        priceSelectionPreferenceMode: true,
+        priceSelectionPreferencePolicyVersion: true,
+      },
+    });
+    const projectPricePreference =
+      priceIntent?.priceSelectionPreferencePolicyVersion === 'F03A_PROJECT_PRICE_INTENT_V1' &&
+      ['LOWEST', 'MIDDLE', 'HIGHEST'].includes(priceIntent.priceSelectionPreferenceMode)
+        ? priceIntent.priceSelectionPreferenceMode as 'LOWEST' | 'MIDDLE' | 'HIGHEST'
+        : null;
     // The AHSP parent already owns its work description. Reuse that source
     // context to explain a held candidate without treating an application
     // (e.g. mortar) as proof that two catalog resource identities are equal.
@@ -454,6 +470,7 @@ for (const resource of version.resources) {
     ahspUnit: resource.baseUnit,
     resourceCatalogCandidates: matches,
     eligibleBasicPriceCandidates: regionalCandidates,
+    priceSelectionPreferenceMode: projectPricePreference,
     // Identity already settled above, by its own authority. The price
     // kernel consumes that verdict exactly as it consumes the UnitKernel's
     // instead of re-deriving it from the name — which is the only way a
@@ -607,7 +624,10 @@ for (const resource of version.resources) {
     reasonCodes: [...result.reasonCodes],
     explanation,
     policyVersion: usedDirectionalUnit
-      ? 'E1A_PRICE_DIRECTIONAL_V1' : E1A_RESOLUTION_POLICY_VERSION,
+      ? 'E1A_PRICE_DIRECTIONAL_V1'
+      : resolved && result.reasonCodes.some(code => code.startsWith('PROJECT_PRICE_PREFERENCE_'))
+        ? 'E1A_F03B_PROJECT_PRICE_PREFERENCE_V1'
+        : E1A_RESOLUTION_POLICY_VERSION,
   });
   const sourceName = normalizedAuxiliaryName(facts.rawName);
   const isVerifiedGenericAuxiliary =

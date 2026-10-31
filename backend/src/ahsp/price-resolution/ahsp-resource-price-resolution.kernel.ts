@@ -31,6 +31,7 @@
  *   separately established; source price and existing exact-unit paths remain.
  */
 
+import { Prisma } from '@prisma/client';
 import { adaptPriceWithProvenUnitVerdict, type ProvenUnitPriceOperation } from './proven-unit-price-adaptation';
 
 // ============================================================
@@ -88,6 +89,9 @@ export interface AhspResourceResolutionInput {
   readonly ahspUnit: string;
   readonly resourceCatalogCandidates: ReadonlyArray<ResourceCatalogCandidate>;
   readonly eligibleBasicPriceCandidates: ReadonlyArray<BasicPriceCandidate>;
+  /** F03B: trusted canonical Project-owned preference, never a client assertion.
+   * Absent means Phase-1 multiple-offer NEEDS_REVIEW unchanged. */
+  readonly priceSelectionPreferenceMode?: 'LOWEST' | 'MIDDLE' | 'HIGHEST' | null;
   readonly validatedUnitResolution: {
     readonly status: 'RESOLVED' | 'NEEDS_REVIEW' | 'NOT_CONVERTIBLE';
     readonly canonicalUnitCode: string | null;
@@ -210,7 +214,13 @@ export type ReasonCode =
   | 'NO_BASIC_PRICE_CANDIDATE'
   | 'BASIC_PRICE_UNIT_NOT_SUPPORTED'
   | 'ONLY_EXPIRED_BASIC_PRICE_CANDIDATES'
-  | 'MULTIPLE_BASIC_PRICE_CANDIDATES';
+  | 'MULTIPLE_BASIC_PRICE_CANDIDATES'
+  | 'PROJECT_PRICE_PREFERENCE_LOWEST'
+  | 'PROJECT_PRICE_PREFERENCE_MIDDLE'
+  | 'PROJECT_PRICE_PREFERENCE_HIGHEST'
+  | 'MULTI_PRICE_COMPARABILITY_UNPROVEN'
+  | 'MULTI_PRICE_TIE_UNRESOLVED'
+  | 'MULTI_PRICE_MIDDLE_EVEN_UNRESOLVED';
 
 export interface ResolvedResolution {
   readonly status: 'RESOLVED';
@@ -626,26 +636,58 @@ function priceAgainstCatalog(
   // Freshness is evidence only. Cardinality is evaluated over every
   // resource/unit-compatible candidate, without filtering or ranking by
   // CURRENT / EXPIRING / EXPIRED / missing freshness evidence.
+  let selectedPrice = compatiblePrices[0];
+  let priceChoiceReason: ReasonCode = 'SINGLE_ELIGIBLE_BASIC_PRICE';
+  let priceChoiceExplanation = '';
   if (compatiblePrices.length > 1) {
-    return {
+    const mode = input.priceSelectionPreferenceMode;
+    const hold = (reason: ReasonCode, detail: string): NeedsReviewResolution => ({
       ...baseContext,
       status: 'NEEDS_REVIEW',
-      reasonCodes: [
-        identityReason,
-        'RESOURCE_TYPE_MATCH',
-        unitReason,
-        'MULTIPLE_BASIC_PRICE_CANDIDATES',
-      ],
+      reasonCodes: [identityReason, 'RESOURCE_TYPE_MATCH', unitReason, reason],
       explanation:
         `Identitas sumber daya berhasil dipetakan dan unit terbukti sepadan, ` +
         `tetapi ditemukan ${compatiblePrices.length} Basic Price yang kompatibel ` +
-        `untuk katalog "${resolvedCatalog.name}" (${resolvedCatalog.id}). ` +
-        `Pemilihan otomatis multi-harga belum didukung di Phase 1. ` +
-        `Diperlukan tinjauan manual.`,
-    };
+        `untuk katalog "${resolvedCatalog.name}" (${resolvedCatalog.id}). ` + detail,
+    });
+    if (!mode) {
+      return hold('MULTIPLE_BASIC_PRICE_CANDIDATES',
+        'Pemilihan otomatis multi-harga belum didukung di Phase 1. Diperlukan tinjauan manual.');
+    }
+    // F03B: ranking is the final step, NEVER resource identity, eligibility,
+    // region tier or conversion evidence. No JS floating point money.
+    // A stale/EXPIRED offer is not a safe price winner. Do not silently shrink
+    // the pre-validated comparison domain; hold until that ambiguity is resolved.
+    const lawfulMoney = /^(?:0|[1-9][0-9]{0,15})(?:[.][0-9]{1,2})?$/;
+    if (compatiblePrices.some(price =>
+      price.freshnessStatus === 'EXPIRED' || !lawfulMoney.test(price.value)
+    )) {
+      return hold('MULTI_PRICE_COMPARABILITY_UNPROVEN',
+        'Ada harga kedaluwarsa atau nilai yang tidak terbukti setara secara uang. Pemilihan ditahan.');
+    }
+    if (mode === 'MIDDLE' && compatiblePrices.length % 2 === 0) {
+      return hold('MULTI_PRICE_MIDDLE_EVEN_UNRESOLVED',
+        'Jumlah kandidat genap; tidak ada satu penawaran tengah yang unik. SIMPROK tidak menciptakan harga median.');
+    }
+    const ordered = [...compatiblePrices].sort((a, b) =>
+      new Prisma.Decimal(a.value).cmp(new Prisma.Decimal(b.value)));
+    const index = mode === 'LOWEST' ? 0 :
+      mode === 'HIGHEST' ? ordered.length - 1 :
+      Math.floor(ordered.length / 2);
+    const chosen = ordered[index];
+    // Equal monetary values from different provenance are NOT permission to
+    // choose arbitrarily by database order, timestamp, supplier or UUID.
+    if (ordered.some(other => other.id !== chosen.id &&
+      new Prisma.Decimal(other.value).equals(new Prisma.Decimal(chosen.value)))) {
+      return hold('MULTI_PRICE_TIE_UNRESOLVED',
+        'Beberapa sumber memiliki nilai terpilih yang sama. Sumber pemenang belum dapat dibuktikan.');
+    }
+    selectedPrice = chosen;
+    priceChoiceReason = (`PROJECT_PRICE_PREFERENCE_${mode}`) as ReasonCode;
+    priceChoiceExplanation =
+      ` Kebijakan harga proyek F03A memilih ${mode} dari ${ordered.length} penawaran setara ` +
+      `(Basic Price ID: ${chosen.id}); tanpa menyimpulkan TKDN maupun preferensi pemasok.`;
   }
-
-  const selectedPrice = compatiblePrices[0];
   // Price source stays per catalog unit. Only the UnitKernel's DIRECT
   // source -> AHSP proof may adapt it; unproved direction and fractional
   // cents hold, never become invented money or a different Basic Price.
@@ -712,7 +754,7 @@ function priceAgainstCatalog(
       identityReason,
       'RESOURCE_TYPE_MATCH',
       unitReason,
-      'SINGLE_ELIGIBLE_BASIC_PRICE',
+      priceChoiceReason,
     ],
     explanation:
       `Sumber daya AHSP "${rawResourceRef}" (${resourceType}, unit: ${ahspUnit}) ` +
@@ -727,6 +769,6 @@ function priceAgainstCatalog(
       `Basic Price dipilih otomatis: ${selectedPrice.value} per ${selectedPrice.unit} ` +
       `dari sumber ${selectedPrice.sourceOrigin} (ID: ${selectedPrice.id}). ` +
       `Harga yang diadaptasi ke unit AHSP: ${effectivePrice} per ${ahspUnit}. ` +
-      `SIMPROK menghitung, manusia memutuskan.`,
+      `SIMPROK menghitung, manusia memutuskan.` + priceChoiceExplanation,
   };
 }
