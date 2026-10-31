@@ -174,6 +174,12 @@ export class GetBasicPricesDto {
   itemGroup?: string;
 
   @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  itemPage?: number = 1;
+
+  @IsOptional()
   @IsIn(['asc', 'desc'])
   sortOrder?: 'asc' | 'desc' = 'desc';
 

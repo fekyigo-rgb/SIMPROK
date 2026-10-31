@@ -205,6 +205,7 @@ export function BasicPriceExplorerPage() {
   /** The first region group is server-selected from the canonical eligible set. */
   const [regionGroup, setRegionGroup] = useState('first');
   const [itemGroup, setItemGroup] = useState('first');
+  const [itemPage, setItemPage] = useState(1);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [state, setState] = useState<ListState>({ kind: 'loading' });
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
@@ -272,6 +273,7 @@ export function BasicPriceExplorerPage() {
         regionGroup,
         itemBrowse: 'true',
         itemGroup,
+        itemPage,
         sortBy,
         sortOrder: sortDirection,
       };
@@ -322,7 +324,7 @@ export function BasicPriceExplorerPage() {
     // eleven fields plus a client-side validity check, so the dependency list
     // could not be stated honestly and the rule was silenced. Four values now
     // decide this request, all four are listed, and the linter agrees.
-  }, [draft, collection, sortOrder, page, reloadNonce, regionGroup, itemGroup]);
+  }, [draft, collection, sortOrder, page, reloadNonce, regionGroup, itemGroup, itemPage]);
 
   const filtersActive = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(EMPTY_DRAFT) || collection !== '',
@@ -336,6 +338,7 @@ export function BasicPriceExplorerPage() {
     setPage(1);
     setRegionGroup('first');
     setItemGroup('first');
+    setItemPage(1);
     // A detail panel describes ONE row. When the list beneath it changes, the
     // row it describes may no longer be there, so the panel closes rather than
     // lingering over a table that no longer contains its subject.
@@ -348,6 +351,7 @@ export function BasicPriceExplorerPage() {
     setCollection('');
     setRegionGroup('first');
     setItemGroup('first');
+    setItemPage(1);
     setSortOrder('resourceName:asc');
     replaceSelectedIds(new Set());
     setSelectionNotice(null);
@@ -378,12 +382,23 @@ export function BasicPriceExplorerPage() {
   const chooseRegionGroup = (key: string) => {
     setRegionGroup(key);
     setItemGroup('first');
+    setItemPage(1);
     replaceSelectedIds(new Set());
     setSelectionNotice(null);
     setPage(1);
     setOpenDetailId(null);
     setDetailNotice(null);
   };
+  const chooseItemPage = (nextPage: number) => {
+    setItemPage(nextPage);
+    setItemGroup('first');
+    replaceSelectedIds(new Set());
+    setSelectionNotice(null);
+    setPage(1);
+    setOpenDetailId(null);
+    setDetailNotice(null);
+  };
+
   const chooseItemGroup = (id: string) => {
     setItemGroup(id);
     replaceSelectedIds(new Set());
@@ -392,17 +407,6 @@ export function BasicPriceExplorerPage() {
     setOpenDetailId(null);
     setDetailNotice(null);
   };
-
-  // O(N) duplicate-name detection, not an O(N²) comparison on every row.
-  // Identical human labels never imply the same canonical Resource ID.
-  const duplicateItemNames = useMemo(() => {
-    const counts = new Map<string, number>();
-    if (state.kind !== 'ready' || !state.itemIndex) return new Set<string>();
-    for (const item of state.itemIndex.items) {
-      counts.set(item.name, (counts.get(item.name) ?? 0) + 1);
-    }
-    return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
-  }, [state]);
 
   const openDetailItem =
     state.kind === 'ready' && openDetailId
@@ -874,8 +878,8 @@ export function BasicPriceExplorerPage() {
                   <span className="bp-item-summary__identity">
                     <strong>{item.name}</strong>
                     <small>{resourceTypeLabel(item.type)} · {item.baseUnit}
-                      {duplicateItemNames.has(item.name)
-                        ? ` · ${item.code ?? 'Identitas berbeda'}` : ''}
+                      {item.duplicateName
+                        ? ` · ${item.code ?? 'Ref. ' + item.id.slice(0, 8)}` : ''}
                     </small>
                   </span>
                   <span className="bp-item-summary__count">{item.priceCount} harga</span>
@@ -883,6 +887,20 @@ export function BasicPriceExplorerPage() {
               </li>
             ))}
           </ul>
+          {(state.itemIndex.totalPages ?? 0) > 1 ? (
+            <div className="bp-item-summary__pager" aria-label="Halaman daftar item">
+              <button type="button" disabled={(state.itemIndex.page ?? 1) <= 1}
+                onClick={() => chooseItemPage((state.itemIndex!.page ?? 1) - 1)}>
+                Sebelumnya
+              </button>
+              <span>Item halaman {state.itemIndex.page} dari {state.itemIndex.totalPages}</span>
+              <button type="button"
+                disabled={(state.itemIndex.page ?? 1) >= (state.itemIndex.totalPages ?? 1)}
+                onClick={() => chooseItemPage((state.itemIndex!.page ?? 1) + 1)}>
+                Berikutnya
+              </button>
+            </div>
+          ) : null}
         </section>
       ) : null}
 
@@ -914,6 +932,7 @@ export function BasicPriceExplorerPage() {
                 setPage(1);
                 setRegionGroup('first');
     setItemGroup('first');
+    setItemPage(1);
                 setOpenDetailId(null);
                 setDetailNotice(null);
               }}

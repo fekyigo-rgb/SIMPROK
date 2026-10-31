@@ -28,16 +28,24 @@ test('query contract carries item group only when defined and never includes a w
     regionGroup: 'general',
     itemBrowse: 'true',
     itemGroup: '10000000-0000-4000-8000-000000000001',
-    limit: 50, page: 2,
+    limit: 50, page: 2, itemPage: 3,
   });
   assert.equal(params.itemBrowse, 'true');
   assert.equal(params.itemGroup, '10000000-0000-4000-8000-000000000001');
   assert.equal(params.regionGroup, 'general');
   assert.equal(params.page, '2');
+  assert.equal(params.itemPage, '3');
   assert.equal(params.workspaceId, undefined);
 });
 test('raw prices remain unmodified; no computed average / price merging on frontend', () => {
   assert.match(page, /state\.items\.map\(\(item\) => \(/);
   assert.match(page, /formatExplorerPrice\(item\.price\)/);
   assert.doesNotMatch(page, /itemIndex\.items\.reduce\(/);
+});
+
+test('item list is bounded and gets a separate pager from raw price pages', () => {
+  assert.match(page, /state\.itemIndex\.totalPages/u);
+  assert.match(page, /chooseItemPage\(/u);
+  assert.match(page, /setItemPage\(nextPage\)/u);
+  assert.match(page, /itemPage,/u);
 });

@@ -163,6 +163,8 @@ export interface BasicPriceRegionIndex {
 export interface BasicPriceItemIndex {
   totalPrices: number;
   totalItems: number;
+  page?: number;
+  totalPages?: number;
   items: Array<{
     id: string;
     name: string;
@@ -170,6 +172,7 @@ export interface BasicPriceItemIndex {
     type: string;
     baseUnit: string;
     priceCount: number;
+    duplicateName?: boolean;
   }>;
 }
 export interface ExplorerPageMeta {
@@ -354,6 +357,7 @@ export interface ExplorerFilters {
   regionGroup?: string;
   itemBrowse?: 'true';
   itemGroup?: string;
+  itemPage?: number;
 }
 
 /** Only the non-empty, defined fields become query params — never a literal "undefined". */
@@ -385,6 +389,7 @@ export function buildExplorerQueryParams(filters: ExplorerFilters): Record<strin
   put('regionGroup', filters.regionGroup);
   put('itemBrowse', filters.itemBrowse);
   put('itemGroup', filters.itemGroup);
+  put('itemPage', filters.itemPage);
   return params;
 }
 

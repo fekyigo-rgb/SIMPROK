@@ -18,10 +18,13 @@ export interface BasicPriceItemIdentity {
 }
 export interface BasicPriceItemSummary extends BasicPriceItemIdentity {
   priceCount: number;
+  duplicateName?: boolean;
 }
 export interface BasicPriceItemIndex {
   totalPrices: number;
   totalItems: number;
+  page?: number;
+  totalPages?: number;
   items: BasicPriceItemSummary[];
 }
 export const buildBasicPriceItemIndex = (
@@ -48,6 +51,14 @@ export const buildBasicPriceItemIndex = (
     (a.code ?? '').localeCompare(b.code ?? '', 'id') ||
     a.id.localeCompare(b.id),
   );
+  const nameCounts = new Map<string, number>();
+  for (const item of items) {
+    const key = item.name.toLocaleLowerCase('id');
+    nameCounts.set(key, (nameCounts.get(key) ?? 0) + 1);
+  }
+  for (const item of items) {
+    item.duplicateName = (nameCounts.get(item.name.toLocaleLowerCase('id')) ?? 0) > 1;
+  }
   return {
     totalPrices: counts.reduce((sum, c) => sum + c.count, 0),
     totalItems: items.length,
@@ -65,4 +76,24 @@ export const selectBasicPriceItemId = (
   if (!index.items.length) return null;
   if (!requested || requested === 'first') return index.items[0].id;
   return index.items.some((item) => item.id === requested) ? requested : null;
+};
+/** Bounded transport: never render/download every item identity in the region. */
+export const pageBasicPriceItems = (
+  full: BasicPriceItemIndex,
+  requestedPage: number,
+  pageSize = 50,
+): BasicPriceItemIndex => {
+  if (!Number.isSafeInteger(requestedPage) || requestedPage < 1 ||
+      !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 50) {
+    throw new Error('BP_ITEM_SUMMARY_INVALID_PAGE');
+  }
+  const totalPages = Math.ceil(full.totalItems / pageSize);
+  const page = Math.min(requestedPage, Math.max(totalPages, 1));
+  return {
+    totalPrices: full.totalPrices,
+    totalItems: full.totalItems,
+    page,
+    totalPages,
+    items: full.items.slice((page - 1) * pageSize, page * pageSize),
+  };
 };

@@ -52,7 +52,7 @@ import {
   type ProvenHistoryRow,
 } from './basic-price-proven-history';
 import { toDecimalString2 } from '../common/money';
-import { buildBasicPriceItemIndex, selectBasicPriceItemId, type BasicPriceItemIndex } from './basic-price-item-summary';
+import { buildBasicPriceItemIndex, pageBasicPriceItems, selectBasicPriceItemId, type BasicPriceItemIndex } from './basic-price-item-summary';
 import {
   buildRegionFirstIndex,
   regionFirstGroupKeys,
@@ -1054,6 +1054,7 @@ export class BasicPriceService {
       regionGroup,
       itemBrowse,
       itemGroup,
+      itemPage = 1,
     } = query;
     if ((itemBrowse === 'true' || itemGroup) && regionBrowse !== 'true') {
       throw new BadRequestException('BP_ITEM_BROWSE_REQUIRES_REGION_BROWSE');
@@ -1350,11 +1351,15 @@ export class BasicPriceService {
             select: { id: true, name: true, code: true, type: true, baseUnit: true },
           })
         : [];
-      itemIndex = buildBasicPriceItemIndex(
+      const fullIndex = buildBasicPriceItemIndex(
         itemCounts.map((count) => ({ resourceId: count.resourceId, count: count._count._all })),
         identities,
       );
-      selectedItemId = selectBasicPriceItemId(itemIndex, itemGroup);
+      // The full index proves selection; transport/UI receive at most 50 items.
+      itemIndex = pageBasicPriceItems(fullIndex, itemPage);
+      selectedItemId = !itemGroup || itemGroup === 'first'
+        ? (itemIndex.items[0]?.id ?? null)
+        : selectBasicPriceItemId(fullIndex, itemGroup);
       if (itemGroup && itemGroup !== 'first' && selectedItemId === null) {
         throw new BadRequestException('BP_ITEM_GROUP_NOT_AVAILABLE');
       }

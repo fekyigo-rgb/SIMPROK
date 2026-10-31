@@ -30,7 +30,7 @@ test('Urutkan presets stay synchronized with actual column sorting; date choices
     assert.ok(page.includes('value="' + choice + '"'));
   }
   assert.match(page, /sortBy,\s*sortOrder: sortDirection,/);
-  assert.match(page, /\[draft, collection, sortOrder, page, reloadNonce, regionGroup, itemGroup\]/);
+  assert.match(page, /\[draft, collection, sortOrder, page, reloadNonce, regionGroup, itemGroup, itemPage\]/);
   assert.match(page, /setPage\(1\)/);
   assert.match(page, /setOpenDetailId\(null\)/);
 });
