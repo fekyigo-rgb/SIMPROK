@@ -1401,6 +1401,24 @@ test("the server's own named refusal is what the person reads", () => {
   );
 });
 
+test("the 409 region-scope conflict explains governed reconciliation without touching old prices", () => {
+  const body = JSON.stringify({
+    statusCode: 409,
+    message: "BATCH_REGION_SCOPE_HAS_PRICES_REQUIRES_GOVERNED_RECONCILIATION",
+  });
+  const sentence = metadataSaveFailureMessage(409, body);
+  assert.match(sentence, /sudah tersimpan/);
+  assert.match(sentence, /Wilayah tidak dapat diubah/);
+  assert.match(sentence, /koreksi cakupan harga/);
+  assert.match(sentence, /menjaga riwayat/);
+  assert.match(sentence, /Harga lama tetap aman/);
+  assert.match(sentence, /Tidak ada yang tersimpan/);
+  assert.doesNotMatch(sentence, /BATCH_|RECONCILIATION|mungkin/);
+  assert.equal(metadataSaveExistingBatchId(409, body), null);
+  // Named status is not enough without its matching HTTP conflict.
+  assert.doesNotMatch(metadataSaveFailureMessage(500, body), /koreksi cakupan harga/);
+});
+
 test("metadata identity collision exposes only the server-named existing batch", () => {
   const raw = JSON.stringify({
     message: "BATCH_IDENTITY_ALREADY_EXISTS",
