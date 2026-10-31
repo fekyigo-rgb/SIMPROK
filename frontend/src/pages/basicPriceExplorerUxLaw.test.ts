@@ -185,7 +185,7 @@ test("X-10. Owner-approved checkbox precedes the same seven locked data columns"
     "Item",
     "Harga",
     "Satuan",
-    "Wilayah",
+    "Wilayah Berlaku",
     "Sumber",
     "Status",
     "Detail",
