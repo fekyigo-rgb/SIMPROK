@@ -692,6 +692,71 @@ describe('Project AHSP whole-version selection (e2e)', () => {
     );
   });
 
+  it('F03B: canonical Project LOWEST selects a real matching Basic Price through authenticated occurrence and retains frozen readback', async () => {
+    const catalog = await prisma.resourceCatalog.findFirstOrThrow({
+      where: { workspaceId, code: `${tag}-MULTIPLE` },
+    });
+    const offers = await prisma.basicPrice.findMany({
+      where: { resourceId: catalog.id, workspaceId },
+      orderBy: { value: 'asc' },
+    });
+    expect(offers).toHaveLength(2);
+    expect(offers[0].value.toFixed(2)).toBe('300.00');
+    const previouslyExpired = offers.find(o => o.freshnessStatus === 'EXPIRED');
+    expect(previouslyExpired).toBeDefined();
+    let occurrenceId: string | null = null;
+    try {
+      // An isolated transaction fixture temporarily makes both real offers
+      // CURRENT; restore source facts in finally. No production price write.
+      await prisma.basicPrice.update({
+        where: { id: previouslyExpired!.id },
+        data: { freshnessStatus: 'CURRENT' },
+      });
+      await prisma.project.update({
+        where: { id: projectId },
+        data: {
+          priceSelectionPreferenceMode: 'LOWEST',
+          priceSelectionPreferencePolicyVersion: 'F03A_PROJECT_PRICE_INTENT_V1',
+        },
+      });
+      const response = await select(`${tag}-f03b-lowest`, multipleVersionId).expect(201);
+      occurrenceId = response.body.id;
+      const chosen = response.body.resourceResolutions[0];
+      expect(chosen).toMatchObject({
+        status: 'RESOLVED',
+        selectedBasicPriceId: offers[0].id,
+        policyVersion: 'E1A_F03B_PROJECT_PRICE_PREFERENCE_V1',
+      });
+      expect(chosen.reasonCodes).toContain('PROJECT_PRICE_PREFERENCE_LOWEST');
+      expect(chosen.sourcePriceValue).toBe('300');
+      const stored = await prisma.projectAhspResourceResolution.findFirstOrThrow({
+        where: { occurrenceId: occurrenceId! },
+      });
+      expect(stored.selectedBasicPriceId).toBe(offers[0].id);
+      expect(stored.sourcePriceValue?.toFixed(2)).toBe('300.00');
+    } finally {
+      await prisma.project.update({
+        where: { id: projectId },
+        data: {
+          priceSelectionPreferenceMode: null,
+          priceSelectionPreferencePolicyVersion: null,
+        },
+      });
+      if (previouslyExpired) await prisma.basicPrice.update({
+        where: { id: previouslyExpired.id },
+        data: { freshnessStatus: 'EXPIRED' },
+      });
+    }
+    // Historical occurrence is immutable even after user changes intent.
+    expect(occurrenceId).not.toBeNull();
+    const readback = await request(app.getHttpServer())
+      .get(`/projects/${projectId}/ahsp-occurrences/${occurrenceId}`)
+      .set('Authorization', `Bearer ${token}`)
+      .expect(200);
+    expect(readback.body.resourceResolutions[0].selectedBasicPriceId).toBe(offers[0].id);
+    expect(readback.body.resourceResolutions[0].reasonCodes).toContain('PROJECT_PRICE_PREFERENCE_LOWEST');
+  }, 60_000);
+
   /**
    * RM-03D1: what this test protects is unchanged — when no exact catalog row
    * exists, NOTHING may be invented. Every "invented evidence" assertion below

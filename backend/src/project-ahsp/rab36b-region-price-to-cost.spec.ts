@@ -26,7 +26,11 @@ const price = (id: string, regionId: string, value: string) => ({
   freshnessStatus: 'CURRENT', effectiveDate: new Date('2026-10-01T00:00:00.000Z'),
 });
 
-async function run(offers: ReturnType<typeof price>[], sourceRegion = origin) {
+async function run(
+  offers: ReturnType<typeof price>[], sourceRegion = origin,
+  mode: 'LOWEST' | 'MIDDLE' | 'HIGHEST' | null = null,
+  policyVersion: string | null = mode ? 'F03A_PROJECT_PRICE_INTENT_V1' : null,
+) {
   const proofs: Array<{ where: any }> = [];
   const rechecks: string[] = [];
   const identity = {
@@ -47,6 +51,12 @@ async function run(offers: ReturnType<typeof price>[], sourceRegion = origin) {
     }),
   };
   const db = {
+    project: {
+      findFirst: jest.fn(async ({ where }: any) =>
+        where.id === 'project-1' && where.workspaceId === 'workspace-1'
+          ? { priceSelectionPreferenceMode: mode, priceSelectionPreferencePolicyVersion: policyVersion }
+          : null),
+    },
     $queryRaw: async () => [],
     region: { findUnique: async ({ where }: any) => hierarchy[where.id] ?? null },
     basicPrice: {
@@ -167,5 +177,58 @@ describe('RAB-36B: canonical Region priority -> existing price kernel -> Cost Ke
   it('fails closed on an unproven hierarchy rather than guessing a parent', async () => {
     await expect(run([], 'village-unknown'))
       .rejects.toThrow('RAB_PRICE_REGION_HIERARCHY_UNPROVEN');
+  });
+});
+
+describe('F03B: Project canonical intent -> existing Region priority -> Cost Kernel', () => {
+  it.each([
+    ['LOWEST', 'district-low', '80.00'],
+    ['MIDDLE', 'district-mid', '90.00'],
+    ['HIGHEST', 'district-high', '110.00'],
+  ] as const)('%s uses existing nearest tier and re-verifies exactly selected BasicPrice ID', async (mode, id, value) => {
+    const { resolution, rechecks } = await run([
+      price('province-cheaper', province, '1.00'),
+      price('district-high', district, '110.00'),
+      price('district-low', district, '80.00'),
+      price('district-mid', district, '90.00'),
+    ], origin, mode);
+    expect(resolution.status).toBe('RESOLVED');
+    expect(resolution.selectedBasicPriceId).toBe(id);
+    expect(resolution.sourcePriceValue).toBe(String(new Prisma.Decimal(value)));
+    expect(resolution.reasonCodes).toContain('PROJECT_PRICE_PREFERENCE_' + mode);
+    expect(resolution.policyVersion).toBe('E1A_F03B_PROJECT_PRICE_PREFERENCE_V1');
+    expect(resolution.explanation).toContain('tier DISTRICT');
+    expect(rechecks).toEqual([id]);
+    const calculated = calculateCostKernel({
+      boqItemId: 'f03b-boq', ahspVersionId: 'version-1',
+      occurrenceId: 'occurrence-current', occurrenceCount: 1,
+      itemType: 'WORK_ITEM', volume: '3', boqUnit: 'm2', outputUnit: 'm2',
+      ownershipMatches: true,
+      resources: [{
+        ahspResourceId: 'ahsp-resource-1', resolutionId: 'resolution-1',
+        ahspVersionId: 'version-1', status: resolution.status,
+        coefficient: '2', adaptedPriceValue: String(resolution.adaptedPriceValue),
+      }],
+    });
+    expect(calculated.status).toBe('CALCULATED');
+    expect(calculated.ahspUnitPrice).toBe(new Prisma.Decimal(value).mul(2).toString());
+    expect(calculated.lineTotal).toBe(new Prisma.Decimal(value).mul(6).toString());
+  });
+  it('unversioned or missing Project preference cannot change legacy ambiguity', async () => {
+    const offers = [price('first', district, '20.00'), price('second', district, '30.00')];
+    const unknown = await run(offers, origin, 'LOWEST', 'UNVERIFIED_POLICY');
+    expect(unknown.resolution.status).toBe('NEEDS_REVIEW');
+    expect(unknown.resolution.reasonCodes).toContain('MULTIPLE_BASIC_PRICE_CANDIDATES');
+    const missing = await run(offers, origin);
+    expect(missing.resolution.status).toBe('NEEDS_REVIEW');
+  });
+  it('equal winning prices never choose a source by accidental row order', async () => {
+    const { resolution, rechecks } = await run([
+      price('source-a', district, '20.00'),
+      price('source-b', district, '20.00'),
+    ], origin, 'LOWEST');
+    expect(resolution.status).toBe('NEEDS_REVIEW');
+    expect(resolution.reasonCodes).toContain('MULTI_PRICE_TIE_UNRESOLVED');
+    expect(rechecks).toHaveLength(0);
   });
 });
