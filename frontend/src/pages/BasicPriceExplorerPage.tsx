@@ -788,8 +788,8 @@ export function BasicPriceExplorerPage() {
             <strong>Jelajahi wilayah</strong>
             <span>{state.regionIndex.total} harga di seluruh wilayah</span>
           </div>
-          {state.regionIndex.provinces.map((province, index) => (
-            <details className="bp-region-first__province" key={province.id} defaultOpen={index === 0}>
+          {state.regionIndex.provinces.map((province) => (
+            <details className="bp-region-first__province" key={province.id}>
               <summary>{province.name} <span>{province.priceCount} harga</span></summary>
               <div className="bp-region-first__cities">
                 {province.provinceOnly.count > 0 ? (
