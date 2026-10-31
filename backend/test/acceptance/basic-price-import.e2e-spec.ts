@@ -498,7 +498,8 @@ describe('RM02B Basic Price import (e2e)', () => {
           .expect(200);
         expect(citySave.body.regionId).toBe(city.id);
         expect(citySave.body.region.code).toBe('31.71');
-        expect(citySave.body.regionCoverageSetId).toBeNull();
+        // regionCoverageSetId is internal database context, deliberately not a
+        // public API field. Prove it from persisted PostgreSQL below.
         const actualCityBatch = await prisma.basicPriceImportBatch.findUniqueOrThrow({
           where: { id: cityBatchId },
         });
