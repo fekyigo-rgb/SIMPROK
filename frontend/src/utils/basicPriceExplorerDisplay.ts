@@ -159,6 +159,19 @@ export interface BasicPriceRegionIndex {
   unverified: { key: 'unverified'; count: number; regions: Array<{ id: string; name: string; count: number }> };
   general: { key: 'general'; count: number };
 }
+/** Item A-Z summaries are server-authored from all eligible prices in a region. */
+export interface BasicPriceItemIndex {
+  totalPrices: number;
+  totalItems: number;
+  items: Array<{
+    id: string;
+    name: string;
+    code: string | null;
+    type: string;
+    baseUnit: string;
+    priceCount: number;
+  }>;
+}
 export interface ExplorerPageMeta {
   total: number;
   page: number;
@@ -339,6 +352,8 @@ export interface ExplorerFilters {
   sortOrder?: 'asc' | 'desc';
   regionBrowse?: 'true';
   regionGroup?: string;
+  itemBrowse?: 'true';
+  itemGroup?: string;
 }
 
 /** Only the non-empty, defined fields become query params — never a literal "undefined". */
@@ -368,6 +383,8 @@ export function buildExplorerQueryParams(filters: ExplorerFilters): Record<strin
   put('sortOrder', filters.sortOrder);
   put('regionBrowse', filters.regionBrowse);
   put('regionGroup', filters.regionGroup);
+  put('itemBrowse', filters.itemBrowse);
+  put('itemGroup', filters.itemGroup);
   return params;
 }
 

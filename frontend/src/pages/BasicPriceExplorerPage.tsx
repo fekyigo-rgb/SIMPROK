@@ -10,6 +10,7 @@ import {
   type ExplorerFilters,
   type ExplorerPageMeta,
   type BasicPriceRegionIndex,
+  type BasicPriceItemIndex,
   type RegionLookupItem,
 } from '../api/basicPriceExplorer';
 import { ExplorerRegionFilterSelect } from '../components/basic-price/ExplorerRegionFilterSelect';
@@ -107,6 +108,8 @@ type ListState =
       meta: ExplorerPageMeta;
       regionIndex?: BasicPriceRegionIndex;
       selectedRegionGroup?: string | null;
+      itemIndex?: BasicPriceItemIndex;
+      selectedItemId?: string | null;
       /**
        * BP-UX-FINAL-01D GAP-D — THE TEMPORAL CONTEXT THESE EXACT ROWS WERE
        * SELECTED FOR, carried WITH them rather than re-read from the draft.
@@ -201,6 +204,7 @@ export function BasicPriceExplorerPage() {
   const [page, setPage] = useState(1);
   /** The first region group is server-selected from the canonical eligible set. */
   const [regionGroup, setRegionGroup] = useState('first');
+  const [itemGroup, setItemGroup] = useState('first');
   const [reloadNonce, setReloadNonce] = useState(0);
   const [state, setState] = useState<ListState>({ kind: 'loading' });
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
@@ -266,6 +270,8 @@ export function BasicPriceExplorerPage() {
         limit: 50,
         regionBrowse: 'true',
         regionGroup,
+        itemBrowse: 'true',
+        itemGroup,
         sortBy,
         sortOrder: sortDirection,
       };
@@ -293,6 +299,8 @@ export function BasicPriceExplorerPage() {
             temporal,
             regionIndex: result.regionIndex,
             selectedRegionGroup: result.selectedRegionGroup,
+            itemIndex: result.itemIndex,
+            selectedItemId: result.selectedItemId,
           });
         } catch (error) {
           if (!requestGate.current.isLatest(sequence)) return;
@@ -314,7 +322,7 @@ export function BasicPriceExplorerPage() {
     // eleven fields plus a client-side validity check, so the dependency list
     // could not be stated honestly and the rule was silenced. Four values now
     // decide this request, all four are listed, and the linter agrees.
-  }, [draft, collection, sortOrder, page, reloadNonce, regionGroup]);
+  }, [draft, collection, sortOrder, page, reloadNonce, regionGroup, itemGroup]);
 
   const filtersActive = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(EMPTY_DRAFT) || collection !== '',
@@ -327,6 +335,7 @@ export function BasicPriceExplorerPage() {
     setSelectionNotice(null);
     setPage(1);
     setRegionGroup('first');
+    setItemGroup('first');
     // A detail panel describes ONE row. When the list beneath it changes, the
     // row it describes may no longer be there, so the panel closes rather than
     // lingering over a table that no longer contains its subject.
@@ -338,6 +347,7 @@ export function BasicPriceExplorerPage() {
     setDraft(EMPTY_DRAFT);
     setCollection('');
     setRegionGroup('first');
+    setItemGroup('first');
     setSortOrder('resourceName:asc');
     replaceSelectedIds(new Set());
     setSelectionNotice(null);
@@ -367,12 +377,33 @@ export function BasicPriceExplorerPage() {
 
   const chooseRegionGroup = (key: string) => {
     setRegionGroup(key);
+    setItemGroup('first');
     replaceSelectedIds(new Set());
     setSelectionNotice(null);
     setPage(1);
     setOpenDetailId(null);
     setDetailNotice(null);
   };
+  const chooseItemGroup = (id: string) => {
+    setItemGroup(id);
+    replaceSelectedIds(new Set());
+    setSelectionNotice(null);
+    setPage(1);
+    setOpenDetailId(null);
+    setDetailNotice(null);
+  };
+
+  // O(N) duplicate-name detection, not an O(N²) comparison on every row.
+  // Identical human labels never imply the same canonical Resource ID.
+  const duplicateItemNames = useMemo(() => {
+    const counts = new Map<string, number>();
+    if (state.kind !== 'ready' || !state.itemIndex) return new Set<string>();
+    for (const item of state.itemIndex.items) {
+      counts.set(item.name, (counts.get(item.name) ?? 0) + 1);
+    }
+    return new Set([...counts].filter(([, count]) => count > 1).map(([name]) => name));
+  }, [state]);
+
   const openDetailItem =
     state.kind === 'ready' && openDetailId
       ? (state.items.find((item) => item.basicPriceId === openDetailId) ?? null)
@@ -827,6 +858,34 @@ export function BasicPriceExplorerPage() {
         </nav>
       ) : null}
 
+      {state.kind === 'ready' && state.itemIndex ? (
+        <section className="bp-item-summary" aria-label="Item harga pada wilayah terpilih">
+          <div className="bp-item-summary__heading">
+            <strong>Item A–Z</strong>
+            <span>{state.itemIndex.totalItems} item · {state.itemIndex.totalPrices} catatan harga</span>
+          </div>
+          <ul className="bp-item-summary__list">
+            {state.itemIndex.items.map((item) => (
+              <li key={item.id}>
+                <button type="button" className="bp-item-summary__button"
+                  aria-pressed={state.selectedItemId === item.id}
+                  aria-label={`Buka ${item.priceCount} catatan harga ${item.name}`}
+                  onClick={() => chooseItemGroup(item.id)}>
+                  <span className="bp-item-summary__identity">
+                    <strong>{item.name}</strong>
+                    <small>{resourceTypeLabel(item.type)} · {item.baseUnit}
+                      {duplicateItemNames.has(item.name)
+                        ? ` · ${item.code ?? 'Identitas berbeda'}` : ''}
+                    </small>
+                  </span>
+                  <span className="bp-item-summary__count">{item.priceCount} harga</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+
       <div className="bp-tablebar">
         <span aria-live="polite">
           {state.kind === 'ready'
@@ -854,6 +913,7 @@ export function BasicPriceExplorerPage() {
                 setSelectionNotice(null);
                 setPage(1);
                 setRegionGroup('first');
+    setItemGroup('first');
                 setOpenDetailId(null);
                 setDetailNotice(null);
               }}

@@ -2345,3 +2345,15 @@ tr.bp-detail-anchor > td {
     flex-direction: column;
   }
 }
+
+/* BP Item Summary: compact read-only ResourceID view; original price table stays authoritative. */
+.bp-room .bp-item-summary { margin: 10px 0 14px; padding: 12px 14px; border: 1px solid var(--simprok-engineering-blue-200); border-radius: var(--radius-md); background: var(--simprok-white); }
+.bp-room .bp-item-summary__heading { display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:6px; margin-bottom:8px; font-size:var(--text-sm); }
+.bp-room .bp-item-summary__heading span { color:var(--simprok-authority-navy-600); font-size:var(--text-xs); }
+.bp-room .bp-item-summary__list { padding:0; margin:0; list-style:none; display:grid; gap:3px; max-height:320px; overflow-y:auto; }
+.bp-room .bp-item-summary__button { width:100%; min-width:0; appearance:none; background:transparent; border:1px solid transparent; border-radius:var(--radius-sm); padding:7px 9px; color:var(--simprok-authority-navy-900); font:inherit; text-align:left; display:flex; justify-content:space-between; align-items:center; gap:10px; cursor:pointer; }
+.bp-room .bp-item-summary__button:hover, .bp-room .bp-item-summary__button[aria-pressed="true"] { border-color:var(--simprok-engineering-blue-200); background:var(--simprok-engineering-blue-100); }
+.bp-room .bp-item-summary__identity { min-width:0; display:grid; gap:2px; font-size:var(--text-sm); }
+.bp-room .bp-item-summary__identity small { font-size:var(--text-xs); color:var(--simprok-authority-navy-600); }
+.bp-room .bp-item-summary__count { font-size:var(--text-xs); white-space:nowrap; color:var(--simprok-authority-navy-600); }
+@media (max-width:600px) { .bp-room .bp-item-summary__list { max-height:270px; } .bp-room .bp-item-summary__identity strong { overflow-wrap:anywhere; } }
