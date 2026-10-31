@@ -1227,7 +1227,6 @@ describe('BasicPriceImportService', () => {
       tx.$queryRaw
         .mockResolvedValueOnce([freshBatch])
         .mockResolvedValueOnce([]);
-      tx.basicPrice.findFirst.mockResolvedValueOnce(null);
       tx.basicPriceImportBatch.update.mockResolvedValue({
         ...freshBatch,
         version: 1,
@@ -1261,14 +1260,13 @@ describe('BasicPriceImportService', () => {
     });
 
     it('keeps old region provenance immutable when prices have already been materialized', async () => {
-      tx.$queryRaw.mockResolvedValueOnce([{
-        ...storedBatch,
-        regionId: 'district-senen',
-        regionCoverageSetId: null,
-      }]);
-      tx.basicPrice.findFirst.mockResolvedValueOnce({
-        id: 'one-of-58-existing-private-prices',
-      });
+      tx.$queryRaw
+        .mockResolvedValueOnce([{
+          ...storedBatch,
+          regionId: 'district-senen',
+          regionCoverageSetId: null,
+        }])
+        .mockResolvedValueOnce([{ id: 'one-of-58-existing-private-prices' }]);
 
       await expect(service.updateBatchMetadata(
         WORKSPACE_ID, 'batch-01',
@@ -1277,13 +1275,7 @@ describe('BasicPriceImportService', () => {
       )).rejects.toThrow(
         'BATCH_REGION_SCOPE_HAS_PRICES_REQUIRES_GOVERNED_RECONCILIATION',
       );
-      expect(tx.basicPrice.findFirst).toHaveBeenCalledWith({
-        where: {
-          workspaceId: WORKSPACE_ID,
-          sourceImportRow: { batchId: 'batch-01' },
-        },
-        select: { id: true },
-      });
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
       expect(tx.basicPriceImportBatch.update).not.toHaveBeenCalled();
     });
 
