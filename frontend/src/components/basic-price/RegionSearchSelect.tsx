@@ -13,9 +13,9 @@ interface RegionSearchSelectProps {
 }
 
 /**
- * Existing import Region door, now connected to the existing parentId and
- * administrativeLevel lookup filters. The shared hierarchy control emits one
- * Region only: District when Village is empty, Village when it is selected.
+ * Import-only city scope: the price applies across all districts/villages of
+ * the selected Regency/City when District is omitted. The existing shared
+ * hierarchy stays district-first by default for every other consumer.
  */
 export function RegionSearchSelect({
   selected,
@@ -33,6 +33,7 @@ export function RegionSearchSelect({
       onCoveredVillagesChange={onCoveredVillagesChange}
       loadRegions={searchRegions}
       contextLabel="Wilayah"
+      allowCityScope
     />
   );
 }

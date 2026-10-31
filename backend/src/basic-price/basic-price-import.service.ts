@@ -2412,6 +2412,29 @@ export class BasicPriceImportService {
           batch.effectiveDateDerivationRule !==
             finalMetadata.effectiveDateDerivationRule;
 
+        // A batch's Region is provenance for every private price already
+        // materialized from its rows. Merely updating batch.regionId would not
+        // update those price rows and would create two competing scope truths.
+        // Region correction after materialization needs a dedicated governed
+        // price-reconciliation writer, not a metadata PATCH or direct UPDATE.
+        if (
+          batch.regionId !== finalRegionId ||
+          batch.regionCoverageSetId !== resolvedCoverage.regionCoverageSetId
+        ) {
+          const linkedPrice = await tx.basicPrice.findFirst({
+            where: {
+              workspaceId,
+              sourceImportRow: { batchId },
+            },
+            select: { id: true },
+          });
+          if (linkedPrice) {
+            throw new ConflictException(
+              'BATCH_REGION_SCOPE_HAS_PRICES_REQUIRES_GOVERNED_RECONCILIATION',
+            );
+          }
+        }
+
         if (linkedContextWouldChange) {
           const linked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
             SELECT price."id"

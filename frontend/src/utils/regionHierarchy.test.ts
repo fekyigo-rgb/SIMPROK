@@ -158,3 +158,42 @@ test("Village multiselect reuses its details dropdown and closes without changin
   assert.match(source, /onChange=\{\(event\) =>\s*toggleVillage/);
   assert.doesNotMatch(source, /updateBasicPriceImportBatch|Simpan Konteks Sumber/);
 });
+
+test("city-wide Basic Price can persist the actual Regency/City ID without a District", () => {
+  const cityOnly = { ...completeDistrict(), DISTRICT: null };
+  assert.equal(requiredRegionHierarchyComplete(cityOnly), false);
+  assert.equal(persistedRegionFromHierarchy(cityOnly), null);
+  assert.equal(requiredRegionHierarchyComplete(cityOnly, true), true);
+  assert.equal(persistedRegionFromHierarchy(cityOnly, true)?.id, "city");
+  const provinceOnly = { ...cityOnly, REGENCY_CITY: null };
+  assert.equal(requiredRegionHierarchyComplete(provinceOnly, true), false);
+  assert.equal(persistedRegionFromHierarchy(provinceOnly, true), null);
+});
+
+test("opt-in city-wide scope preserves more-specific District, Village and Village-coverage truth", () => {
+  assert.equal(persistedRegionFromHierarchy(completeDistrict(), true)?.id, "district");
+  assert.equal(
+    persistedRegionFromHierarchy({ ...completeDistrict(), VILLAGE: lateri }, true)?.id,
+    "village",
+  );
+  const cityOnly = { ...completeDistrict(), DISTRICT: null };
+  const narrowed = setRegionHierarchyLevel(cityOnly, "DISTRICT", baguala);
+  assert.equal(persistedRegionFromHierarchy(narrowed, true)?.id, "district");
+  assert.equal(
+    persistedRegionFromHierarchy(setRegionHierarchyLevel(narrowed, "DISTRICT", null), true)?.id,
+    "city",
+  );
+  assert.equal(persistedRegionFromVillageCoverage(baguala, [lateri])?.id, "village");
+});
+
+test("only Basic Price import opts into city-wide coverage; existing default remains intact", () => {
+  const importer = readFileSync("src/components/basic-price/RegionSearchSelect.tsx", "utf8");
+  const hierarchy = readFileSync("src/components/basic-price/RegionHierarchySelect.tsx", "utf8");
+  const intake = readFileSync("src/pages/BasicPriceImportPage.tsx", "utf8");
+  assert.match(importer, /<RegionHierarchySelect[\s\S]*?allowCityScope/);
+  assert.match(hierarchy, /allowCityScope = false/);
+  assert.match(hierarchy, /persistedRegionFromHierarchy\(nextSelection, allowCityScope\)/);
+  assert.match(hierarchy, /required=\{!\(allowCityScope && level === "DISTRICT"\)\}/);
+  assert.match(hierarchy, /Harga berlaku untuk seluruh kecamatan dan kelurahan/);
+  assert.match(intake, /updateMetadataField\('regionId', next\?\.id \?\? undefined\)/);
+});
