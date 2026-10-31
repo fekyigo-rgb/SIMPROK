@@ -7,10 +7,12 @@ const district = 'district-gambir';
 const city = 'city-jakarta-pusat';
 const province = 'province-jakarta';
 const otherDistrict = 'district-pancoran';
+const senenDistrict = 'district-senen';
 const hierarchy: Record<string, { id: string; parentId: string | null; administrativeLevel: string | null; isActive: boolean; name?: string; code?: string }> = {
   [origin]: { id: origin, parentId: district, administrativeLevel: 'VILLAGE', isActive: true },
   [district]: { id: district, parentId: city, administrativeLevel: 'DISTRICT', isActive: true, name: 'Gambir', code: '31.71.01' },
   [city]: { id: city, parentId: province, administrativeLevel: 'REGENCY_CITY', isActive: true },
+  [senenDistrict]: { id: senenDistrict, parentId: city, administrativeLevel: 'DISTRICT', isActive: true, name: 'Senen', code: '31.71.04' },
   [province]: { id: province, parentId: null, administrativeLevel: 'PROVINCE', isActive: true },
   'legacy-active': { id: 'legacy-active', parentId: null, administrativeLevel: null, isActive: true, name: 'Wilayah Legacy', code: 'L' },
 };
@@ -230,5 +232,63 @@ describe('F03B: Project canonical intent -> existing Region priority -> Cost Ker
     expect(resolution.status).toBe('NEEDS_REVIEW');
     expect(resolution.reasonCodes).toContain('MULTI_PRICE_TIE_UNRESOLVED');
     expect(rechecks).toHaveLength(0);
+  });
+});
+
+/**
+ * RAB-J74-CITY-01 — Owner-locked geographic decision, 2026-10-31:
+ * Kota Administrasi Jakarta Pusat (31.71) is the known pricing reference.
+ * Kecamatan Senen (31.71.04) is a CHILD, not a synonymous Region.
+ *
+ * These are synthetic fixture prices. No production Senen price or occurrence
+ * is changed. Explicit Project price preferences must not widen the same
+ * canonical source-of-price eligibility and Region priority law.
+ */
+describe('RAB-J74-CITY-01: City reference survives F03B project price preference', () => {
+  it.each(['LOWEST', 'MIDDLE', 'HIGHEST'] as const)(
+    '%s cannot borrow a Senen price when the only authorized reference is Jakarta Pusat city',
+    async (mode) => {
+      const { resolution, proofs, rechecks } = await run(
+        [price('senen-private-fixture', senenDistrict, '1.00')],
+        city, mode,
+      );
+      expect(resolution.status).toBe('UNRESOLVED');
+      expect(resolution.reasonCodes).toContain('NO_BASIC_PRICE_CANDIDATE');
+      expect(resolution.selectedBasicPriceId).toBeNull();
+      expect(resolution.adaptedPriceValue).toBeNull();
+      expect(rechecks).toEqual([]);
+      const eligibleRegionQuery = JSON.stringify(proofs[0]?.where);
+      expect(eligibleRegionQuery).toContain(city);
+      expect(eligibleRegionQuery).toContain(province);
+      expect(eligibleRegionQuery).not.toContain(senenDistrict);
+    },
+  );
+
+  it.each(['LOWEST', 'MIDDLE', 'HIGHEST'] as const)(
+    '%s must choose a lawful province ancestor, never a cheaper Senen descendant',
+    async (mode) => {
+      const { resolution, rechecks } = await run([
+        price('senen-cheaper-fixture', senenDistrict, '1.00'),
+        price('province-lawful-fixture', province, '160.00'),
+      ], city, mode);
+      expect(resolution.status).toBe('RESOLVED');
+      expect(resolution.selectedBasicPriceId).toBe('province-lawful-fixture');
+      expect(resolution.sourcePriceValue).toBe('160');
+      expect(resolution.reasonCodes).toContain('SINGLE_ELIGIBLE_BASIC_PRICE');
+      expect(resolution.reasonCodes.some((code: string) =>
+        code.startsWith('PROJECT_PRICE_PREFERENCE_'))).toBe(false);
+      expect(rechecks).toEqual(['province-lawful-fixture']);
+    },
+  );
+
+  it('may use Senen only when Senen itself is an explicit, proven Region reference', async () => {
+    const { resolution, rechecks } = await run([
+      price('senen-fixture', senenDistrict, '90.00'),
+      price('province-fixture', province, '160.00'),
+    ], senenDistrict, 'LOWEST');
+    expect(resolution.status).toBe('RESOLVED');
+    expect(resolution.selectedBasicPriceId).toBe('senen-fixture');
+    expect(resolution.explanation).toContain('Senen (31.71.04)');
+    expect(rechecks).toEqual(['senen-fixture']);
   });
 });
