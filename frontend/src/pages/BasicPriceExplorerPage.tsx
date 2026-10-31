@@ -873,7 +873,7 @@ export function BasicPriceExplorerPage() {
               <li key={item.id}>
                 <button type="button" className="bp-item-summary__button"
                   aria-pressed={state.selectedItemId === item.id}
-                  aria-label={`Buka ${item.priceCount} catatan harga ${item.name}`}
+                  aria-label={`Buka ${item.priceCount} catatan harga ${item.name}${item.duplicateName ? `, kode ${item.code ?? item.id.slice(0, 8)}` : ''}`}
                   onClick={() => chooseItemGroup(item.id)}>
                   <span className="bp-item-summary__identity">
                     <strong>{item.name}</strong>
