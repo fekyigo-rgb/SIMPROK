@@ -155,6 +155,16 @@ export class GetBasicPricesDto {
   @Max(50)
   limit?: number = 20;
 
+  /** Opt-in only: group the entire eligible set BEFORE city-level pagination. */
+  @IsOptional()
+  @IsIn(['true'])
+  regionBrowse?: 'true';
+
+  /** An explicit canonical group key, or first available group. */
+  @IsOptional()
+  @Matches(/^(?:first|general|unverified|(?:city|province):[0-9a-fA-F-]{36})$/)
+  regionGroup?: string;
+
   @IsOptional()
   @IsIn(['asc', 'desc'])
   sortOrder?: 'asc' | 'desc' = 'desc';

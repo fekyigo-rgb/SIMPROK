@@ -52,6 +52,12 @@ import {
   type ProvenHistoryRow,
 } from './basic-price-proven-history';
 import { toDecimalString2 } from '../common/money';
+import {
+  buildRegionFirstIndex,
+  regionFirstGroupKeys,
+  regionFirstGroupRegionIds,
+  type RegionFirstIndex,
+} from './basic-price-region-first-index';
 
 const EXPLORER_ROW_SELECT = {
   id: true,
@@ -1016,6 +1022,8 @@ export class BasicPriceService {
   ): Promise<{
     data: BasicPriceExplorerItem[];
     meta: { total: number; page: number; limit: number; totalPages: number };
+    regionIndex?: RegionFirstIndex;
+    selectedRegionGroup?: string | null;
   }> {
     const {
       search,
@@ -1039,7 +1047,12 @@ export class BasicPriceService {
       limit = 20,
       sortBy = 'effectiveDate',
       sortOrder = 'desc',
+      regionBrowse,
+      regionGroup,
     } = query;
+    if (regionGroup && regionBrowse !== 'true') {
+      throw new BadRequestException('BP_REGION_GROUP_REQUIRES_REGION_BROWSE');
+    }
 
     // Defensive enforcement (independent of ValidationPipe): the public API must not
     // accept internal-curation verification statuses as a way to open data.
@@ -1254,6 +1267,57 @@ export class BasicPriceService {
       where.freshnessStatus = freshnessStatus;
     }
 
+    // BP-REGION-FIRST: opt-in, reuse EXACT existing eligibility/precedence/
+    // asOf/source predicate above. One SQL GROUP BY over eligible Region IDs,
+    // then one batched canonical Region lookup. No loading every price row,
+    // Region name inference, new engine, or writes to canonical records.
+    let regionIndex: RegionFirstIndex | undefined;
+    let selectedRegionGroup: string | null | undefined;
+    if (regionBrowse === 'true') {
+      const regionIndexWhere: Prisma.BasicPriceWhereInput = {
+        ...where,
+        AND: [...(where.AND as Prisma.BasicPriceWhereInput[])],
+      };
+      const regionCounts = await this.prisma.basicPrice.groupBy({
+        by: ['regionId'],
+        where: regionIndexWhere,
+        _count: { _all: true },
+      });
+      const pricedRegionIds = regionCounts
+        .map((entry) => entry.regionId)
+        .filter((id): id is string => id !== null);
+      const regionNodes = pricedRegionIds.length
+        ? await this.prisma.region.findMany({
+            where: { id: { in: pricedRegionIds } },
+            select: EXPLORER_ROW_SELECT.region.select,
+          })
+        : [];
+      regionIndex = buildRegionFirstIndex(
+        regionCounts.map((entry) => ({
+          regionId: entry.regionId,
+          count: entry._count._all,
+        })),
+        regionNodes,
+      );
+      const availableGroups = regionFirstGroupKeys(regionIndex);
+      selectedRegionGroup = regionGroup === undefined || regionGroup === 'first'
+        ? (availableGroups[0] ?? null)
+        : regionGroup;
+      if (selectedRegionGroup !== null) {
+        const scopeIds = regionFirstGroupRegionIds(regionIndex, selectedRegionGroup);
+        if (scopeIds === undefined) {
+          throw new BadRequestException('BP_REGION_GROUP_NOT_AVAILABLE');
+        }
+        // A browsing GROUP, not a new meaning of price applicability.
+        // An explicit regionId filter remains composed via existing AND.
+        (where.AND as Prisma.BasicPriceWhereInput[]).push(
+          scopeIds === null ? { regionId: null } : { regionId: { in: scopeIds } },
+        );
+      } else {
+        (where.AND as Prisma.BasicPriceWhereInput[]).push({ id: { in: [] } });
+      }
+    }
+
     // BP-EXPLORER-SORT50: server orders the full eligible set BEFORE
     // pagination. Keep original canonical value and resource identity.
     const sortHead: Prisma.BasicPriceOrderByWithRelationInput =
@@ -1346,6 +1410,7 @@ export class BasicPriceService {
         limit,
         totalPages: Math.ceil(total / limit),
       },
+      ...(regionIndex ? { regionIndex, selectedRegionGroup } : {}),
     };
   }
 

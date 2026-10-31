@@ -9,6 +9,7 @@ import {
   type BasicPriceExplorerItem,
   type ExplorerFilters,
   type ExplorerPageMeta,
+  type BasicPriceRegionIndex,
   type RegionLookupItem,
 } from '../api/basicPriceExplorer';
 import { ExplorerRegionFilterSelect } from '../components/basic-price/ExplorerRegionFilterSelect';
@@ -104,6 +105,8 @@ type ListState =
       kind: 'ready';
       items: BasicPriceExplorerItem[];
       meta: ExplorerPageMeta;
+      regionIndex?: BasicPriceRegionIndex;
+      selectedRegionGroup?: string | null;
       /**
        * BP-UX-FINAL-01D GAP-D — THE TEMPORAL CONTEXT THESE EXACT ROWS WERE
        * SELECTED FOR, carried WITH them rather than re-read from the draft.
@@ -196,6 +199,8 @@ export function BasicPriceExplorerPage() {
   // Collection is table-scoped, as is sorting. Empty = unchanged combined list.
   const [collection, setCollection] = useState<'' | 'WORKSPACE_PRIVATE' | 'SIMPROK_CATALOG'>('');
   const [page, setPage] = useState(1);
+  /** The first region group is server-selected from the canonical eligible set. */
+  const [regionGroup, setRegionGroup] = useState('first');
   const [reloadNonce, setReloadNonce] = useState(0);
   const [state, setState] = useState<ListState>({ kind: 'loading' });
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
@@ -259,6 +264,8 @@ export function BasicPriceExplorerPage() {
         collection: collection || undefined,
         page,
         limit: 50,
+        regionBrowse: 'true',
+        regionGroup,
         sortBy,
         sortOrder: sortDirection,
       };
@@ -284,6 +291,8 @@ export function BasicPriceExplorerPage() {
             items: result.data,
             meta: result.meta,
             temporal,
+            regionIndex: result.regionIndex,
+            selectedRegionGroup: result.selectedRegionGroup,
           });
         } catch (error) {
           if (!requestGate.current.isLatest(sequence)) return;
@@ -305,7 +314,7 @@ export function BasicPriceExplorerPage() {
     // eleven fields plus a client-side validity check, so the dependency list
     // could not be stated honestly and the rule was silenced. Four values now
     // decide this request, all four are listed, and the linter agrees.
-  }, [draft, collection, sortOrder, page, reloadNonce]);
+  }, [draft, collection, sortOrder, page, reloadNonce, regionGroup]);
 
   const filtersActive = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(EMPTY_DRAFT) || collection !== '',
@@ -317,6 +326,7 @@ export function BasicPriceExplorerPage() {
     replaceSelectedIds(new Set());
     setSelectionNotice(null);
     setPage(1);
+    setRegionGroup('first');
     // A detail panel describes ONE row. When the list beneath it changes, the
     // row it describes may no longer be there, so the panel closes rather than
     // lingering over a table that no longer contains its subject.
@@ -327,6 +337,7 @@ export function BasicPriceExplorerPage() {
   const resetFilters = () => {
     setDraft(EMPTY_DRAFT);
     setCollection('');
+    setRegionGroup('first');
     setSortOrder('resourceName:asc');
     replaceSelectedIds(new Set());
     setSelectionNotice(null);
@@ -354,6 +365,14 @@ export function BasicPriceExplorerPage() {
     setDetailNotice(null);
   };
 
+  const chooseRegionGroup = (key: string) => {
+    setRegionGroup(key);
+    replaceSelectedIds(new Set());
+    setSelectionNotice(null);
+    setPage(1);
+    setOpenDetailId(null);
+    setDetailNotice(null);
+  };
   const openDetailItem =
     state.kind === 'ready' && openDetailId
       ? (state.items.find((item) => item.basicPriceId === openDetailId) ?? null)
@@ -763,6 +782,51 @@ export function BasicPriceExplorerPage() {
         </p>
       ) : null}
 
+      {state.kind === 'ready' && state.regionIndex ? (
+        <nav className="bp-region-first" aria-label="Jelajah harga berdasarkan provinsi dan kota">
+          <div className="bp-region-first__heading">
+            <strong>Jelajahi wilayah</strong>
+            <span>{state.regionIndex.total} harga di seluruh wilayah</span>
+          </div>
+          {state.regionIndex.provinces.map((province) => (
+            <details className="bp-region-first__province" key={province.id}>
+              <summary>{province.name} <span>{province.priceCount} harga</span></summary>
+              <div className="bp-region-first__cities">
+                {province.provinceOnly.count > 0 ? (
+                  <button type="button" className="bp-region-first__city"
+                    aria-pressed={state.selectedRegionGroup === province.provinceOnly.key}
+                    onClick={() => chooseRegionGroup(province.provinceOnly.key)}>
+                    Berlaku seluruh provinsi <span>{province.provinceOnly.count}</span>
+                  </button>
+                ) : null}
+                {province.cities.map((city) => (
+                  <button type="button" key={city.key} className="bp-region-first__city"
+                    aria-pressed={state.selectedRegionGroup === city.key}
+                    onClick={() => chooseRegionGroup(city.key)}>
+                    {city.name} <span>{city.priceCount}</span>
+                  </button>
+                ))}
+              </div>
+            </details>
+          ))}
+          {state.regionIndex.unverified.count > 0 ? (
+            <button type="button" className="bp-region-first__uncertain"
+              aria-pressed={state.selectedRegionGroup === 'unverified'}
+              title="Hierarki wilayah harga historis belum terverifikasi"
+              onClick={() => chooseRegionGroup('unverified')}>
+              Wilayah belum terverifikasi <span>{state.regionIndex.unverified.count} harga</span>
+            </button>
+          ) : null}
+          {state.regionIndex.general.count > 0 ? (
+            <button type="button" className="bp-region-first__uncertain"
+              aria-pressed={state.selectedRegionGroup === 'general'}
+              onClick={() => chooseRegionGroup('general')}>
+              Umum (tanpa wilayah) <span>{state.regionIndex.general.count} harga</span>
+            </button>
+          ) : null}
+        </nav>
+      ) : null}
+
       <div className="bp-tablebar">
         <span aria-live="polite">
           {state.kind === 'ready'
@@ -789,6 +853,7 @@ export function BasicPriceExplorerPage() {
                 replaceSelectedIds(new Set());
                 setSelectionNotice(null);
                 setPage(1);
+                setRegionGroup('first');
                 setOpenDetailId(null);
                 setDetailNotice(null);
               }}
