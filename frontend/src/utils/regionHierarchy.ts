@@ -46,16 +46,20 @@ export const setRegionHierarchyLevel = (
 
 export const requiredRegionHierarchyComplete = (
   selection: RegionHierarchySelection,
+  allowCityScope = false,
 ): boolean =>
   selection.COUNTRY !== null &&
   selection.PROVINCE !== null &&
   selection.REGENCY_CITY !== null &&
-  selection.DISTRICT !== null;
+  (allowCityScope || selection.DISTRICT !== null);
 
 /** One persisted regionId: the deepest lawful context, never five ids. */
 export const persistedRegionFromHierarchy = (
   selection: RegionHierarchySelection,
-): RegionLookupItem | null => selection.VILLAGE ?? selection.DISTRICT ?? null;
+  allowCityScope = false,
+): RegionLookupItem | null =>
+  selection.VILLAGE ?? selection.DISTRICT ??
+  (allowCityScope ? selection.REGENCY_CITY : null);
 
 /**
  * Scalar anchor law for the optional Village checklist: none/many persist the

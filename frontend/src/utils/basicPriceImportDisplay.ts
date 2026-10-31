@@ -1653,6 +1653,8 @@ export const metadataSaveFailureMessage = (
     return 'Data baris ini telah berubah. Muat data terbaru sebelum melanjutkan. Tidak ada yang tersimpan.';
   if (code === 'BATCH_NOT_MUTABLE')
     return 'Batch ini sudah ditutup, jadi keterangannya tidak bisa diubah lagi. Tidak ada yang tersimpan.';
+  if (httpStatus === 409 && code === 'BATCH_REGION_SCOPE_HAS_PRICES_REQUIRES_GOVERNED_RECONCILIATION')
+    return 'Harga dari berkas ini sudah tersimpan dengan wilayah sebelumnya. Wilayah tidak dapat diubah melalui keterangan impor. Diperlukan koreksi cakupan harga yang menjaga riwayat sumber. Harga lama tetap aman. Tidak ada yang tersimpan.';
   if (httpStatus === 401)
     return 'Sesi Anda sudah berakhir. Masuk kembali lalu simpan lagi. Tidak ada yang tersimpan.';
   if (httpStatus === 403)

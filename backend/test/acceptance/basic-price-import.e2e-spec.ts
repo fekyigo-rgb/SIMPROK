@@ -468,6 +468,98 @@ describe('RM02B Basic Price import (e2e)', () => {
     });
   });
 
+    it('PR253: authenticated City 31.71 save, PostgreSQL readback and immutable imported-price scope', async () => {
+      // Genuine isolated E2E database and authenticated app routes; not the
+      // production database and not a mock of the metadata writer.
+      const createdRegions: string[] = [];
+      const ensureRegion = async (code: string, name: string, administrativeLevel: 'REGENCY_CITY' | 'DISTRICT', parentId?: string) => {
+        const existing = await prisma.region.findUnique({ where: { code } });
+        if (existing) return existing;
+        const region = await prisma.region.create({
+          data: { code, name, administrativeLevel, isActive: true, ...(parentId ? { parentId } : {}) },
+        });
+        createdRegions.push(region.id);
+        return region;
+      };
+      let priceId: string | null = null;
+      let cityBatchId: string | null = null;
+      let districtBatchId: string | null = null;
+      try {
+        const city = await ensureRegion('31.71', 'Kota Administrasi Jakarta Pusat', 'REGENCY_CITY');
+        const district = await ensureRegion('31.71.04', 'Kecamatan Senen', 'DISTRICT', city.id);
+        const fixture = await buildBasicPriceXlsx();
+        const cityPreview = await previewFile(fixture, 'pr253-city-region-save').expect(201);
+        cityBatchId = cityPreview.body.batchId as string;
+        const citySave = await request(app.getHttpServer())
+          .patch(`/basic-price-imports/${cityBatchId}`)
+          .set('Authorization', `Bearer ${assignedToken}`)
+          .set('x-workspace-id', WORKSPACE_A)
+          .send({ version: cityPreview.body.version ?? 0, regionId: city.id })
+          .expect(200);
+        expect(citySave.body.regionId).toBe(city.id);
+        expect(citySave.body.region.code).toBe('31.71');
+        // regionCoverageSetId is internal database context, deliberately not a
+        // public API field. Prove it from persisted PostgreSQL below.
+        const actualCityBatch = await prisma.basicPriceImportBatch.findUniqueOrThrow({
+          where: { id: cityBatchId },
+        });
+        expect(actualCityBatch.regionId).toBe(city.id);
+        expect(actualCityBatch.regionCoverageSetId).toBeNull();
+        const cityReadback = await getBatch(cityBatchId).expect(200);
+        expect(cityReadback.body.regionId).toBe(city.id);
+        expect(cityReadback.body.region.code).toBe('31.71');
+
+        const senenPreview = await previewFile(fixture, 'pr253-senen-historical-guard').expect(201);
+        districtBatchId = senenPreview.body.batchId as string;
+        const districtSave = await request(app.getHttpServer())
+          .patch(`/basic-price-imports/${districtBatchId}`)
+          .set('Authorization', `Bearer ${assignedToken}`)
+          .set('x-workspace-id', WORKSPACE_A)
+          .send({ version: senenPreview.body.version ?? 0, regionId: district.id })
+          .expect(200);
+        const row = await prisma.basicPriceImportRow.findFirstOrThrow({
+          where: { batchId: districtBatchId },
+        });
+        const sourceBatch = await prisma.basicPriceImportBatch.findUniqueOrThrow({
+          where: { id: districtBatchId },
+        });
+        const price = await prisma.basicPrice.create({
+          data: {
+            assetScope: 'WORKSPACE_PRIVATE', workspaceId: WORKSPACE_A,
+            organizationId: sourceBatch.organizationId,
+            sourceImportRowId: row.id,
+            resourceId: RESOURCE_LABOR_ID, regionId: district.id,
+            effectiveDate: new Date('2026-10-29T00:00:00.000Z'),
+            value: '32806.00', sourceType: 'VENDOR_QUOTE',
+            sourceOrigin: 'STORE', reportedByAccountId: sourceBatch.uploadedByAccountId,
+          },
+        });
+        priceId = price.id;
+        const denied = await request(app.getHttpServer())
+          .patch(`/basic-price-imports/${districtBatchId}`)
+          .set('Authorization', `Bearer ${assignedToken}`)
+          .set('x-workspace-id', WORKSPACE_A)
+          .send({ version: districtSave.body.version, regionId: city.id })
+          .expect(409);
+        expect(denied.body.message).toBe(
+          'BATCH_REGION_SCOPE_HAS_PRICES_REQUIRES_GOVERNED_RECONCILIATION',
+        );
+        expect((await prisma.basicPrice.findUniqueOrThrow({where:{id:price.id}})).regionId).toBe(district.id);
+        expect((await prisma.basicPriceImportBatch.findUniqueOrThrow({
+          where:{id:districtBatchId},
+        })).regionId).toBe(district.id);
+        const districtReadback = await getBatch(districtBatchId).expect(200);
+        expect(districtReadback.body.region.code).toBe('31.71.04');
+      } finally {
+        if (priceId) await prisma.basicPrice.delete({ where: { id: priceId } });
+        if (districtBatchId) await prisma.basicPriceImportBatch.deleteMany({where:{id:districtBatchId}});
+        if (cityBatchId) await prisma.basicPriceImportBatch.deleteMany({where:{id:cityBatchId}});
+        for (const regionId of createdRegions.reverse()) {
+          await prisma.region.delete({ where: { id: regionId } });
+        }
+      }
+    });
+
   describe('fingerprint replay', () => {
     it('an identical file + identical metadata returns the same batch, never duplicate rows (I01/I02)', async () => {
       const buffer = await buildBasicPriceXlsx();

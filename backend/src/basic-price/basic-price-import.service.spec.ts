@@ -1196,6 +1196,89 @@ describe('BasicPriceImportService', () => {
       expect(tx.basicPriceImportBatch.update).toHaveBeenCalled();
     });
 
+
+
+    it('stores one canonical City region for a new unmaterialized import without copying villages', async () => {
+      const freshBatch = {
+        ...storedBatch,
+        organizationId: ORGANIZATION_ID,
+        importFingerprint: 'PREVIEW-IDENTITY',
+        sourceSha256: 'A'.repeat(64),
+        selectedSheetName: 'Sheet1',
+        parserContractVersion: 'BP_TEST_V1',
+        priceCoverageDeclared: false,
+        transportIncluded: null,
+        loadingIncluded: null,
+        unloadingIncluded: null,
+        deliveredToProject: null,
+        sourceRegionScopeLabel: null,
+        sourceRegionScopeGeographicEvidence: null,
+        regionScopeConfirmedRegionId: null,
+        ingestionChannel: 'USER_UPLOAD',
+        ingestionConnectorId: null,
+        ingestionExternalSourceId: null,
+        ingestionExternalRecordId: null,
+        ingestionExternalVersion: null,
+        interpretationResourceNameColumn: null,
+        interpretationSourceUnitColumn: null,
+        interpretationDeclaredSection: null,
+        interpretationKdnColumn: null,
+      };
+      tx.$queryRaw
+        .mockResolvedValueOnce([freshBatch])
+        .mockResolvedValueOnce([]);
+      tx.basicPriceImportBatch.update.mockResolvedValue({
+        ...freshBatch,
+        version: 1,
+        regionId: 'city-jakarta-pusat',
+        regionCoverageSetId: null,
+        region: {
+          id: 'city-jakarta-pusat',
+          code: '31.71',
+          name: 'Kota Administrasi Jakarta Pusat',
+        },
+        regionCoverageSet: null,
+      });
+
+      const result = await service.updateBatchMetadata(
+        WORKSPACE_ID, 'batch-01',
+        { version: 0, regionId: 'city-jakarta-pusat' },
+        ACCOUNT_ID, ['version', 'regionId'],
+      );
+      expect(tx.basicPriceImportBatch.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            regionId: 'city-jakarta-pusat',
+            importFingerprint: expect.any(String),
+          }),
+        }),
+      );
+      expect(tx.basicPriceRegionCoverageMember.createMany).not.toHaveBeenCalled();
+      expect(result).toMatchObject({
+        region: { code: '31.71', name: 'Kota Administrasi Jakarta Pusat' },
+      });
+    });
+
+    it('keeps old region provenance immutable when prices have already been materialized', async () => {
+      tx.$queryRaw
+        .mockResolvedValueOnce([{
+          ...storedBatch,
+          regionId: 'district-senen',
+          regionCoverageSetId: null,
+        }])
+        .mockResolvedValueOnce([{ id: 'one-of-58-existing-private-prices' }]);
+
+      await expect(service.updateBatchMetadata(
+        WORKSPACE_ID, 'batch-01',
+        { version: 0, regionId: 'city-jakarta-pusat' },
+        ACCOUNT_ID, ['version', 'regionId'],
+      )).rejects.toThrow(
+        'BATCH_REGION_SCOPE_HAS_PRICES_REQUIRES_GOVERNED_RECONCILIATION',
+      );
+      expect(tx.$queryRaw).toHaveBeenCalledTimes(2);
+      expect(tx.basicPriceImportBatch.update).not.toHaveBeenCalled();
+    });
+
     it('refuses publisher drift when any price from the batch is correction-linked', async () => {
       tx.$queryRaw
         .mockResolvedValueOnce([

@@ -35,6 +35,8 @@ interface RegionHierarchySelectProps {
     signal?: AbortSignal,
   ) => Promise<RegionLookupItem[]>;
   contextLabel: string;
+  /** Opt-in: the source price applies across an entire regency/city. */
+  allowCityScope?: boolean;
 }
 
 const LABELS: Record<RegionHierarchyLevel, string> = {
@@ -87,6 +89,7 @@ export function RegionHierarchySelect({
   onCoveredVillagesChange,
   loadRegions,
   contextLabel,
+  allowCityScope = false,
 }: RegionHierarchySelectProps) {
   const [selection, setSelection] =
     useState<RegionHierarchySelection>(emptyRegionHierarchy);
@@ -287,7 +290,7 @@ export function RegionHierarchySelect({
     );
     setIsVillageOpen(false);
 
-    const persisted = persistedRegionFromHierarchy(nextSelection);
+    const persisted = persistedRegionFromHierarchy(nextSelection, allowCityScope);
     lastEmittedId.current = persisted?.id ?? null;
     if (level !== "VILLAGE") onCoveredVillagesChange?.([]);
     onSelect(persisted);
@@ -335,6 +338,12 @@ export function RegionHierarchySelect({
   return (
     <fieldset className="bp-region-hierarchy" aria-label={contextLabel}>
       <legend className="bp-region-hierarchy__legend">{contextLabel}</legend>
+      {allowCityScope && selection.REGENCY_CITY && !selection.DISTRICT ? (
+        <p className="bp-field__help" role="status">
+          Harga berlaku untuk seluruh kecamatan dan kelurahan di {selection.REGENCY_CITY.name}.
+          Pilih Kecamatan hanya bila sumber harga membatasi cakupannya.
+        </p>
+      ) : null}
       {REGION_HIERARCHY_LEVELS.map((level, index) => {
         const parentLevel = REGION_HIERARCHY_LEVELS[index - 1];
         const parentReady = index === 0 || selection[parentLevel] !== null;
@@ -469,7 +478,7 @@ export function RegionHierarchySelect({
         return (
           <div className="bp-field" key={level}>
             <label className="bp-field__label" htmlFor={`${rootId}-${level}`}>
-              {LABELS[level]}
+              {LABELS[level]}{allowCityScope && level === "DISTRICT" ? " (opsional)" : ""}
             </label>
             <select
               ref={(node) => {
@@ -480,7 +489,7 @@ export function RegionHierarchySelect({
               data-region-level={level}
               value={selection[level]?.id ?? ""}
               disabled={disabled || !parentReady || states[level] === "loading"}
-              required
+              required={!(allowCityScope && level === "DISTRICT")}
               onChange={(event) => choose(level, event.target.value)}
               onFocus={() => void recover(level)}
             >

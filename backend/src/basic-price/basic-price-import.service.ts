@@ -2412,6 +2412,15 @@ export class BasicPriceImportService {
           batch.effectiveDateDerivationRule !==
             finalMetadata.effectiveDateDerivationRule;
 
+        // Reuse the SAME bounded correction-link query below. Its former
+        // predicate admits only a price already in an immutable correction
+        // chain; a Region move must also refuse when ANY price already exists.
+        // Never read BasicPrice through a second import-domain model port,
+        // rewrite an issued price or loosen the existing intake harness.
+        const geographicScopeChanged =
+          batch.regionId !== finalRegionId ||
+          batch.regionCoverageSetId !== resolvedCoverage.regionCoverageSetId;
+
         if (linkedContextWouldChange) {
           const linked = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
             SELECT price."id"
@@ -2422,7 +2431,8 @@ export class BasicPriceImportService {
               AND price."workspaceId" = ${workspaceId}::uuid
               AND price."assetScope" = 'WORKSPACE_PRIVATE'
               AND (
-                price."supersedesBasicPriceId" IS NOT NULL
+                ${geographicScopeChanged}::boolean
+                OR price."supersedesBasicPriceId" IS NOT NULL
                 OR EXISTS (
                   SELECT 1 FROM "basic_prices" successor
                   WHERE successor."supersedesBasicPriceId" = price."id"
@@ -2431,7 +2441,11 @@ export class BasicPriceImportService {
             LIMIT 1
           `);
           if (linked.length > 0) {
-            throw new ConflictException('CORRECTION_LINK_CONTEXT_IMMUTABLE');
+            throw new ConflictException(
+              geographicScopeChanged
+                ? 'BATCH_REGION_SCOPE_HAS_PRICES_REQUIRES_GOVERNED_RECONCILIATION'
+                : 'CORRECTION_LINK_CONTEXT_IMMUTABLE',
+            );
           }
         }
 
