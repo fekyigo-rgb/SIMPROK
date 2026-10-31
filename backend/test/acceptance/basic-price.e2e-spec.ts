@@ -982,7 +982,7 @@ describe('Basic Price Public Eligibility (e2e)', () => {
       expect(first.body.meta.totalPages).toBe(2);
       expect(first.body.data).toHaveLength(2);
       expect(first.body.data.every((x: { resource: { id: string } }) => x.resource.id === selected)).toBe(true);
-      const secondPage = await listAsA(common + '&itemGroup=' + selected + '&page=2&limit=2').expect(200);
+      const secondPage = await listAsA(common + '&itemGroup=' + selected + '&sortBy=resourceName&sortOrder=asc&page=2&limit=2').expect(200);
       expect(secondPage.body.meta.total).toBe(3);
       expect(secondPage.body.data).toHaveLength(1);
       const rawIds = [...first.body.data, ...secondPage.body.data]
