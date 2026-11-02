@@ -20,7 +20,7 @@ describe('BP-REGION-FIRST server index: reuse canonical eligibility and page onl
     basicPrice:{
       groupBy:jest.fn(),count:jest.fn(),findMany:jest.fn(),
     },
-    region:{findMany:jest.fn()},
+    region:{findMany:jest.fn(),findUnique:jest.fn()},
   };
   const svc=new BasicPriceService(db as never,new BasicPriceEligibilityPolicy());
   beforeEach(()=>{
@@ -33,6 +33,7 @@ describe('BP-REGION-FIRST server index: reuse canonical eligibility and page onl
       {regionId:legacy,_count:{_all:1}},
     ]);
     db.region.findMany.mockResolvedValue([district,cityB,unsupported]);
+    db.region.findUnique.mockResolvedValue(null);
   });
   test('opt-in first group picks alphabetical city from full eligible grouping',async()=>{
     const out=await svc.findAllForWorkspace('50000000-0000-4000-8000-000000000001',{
@@ -71,6 +72,22 @@ describe('BP-REGION-FIRST server index: reuse canonical eligibility and page onl
       regionBrowse:'true',regionGroup:'city:99999999-9999-4999-8999-999999999999',
     })).rejects.toThrow(BadRequestException);
     expect(db.basicPrice.findMany).not.toHaveBeenCalled();
+    expect(db.region.findUnique).toHaveBeenCalledWith({
+      where:{id:'99999999-9999-4999-8999-999999999999'},
+      select:{isActive:true,administrativeLevel:true},
+    });
+  });
+  test('a real empty province is 200 with zero prices, never a fake geographical claim',async()=>{
+    db.basicPrice.groupBy.mockResolvedValue([]);
+    db.region.findMany.mockResolvedValue([]);
+    db.region.findUnique.mockResolvedValue({isActive:true,administrativeLevel:'PROVINCE'});
+    db.basicPrice.count.mockResolvedValue(0);
+    const out=await svc.findAllForWorkspace('50000000-0000-4000-8000-000000000001',{
+      regionBrowse:'true',regionGroup:'province-all:'+p,
+    });
+    expect(out.meta.total).toBe(0);
+    expect(out.data).toEqual([]);
+    expect(db.basicPrice.findMany.mock.calls[0][0].where.AND).toContainEqual({id:{in:[]}});
   });
   test('legacy list behavior unchanged when opt-in is absent',async()=>{
     await svc.findAllForWorkspace('50000000-0000-4000-8000-000000000001',{
