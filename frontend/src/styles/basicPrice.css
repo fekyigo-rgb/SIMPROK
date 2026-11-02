@@ -2413,3 +2413,22 @@ tr.bp-detail-anchor > td {
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* One Wilayah control: legible hierarchy context from canonical parentName. */
+.bp-room .bp-region-option__name,
+.bp-room .bp-region-option__context {
+  display: block;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+}
+.bp-room .bp-region-option__context {
+  margin-top: 2px;
+  font-size: var(--text-xs);
+  color: var(--simprok-engineering-blue-700);
+}
+.bp-room .bp-region-option__hint {
+  margin: 2px 6px 6px;
+  font-size: var(--text-xs);
+  line-height: 1.4;
+  color: var(--simprok-engineering-blue-700);
+}
