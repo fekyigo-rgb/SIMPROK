@@ -27,6 +27,11 @@ export interface BasicPriceItemIndex {
   totalPages?: number;
   items: BasicPriceItemSummary[];
 }
+// Cache Collator objects: localeCompare(..., options) per sort comparison
+// adds needless work as the canonical resource catalogue grows.
+const ITEM_NAME_COLLATOR = new Intl.Collator('id', { sensitivity: 'base' });
+const ITEM_CODE_COLLATOR = new Intl.Collator('id');
+
 export const buildBasicPriceItemIndex = (
   counts: readonly BasicPriceItemCount[],
   resources: readonly BasicPriceItemIdentity[],
@@ -47,8 +52,8 @@ export const buildBasicPriceItemIndex = (
     items.push({ ...resource, priceCount: count.count });
   }
   items.sort((a, b) =>
-    a.name.localeCompare(b.name, 'id', { sensitivity: 'base' }) ||
-    (a.code ?? '').localeCompare(b.code ?? '', 'id') ||
+    ITEM_NAME_COLLATOR.compare(a.name, b.name) ||
+    ITEM_CODE_COLLATOR.compare(a.code ?? '', b.code ?? '') ||
     a.id.localeCompare(b.id),
   );
   const nameCounts = new Map<string, number>();
