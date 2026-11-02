@@ -307,10 +307,16 @@ export function ProjectIntakeLocationFields({
         const selected = new Set(intakePicksAt(selection, level).map((pick) => pick.id));
         return (
           <div className="simprok-rab-field simprok-rab-region-multi" key={level}>
-            <span id={`intake-region-${level}`}>{PROJECT_REGION_LABELS[level]}</span>
+            <span id={`intake-region-${level}`}>{PROJECT_REGION_LABELS[level]}{level === 'VILLAGE' ? ' (opsional)' : ''}</span>
             <p className="simprok-rab-region-multi__scope">
               {scope.length > 0 ? `Cakupan: ${scope.join(' · ')}` : 'Pilih induk wilayah terlebih dahulu.'}
             </p>
+            {level === 'DISTRICT' && selected.size > 0 ? (
+              <small role="status">Anda boleh selesai di Kecamatan; Desa/Kelurahan tidak wajib dipilih.</small>
+            ) : null}
+            {level === 'VILLAGE' ? (
+              <small>Opsional. Lewati jika lokasi proyek cukup ditetapkan sampai Kecamatan. Pilihan kelurahan hanya untuk lokasi yang lebih spesifik.</small>
+            ) : null}
             <div role="group" aria-labelledby={`intake-region-${level}`} className="simprok-rab-region-multi__list">
               {options[level].length === 0 ? (
                 <small>
@@ -353,7 +359,7 @@ export function ProjectIntakeLocationFields({
                 onClick={() => setSelection((current) => clearIntakeLevel(current, level))}
                 disabled={selected.size === 0}
               >
-                Bersihkan
+                {level === 'VILLAGE' ? 'Hapus pilihan Kelurahan — tetap di Kecamatan' : 'Bersihkan'}
               </button>
             </div>
           </div>

@@ -767,3 +767,42 @@ test('Backflow preserves no-address and fails closed on unparseable descriptive 
   });
   assert.equal(readDraftPreparationFields(noAddress.replace('Pemilik / Instansi: Simprok','Pemilik Instansi: Simprok')),null);
 });
+
+
+test('Persiapan RAB may stop at Kecamatan and clear only deeper villages', () => {
+  let selected = setIntakeCountry(emptyIntakeRegionSelection(), {
+    id: REGION.indonesia,
+    name: 'Indonesia',
+  });
+  selected = toggleIntakeRegion(selected, pick(REGION.maluku, 'Maluku', REGION.indonesia, 'PROVINCE'));
+  selected = toggleIntakeRegion(selected, pick(REGION.ambon, 'Kota Ambon', REGION.maluku, 'REGENCY_CITY'));
+  selected = toggleIntakeRegion(selected, pick(REGION.sirimau, 'Sirimau', REGION.ambon, 'DISTRICT'));
+  // User can save the district alone, without picking every Kelurahan.
+  assert.deepEqual(intakeLocationRegionIds(selected), [REGION.sirimau]);
+  assert.deepEqual(intakeLocationSummary(selected).map((row) => row.label), [
+    'Indonesia · Maluku · Kota Ambon · Sirimau',
+  ]);
+  selected = toggleIntakeRegion(selected, pick(REGION.desaA, 'Desa A', REGION.sirimau, 'VILLAGE'));
+  assert.deepEqual(intakeLocationRegionIds(selected), [REGION.desaA]);
+  const restoredDistrict = clearIntakeLevel(selected, 'VILLAGE');
+  assert.deepEqual(intakeLocationRegionIds(restoredDistrict), [REGION.sirimau]);
+  assert.equal(restoredDistrict.picks.filter((row) => row.level === 'VILLAGE').length, 0);
+  assert.equal(restoredDistrict.picks.filter((row) => row.level === 'DISTRICT').length, 1);
+});
+
+test('both Preparation doors explain optional Desa/Kelurahan and Alamat Detail without a new picker', () => {
+  const setup = readFileSync(new URL('../pages/ProjectSetupPage.tsx', import.meta.url), 'utf8');
+  const picker = readFileSync(
+    new URL('../components/project/ProjectIntakeLocationFields.tsx', import.meta.url),
+    'utf8',
+  );
+  assert.match(setup, /Lokasi boleh ditetapkan sampai Kecamatan/);
+  assert.match(setup, /Anda boleh menggunakan lokasi sampai Kecamatan/);
+  assert.match(setup, /Alamat Detail tidak wajib/);
+  assert.match(setup, /tidak diperlukan untuk melanjutkan ke RAB/);
+  assert.match(picker, /Desa\/Kelurahan tidak wajib dipilih/);
+  assert.match(picker, /level === 'VILLAGE' \? 'Hapus pilihan Kelurahan/);
+  assert.match(picker, /clearIntakeLevel\(current, level\)/);
+  assert.match(setup, /expectedLocationRegionIds = initialRegionIds|payload.expectedLocationRegionIds = initialRegionIds/);
+  assert.doesNotMatch(setup, /<input[^>]+required[^>]+Alamat Detail/);
+});
