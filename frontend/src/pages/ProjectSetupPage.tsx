@@ -326,6 +326,7 @@ function LocalProjectSetupPage() {
 
             <section className="simprok-rab-room" aria-label="Lokasi Resmi">
               <h3>Lokasi Resmi</h3>
+              <p className="simprok-rab-room__note">Lokasi boleh ditetapkan sampai Kecamatan. Desa/Kelurahan hanya diisi jika diperlukan; tidak perlu memilih seluruh kelurahan.</p>
               <div className="simprok-rab-form__grid">
                 <ProjectIntakeLocationFields onChange={handleLocationChange} initialRegionIds={backflowProject?.locationRegionIds} />
               </div>
@@ -334,7 +335,7 @@ function LocalProjectSetupPage() {
             <section className="simprok-rab-room" aria-label="Alamat Detail">
               <h3>Alamat Detail</h3>
               <p className="simprok-rab-room__note">
-                Keterangan tambahan lokasi. Tidak menggantikan pilihan wilayah resmi.
+                Opsional. Isi hanya jika ada rincian alamat yang perlu dicatat; tidak diperlukan untuk melanjutkan ke RAB. Tidak menggantikan pilihan wilayah resmi.
               </p>
               <label className="simprok-rab-field">
                 <span className="simprok-rab-field__title">
@@ -680,6 +681,7 @@ function SavedRabPreparation({ projectId }: { projectId: string }) {
               <section className="simprok-rab-room" aria-label="Lokasi Resmi">
                 <h3>Lokasi Resmi</h3>
                 <p>Wilayah tersimpan: {initialRegionIds.length}. Perubahan tidak akan menimpa histori harga dan AHSP lama.</p>
+                <p>Anda boleh menggunakan lokasi sampai Kecamatan. Kelurahan bersifat opsional; jika ada kelurahan lama, gunakan tombol hapus pilihan Kelurahan dan konfirmasikan penyimpanan agar Kecamatan tetap dipilih.</p>
                 {contextEditable ? (
                   <ProjectIntakeLocationFields
                     key={`${projectId}-${revision}`}
@@ -692,8 +694,8 @@ function SavedRabPreparation({ projectId }: { projectId: string }) {
               </section>
               <section className="simprok-rab-room" aria-label="Alamat Detail">
                 <h3>Alamat Detail</h3>
-                <p>{preparedFields?.address || loaded.project.address || 'Belum tersedia'}</p>
-                <small>Alamat lama dibaca dari proyek tersimpan; tidak ditulis ulang sebagai alamat baru.</small>
+                <p>{preparedFields?.address || loaded.project.address || 'Belum diisi (tidak wajib)'}</p>
+                <small>Alamat Detail tidak wajib; alamat lama dibaca dari proyek tersimpan dan tidak ditulis ulang sebagai alamat baru.</small>
               </section>
               <section className="simprok-rab-room" aria-label="Data Pendukung">
                 <h3>Data Pendukung</h3>
