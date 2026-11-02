@@ -999,4 +999,81 @@ describe('Basic Price Public Eligibility (e2e)', () => {
     }
   });
 
+  it('BP PR256 perf gate: authenticated filtered 5k Resources are indexed with bounded response', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const tag = 'BP256PERF' + suffix;
+    const sampleSize = 5000;
+    const ids: string[] = [];
+    try {
+      const resources = Array.from({ length: sampleSize }, (_, i) => {
+        const id = randomUUID();
+        ids.push(id);
+        return {
+          id,
+          workspaceId: workspaceAId,
+          code: tag + '-' + String(i).padStart(5, '0'),
+          name: 'Synthetic ' + tag + ' ' + String(i).padStart(5, '0'),
+          type: 'MATERIAL' as const,
+          baseUnit: 'm3',
+        };
+      });
+      for (let start = 0; start < sampleSize; start += 500) {
+        await prisma.resourceCatalog.createMany({ data: resources.slice(start, start + 500) });
+      }
+      const observations = resources.map((resource, i) => ({
+        workspaceId: workspaceAId,
+        resourceId: resource.id,
+        effectiveDate: new Date('2026-10-01T00:00:00.000Z'),
+        value: 100000 + i,
+        sourceOrigin: 'SUPPLIER' as const,
+        sourceType: 'MARKET_SURVEY' as const,
+        status: 'PUBLISHED',
+        verificationStatus: 'PUBLISHED' as const,
+        freshnessStatus: 'CURRENT' as const,
+      }));
+      for (let start = 0; start < sampleSize; start += 500) {
+        await prisma.basicPrice.createMany({ data: observations.slice(start, start + 500) });
+      }
+      const filters =
+        '?search=' + tag +
+        '&regionBrowse=true&regionGroup=general&itemBrowse=true' +
+        '&itemGroup=first&itemPage=1&sortBy=resourceName&sortOrder=asc&page=1&limit=50';
+      const elapsed: number[] = [];
+      for (let i = 0; i < 5; i++) {
+        const begin = Date.now();
+        const response = await listAsA(filters).expect(200);
+        elapsed.push(Date.now() - begin);
+        expect(response.body.regionIndex.total).toBe(sampleSize);
+        expect(response.body.regionIndex.general.count).toBe(sampleSize);
+        expect(response.body.itemIndex.totalItems).toBe(sampleSize);
+        expect(response.body.itemIndex.totalPrices).toBe(sampleSize);
+        expect(response.body.itemIndex.items).toHaveLength(50);
+        expect(response.body.itemIndex.totalPages).toBe(100);
+        expect(response.body.meta.total).toBe(1);
+        expect(response.body.data).toHaveLength(1);
+      }
+      const lastPage = await listAsA(filters.replace('itemPage=1', 'itemPage=100'))
+        .expect(200);
+      expect(lastPage.body.itemIndex.page).toBe(100);
+      expect(lastPage.body.itemIndex.items).toHaveLength(50);
+      expect(lastPage.body.itemIndex.totalItems).toBe(sampleSize);
+      expect(lastPage.body.selectedItemId).not.toBe(ids[0]);
+      expect(lastPage.body.data).toHaveLength(1);
+      const original = await listAsA('?search=' + tag + '&sortBy=resourceName&sortOrder=asc&limit=50')
+        .expect(200);
+      expect(original.body.meta.total).toBe(sampleSize);
+      expect(original.body.data).toHaveLength(50);
+      elapsed.sort((a, b) => a - b);
+      console.log('PR256_AUTHENTICATED_FILTERED_5000_RESOURCE_ENDPOINT_MS=' + JSON.stringify(elapsed));
+      console.log('PR256_AUTHENTICATED_FILTERED_5000_RESOURCE_P50_MS=' + elapsed[2]);
+      console.log('PR256_AUTHENTICATED_FILTERED_5000_RESOURCE_P95_SAMPLE_MS=' + elapsed[4]);
+      console.log('PR256_PERF_SCOPE=sequential_5_calls_5k_rows_isolated_e2e_not_concurrency_or_browser');
+    } finally {
+      if (ids.length) {
+        await prisma.basicPrice.deleteMany({ where: { resourceId: { in: ids } } });
+        await prisma.resourceCatalog.deleteMany({ where: { id: { in: ids } } });
+      }
+    }
+  }, 180000);
+
 });
