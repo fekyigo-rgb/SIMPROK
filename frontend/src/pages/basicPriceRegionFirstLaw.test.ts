@@ -16,15 +16,14 @@ test('Owner: exactly one visible Wilayah entry point; no second browse view', ()
 });
 
 test('verified region remains canonical regionId, not a group guessed from names', () => {
-  assert.match(page, /regionId: draft\.region && !\('kind' in draft\.region\) \? draft\.region\.id : undefined/);
+  assert.match(page, /\.\.\.regionSelectionQuery\(draft\.region\)/);
   assert.match(service, /basicPriceRegionApplicabilityWhere\(regionId\)/);
   assert.match(page, /limit: 50,/);
   assert.match(page, /<BasicPriceDetailPanel/);
 });
 
 test('unverified and general still reuse canonical backend region index but do not choose first item', () => {
-  assert.match(page, /regionBrowse: draft\.region && 'kind' in draft\.region \? 'true' : undefined/);
-  assert.match(page, /regionGroup: draft\.region && 'kind' in draft\.region \? draft\.region\.kind : undefined/);
+  assert.match(page, /\.\.\.regionSelectionQuery\(draft\.region\)/);
   assert.doesNotMatch(page, /itemBrowse:/);
   assert.doesNotMatch(page, /itemGroup:/);
   assert.match(service, /regionFirstGroupRegionIds\(regionIndex, selectedRegionGroup\)/);

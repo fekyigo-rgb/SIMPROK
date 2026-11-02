@@ -23,6 +23,10 @@ describe('BP-REGION-FIRST — disjoint canonical scope grouping', () => {
     expect(index.unverified.count).toBe(62);
     expect(index.unverified.regions[0].id).toBe('legacy');
     expect(regionFirstGroupKeys(index)).toEqual(['city:cP','city:cS','unverified']);
+    expect(regionFirstGroupRegionIds(index,'province-all:p')).toEqual(['dPan','dSen','dTeb']);
+    expect(regionFirstGroupRegionIds(index,'city:cS')).toEqual(['dPan','dTeb']);
+    expect(regionFirstGroupRegionIds(index,'city:cP')).toEqual(['dSen']);
+    expect(regionFirstGroupRegionIds(index,'province-all:unknown')).toBeUndefined();
     expect(index.provinces.reduce((sum,p)=>sum+p.priceCount,0)+index.unverified.count+index.general.count)
       .toBe(index.total);
   });
@@ -30,6 +34,7 @@ describe('BP-REGION-FIRST — disjoint canonical scope grouping', () => {
     const i=buildRegionFirstIndex([{regionId:'p',count:4},{regionId:'cP',count:8},{regionId:'dSen',count:2}],all);
     expect(i.provinces[0].provinceOnly.count).toBe(4);
     expect(regionFirstGroupRegionIds(i,'province:p')).toEqual(['p']);
+    expect(regionFirstGroupRegionIds(i,'province-all:p')).toEqual(['cP','dSen','p']);
     expect(regionFirstGroupRegionIds(i,'city:cP')).toEqual(['cP','dSen']);
     expect(regionFirstGroupKeys(i)).toEqual(['province:p','city:cP']);
   });

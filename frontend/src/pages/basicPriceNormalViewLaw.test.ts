@@ -7,7 +7,7 @@ const picker=readFileSync(new URL('../components/basic-price/ExplorerRegionFilte
 
 test('default full-price catalogue has no hidden narrowing or duplicate controls', () => {
   assert.doesNotMatch(page, /browseMode|bp-browse-switch|Jelajahi wilayah/);
-  assert.match(page, /regionId: draft\.region && !\('kind' in draft\.region\) \? draft\.region\.id : undefined/);
+  assert.match(page, /\.\.\.regionSelectionQuery\(draft\.region\)/);
   assert.doesNotMatch(page, /itemBrowse:|itemGroup:|itemPage:/);
   const p=buildExplorerQueryParams({sortBy:'resourceName',sortOrder:'asc',page:1,limit:50});
   assert.equal(p.regionBrowse,undefined);
@@ -17,8 +17,7 @@ test('default full-price catalogue has no hidden narrowing or duplicate controls
 });
 
 test('special region identity uses existing group route and remains a single field', () => {
-  assert.match(page, /regionBrowse: draft\.region && 'kind' in draft\.region \? 'true' : undefined/);
-  assert.match(page, /regionGroup: draft\.region && 'kind' in draft\.region \? draft\.region\.kind : undefined/);
+  assert.match(page, /\.\.\.regionSelectionQuery\(draft\.region\)/);
   assert.match(picker, /onSelect\(\{ kind: 'unverified' \}\)/);
   assert.match(picker, /onSelect\(\{ kind: 'general' \}\)/);
   assert.match(picker, /regionChosenLabel\(selected\)/);

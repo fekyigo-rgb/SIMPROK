@@ -936,6 +936,80 @@ describe('Basic Price Public Eligibility (e2e)', () => {
     await listAsA(`?search=${TAG}&regionGroup=general`).expect(400);
   });
 
+  it('BP-WILAYAH-PARENT-ONE-DOOR: province and city browse their actual descendant prices without widening applicability', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const term = 'BPPR260GEO' + suffix;
+    const regionIds: string[] = [];
+    const resourceIds: string[] = [];
+    const priceIds: string[] = [];
+    try {
+      const province = await prisma.region.create({
+        data: { code: 'PR260-P-' + suffix, name: 'Provinsi Uji ' + suffix, administrativeLevel: 'PROVINCE', isActive: true },
+      });
+      regionIds.push(province.id);
+      const citySouth = await prisma.region.create({
+        data: { code: 'PR260-S-' + suffix, name: 'Kota Selatan Uji ' + suffix, administrativeLevel: 'REGENCY_CITY', parentId: province.id, isActive: true },
+      });
+      regionIds.push(citySouth.id);
+      const cityCenter = await prisma.region.create({
+        data: { code: 'PR260-C-' + suffix, name: 'Kota Pusat Uji ' + suffix, administrativeLevel: 'REGENCY_CITY', parentId: province.id, isActive: true },
+      });
+      regionIds.push(cityCenter.id);
+      const districtIds: string[] = [];
+      for (const [index, cityId] of [citySouth.id, citySouth.id, cityCenter.id].entries()) {
+        const district = await prisma.region.create({
+          data: { code: 'PR260-D-' + index + '-' + suffix, name: 'Kecamatan Uji ' + index + ' ' + suffix, administrativeLevel: 'DISTRICT', parentId: cityId, isActive: true },
+        });
+        regionIds.push(district.id);
+        districtIds.push(district.id);
+        const resource = await prisma.resourceCatalog.create({
+          data: { workspaceId: workspaceAId, code: term + index, name: 'Material ' + term + index, type: 'MATERIAL', baseUnit: 'm3' },
+        });
+        resourceIds.push(resource.id);
+        const price = await prisma.basicPrice.create({
+          data: {
+            workspaceId: workspaceAId, resourceId: resource.id, regionId: district.id,
+            status: 'PUBLISHED', verificationStatus: 'PUBLISHED', freshnessStatus: 'CURRENT',
+            effectiveDate: new Date('2026-09-01T00:00:00Z'), value: 100000 + index * 1000,
+            sourceOrigin: 'SUPPLIER', sourceType: 'MARKET_SURVEY',
+          },
+        });
+        priceIds.push(price.id);
+      }
+      const provinceList = await listAsA(
+        '?search=' + term + '&regionBrowse=true&regionGroup=province-all:' + province.id + '&limit=50',
+      ).expect(200);
+      expect(provinceList.body.meta.total).toBe(3);
+      expect(provinceList.body.data).toHaveLength(3);
+      expect(provinceList.body.data.map((p: { basicPriceId: string }) => p.basicPriceId).sort())
+        .toEqual([...priceIds].sort());
+      expect(provinceList.body.itemIndex).toBeUndefined();
+      const cityList = await listAsA(
+        '?search=' + term + '&regionBrowse=true&regionGroup=city:' + citySouth.id + '&limit=50',
+      ).expect(200);
+      expect(cityList.body.meta.total).toBe(2);
+      expect(cityList.body.data.map((p: { basicPriceId: string }) => p.basicPriceId).sort())
+        .toEqual(priceIds.slice(0,2).sort());
+      const exactDistrict = await listAsA(
+        '?search=' + term + '&regionId=' + districtIds[0] + '&limit=50',
+      ).expect(200);
+      expect(exactDistrict.body.meta.total).toBe(1);
+      expect(exactDistrict.body.data[0].basicPriceId).toBe(priceIds[0]);
+      const empty = await listAsA(
+        '?search=' + term + 'NONEXISTENT&regionBrowse=true&regionGroup=province-all:' + province.id,
+      ).expect(200);
+      expect(empty.body.meta.total).toBe(0);
+      expect(empty.body.data).toEqual([]);
+      await listAsA(
+        '?search=' + term + '&regionBrowse=true&regionGroup=province-all:99999999-9999-4999-8999-999999999999',
+      ).expect(400);
+    } finally {
+      if (priceIds.length) await prisma.basicPrice.deleteMany({ where: { id: { in: priceIds } } });
+      if (resourceIds.length) await prisma.resourceCatalog.deleteMany({ where: { id: { in: resourceIds } } });
+      for (const id of [...regionIds].reverse()) await prisma.region.delete({ where: { id } });
+    }
+  });
+
   it('BP-WILAYAH-ONE-DOOR: known empty groups return zero, unknown groups still fail closed', async () => {
     const noResults = TAG + 'NOTAPRICEDRESOURCE';
     for (const group of ['general', 'unverified']) {

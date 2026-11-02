@@ -162,7 +162,7 @@ export class GetBasicPricesDto {
 
   /** An explicit canonical group key, or first available group. */
   @IsOptional()
-  @Matches(/^(?:first|general|unverified|(?:city|province):[0-9a-fA-F-]{36})$/)
+  @Matches(/^(?:first|general|unverified|(?:city|province|province-all):[0-9a-fA-F-]{36})$/)
   regionGroup?: string;
 
   @IsOptional()
