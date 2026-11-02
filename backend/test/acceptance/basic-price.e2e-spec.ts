@@ -936,6 +936,99 @@ describe('Basic Price Public Eligibility (e2e)', () => {
     await listAsA(`?search=${TAG}&regionGroup=general`).expect(400);
   });
 
+  it('BP-WILAYAH-ONE-DOOR: known empty groups return zero, unknown groups still fail closed', async () => {
+    const noResults = TAG + 'NOTAPRICEDRESOURCE';
+    for (const group of ['general', 'unverified']) {
+      const response = await listAsA(
+        '?search=' + noResults + '&regionBrowse=true&regionGroup=' + group +
+        '&sortBy=resourceName&sortOrder=asc&page=1&limit=50',
+      ).expect(200);
+      expect(response.body.selectedRegionGroup).toBe(group);
+      expect(response.body.regionIndex.total).toBe(0);
+      expect(response.body.meta.total).toBe(0);
+      expect(response.body.data).toEqual([]);
+    }
+    await listAsA(
+      '?search=' + noResults + '&regionBrowse=true&regionGroup=not-a-real-group',
+    ).expect(400);
+    const ordinary = await listAsA('?search=' + TAG + '&limit=50').expect(200);
+    const ungroupedItemList = await listAsA(
+      '?search=' + TAG + '&regionBrowse=true&regionGroup=general&limit=50',
+    ).expect(200);
+    expect(ungroupedItemList.body.meta.total).toBe(ordinary.body.meta.total);
+    expect(ungroupedItemList.body.data.map((p: { basicPriceId: string }) => p.basicPriceId).sort())
+      .toEqual(ordinary.body.data.map((p: { basicPriceId: string }) => p.basicPriceId).sort());
+    expect(ungroupedItemList.body.itemIndex).toBeUndefined();
+  });
+
+  it('BP-WILAYAH-ONE-DOOR: unverified region shows all 8 observations across 7 Resource IDs', async () => {
+    const suffix = randomUUID().slice(0, 8);
+    const term = 'BP258REG' + suffix;
+    let legacyRegionId: string | null = null;
+    const resources: string[] = [];
+    const prices: string[] = [];
+    try {
+      const region = await prisma.region.create({
+        data: {
+          code: 'PR258-' + suffix,
+          name: 'Kecamatan Legacy Isolasi ' + suffix,
+          administrativeLevel: 'DISTRICT',
+          isActive: true,
+          // Deliberately no verified parent: never assign a guessed city/province.
+        },
+      });
+      legacyRegionId = region.id;
+      for (let i = 0; i < 7; i++) {
+        const resource = await prisma.resourceCatalog.create({
+          data: {
+            workspaceId: workspaceAId,
+            code: term + '-' + String(i),
+            name: 'Material ' + term + ' ' + String(i),
+            type: 'MATERIAL',
+            baseUnit: 'm3',
+          },
+        });
+        resources.push(resource.id);
+      }
+      for (let i = 0; i < 8; i++) {
+        const price = await prisma.basicPrice.create({
+          data: {
+            workspaceId: workspaceAId,
+            resourceId: resources[i % 7],
+            regionId: legacyRegionId,
+            status: 'PUBLISHED',
+            verificationStatus: 'PUBLISHED',
+            freshnessStatus: 'CURRENT',
+            effectiveDate: new Date('2026-09-' + String(i + 1).padStart(2, '0') + 'T00:00:00Z'),
+            value: 100000 + i * 1000,
+            sourceOrigin: 'SUPPLIER',
+            sourceType: 'MARKET_SURVEY',
+          },
+        });
+        prices.push(price.id);
+      }
+      const result = await listAsA(
+        '?search=' + term +
+        '&regionBrowse=true&regionGroup=unverified' +
+        '&sortBy=resourceName&sortOrder=asc&limit=50',
+      ).expect(200);
+      expect(result.body.selectedRegionGroup).toBe('unverified');
+      expect(result.body.regionIndex.unverified.count).toBe(8);
+      expect(result.body.meta.total).toBe(8);
+      expect(result.body.data).toHaveLength(8);
+      expect(new Set(result.body.data.map((p: { resource: { id: string } }) => p.resource.id)).size)
+        .toBe(7);
+      expect(result.body.data.map((p: { basicPriceId: string }) => p.basicPriceId).sort())
+        .toEqual([...prices].sort());
+      expect(result.body.itemIndex).toBeUndefined();
+      expect(result.body.selectedItemId).toBeUndefined();
+    } finally {
+      if (prices.length) await prisma.basicPrice.deleteMany({ where: { id: { in: prices } } });
+      if (resources.length) await prisma.resourceCatalog.deleteMany({ where: { id: { in: resources } } });
+      if (legacyRegionId) await prisma.region.delete({ where: { id: legacyRegionId } });
+    }
+  });
+
   it('BP ITEM SUMMARY E2E: same-name distinct Resources and full raw price pages', async () => {
     const suffix = randomUUID().slice(0, 8);
     const term = 'BPI256' + suffix;
