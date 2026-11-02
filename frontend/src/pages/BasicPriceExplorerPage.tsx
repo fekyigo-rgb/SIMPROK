@@ -792,7 +792,7 @@ export function BasicPriceExplorerPage() {
                 replaceSelectedIds(new Set());
                 setSelectionNotice(null);
                 setPage(1);
-                            setOpenDetailId(null);
+                setOpenDetailId(null);
                 setDetailNotice(null);
               }}
             >
