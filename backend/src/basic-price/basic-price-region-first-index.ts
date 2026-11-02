@@ -56,6 +56,14 @@ export const regionFirstGroupRegionIds = (
   if (key === 'general') return index.general.count ? null : undefined;
   if (key === 'unverified') return index.unverified.count ? index.unverified.scopeRegionIds : undefined;
   for (const p of index.provinces) {
+    // One Wilayah selector reuses this existing geographic index for browsing.
+    // Showing descendant prices is NOT a claim of province-wide applicability.
+    if (key === 'province-all:' + p.id) {
+      return [...new Set([
+        ...p.provinceOnly.scopeRegionIds,
+        ...p.cities.flatMap((city) => city.scopeRegionIds),
+      ])].sort();
+    }
     if (p.provinceOnly.key === key && p.provinceOnly.count) return p.provinceOnly.scopeRegionIds;
     const city = p.cities.find((c) => c.key === key);
     if (city) return city.scopeRegionIds;

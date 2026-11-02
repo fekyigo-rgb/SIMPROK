@@ -360,6 +360,25 @@ export interface ExplorerFilters {
   itemPage?: number;
 }
 
+
+/** A single Wilayah field can locate prices *inside* a larger administrative
+ * area without asserting that any district price applies province-wide.
+ * The canonical server region index owns membership; exact applicability
+ * remains the original regionId predicate for District/Village selections. */
+export const regionSelectionQuery = (
+  selected: RegionLookupItem | { kind: 'unverified' | 'general' } | null,
+): Pick<ExplorerFilters, 'regionId' | 'regionBrowse' | 'regionGroup'> => {
+  if (!selected) return {};
+  if ('kind' in selected) return { regionBrowse: 'true', regionGroup: selected.kind };
+  if (selected.administrativeLevel === 'PROVINCE') {
+    return { regionBrowse: 'true', regionGroup: 'province-all:' + selected.id };
+  }
+  if (selected.administrativeLevel === 'REGENCY_CITY') {
+    return { regionBrowse: 'true', regionGroup: 'city:' + selected.id };
+  }
+  return { regionId: selected.id };
+};
+
 /** Only the non-empty, defined fields become query params — never a literal "undefined". */
 export function buildExplorerQueryParams(filters: ExplorerFilters): Record<string, string> {
   const params: Record<string, string> = {};

@@ -1318,11 +1318,22 @@ export class BasicPriceService {
       if (selectedRegionGroup !== null) {
         const scopeIds = regionFirstGroupRegionIds(regionIndex, selectedRegionGroup);
         if (scopeIds === undefined) {
-          if (selectedRegionGroup !== 'general' && selectedRegionGroup !== 'unverified') {
+          // A verified city or province remains a valid browsing choice even
+          // when OTHER filters leave it with zero matching price observations.
+          // Verify canonical identity; never accept a made-up region group.
+          const geographicKey = /^(city|province-all):([0-9a-f-]{36})$/i.exec(selectedRegionGroup);
+          const named = geographicKey
+            ? await this.prisma.region.findUnique({
+                where: { id: geographicKey[2] },
+                select: { isActive: true, administrativeLevel: true },
+              })
+            : null;
+          const validNamed = !!named?.isActive &&
+            named.administrativeLevel === (geographicKey?.[1] === 'city' ? 'REGENCY_CITY' : 'PROVINCE');
+          if (!validNamed && selectedRegionGroup !== 'general' && selectedRegionGroup !== 'unverified') {
             throw new BadRequestException('BP_REGION_GROUP_NOT_AVAILABLE');
           }
-          // Valid semantic scope with zero eligible prices: an empty table,
-          // never a 400 and never a fabricated administrative Region.
+          // Legitimate empty selection: 200 + zero prices; no widening.
           (where.AND as Prisma.BasicPriceWhereInput[]).push({ id: { in: [] } });
         } else {
           // A browsing GROUP, not a new meaning of price applicability.

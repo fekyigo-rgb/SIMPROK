@@ -28,6 +28,7 @@ import {
   explorerVerifiedUnitLabel,
   formatExplorerPrice,
   basicPriceRegionLabel,
+  regionSelectionQuery,
   basicPriceCorrectionPairKey,
   canProposePrivateExplorerItem,
   canLinkExistingImportedPricePair,
@@ -240,7 +241,7 @@ export function BasicPriceExplorerPage() {
 
       const filters: ExplorerFilters = {
         search: draft.search || undefined,
-        regionId: draft.region && !('kind' in draft.region) ? draft.region.id : undefined,
+        ...regionSelectionQuery(draft.region),
         // ONE DATE, ONE QUESTION, ANSWERED SERVER-SIDE.
         //
         // `dateFrom`, `dateTo` and `year` are deliberately not sent. They narrow
@@ -258,10 +259,8 @@ export function BasicPriceExplorerPage() {
         collection: collection || undefined,
         page,
         limit: 50,
-        // One Wilayah control. Special groups reuse the canonical region index.
-        // Item grouping must not silently narrow the table to the first item.
-        regionBrowse: draft.region && 'kind' in draft.region ? 'true' : undefined,
-        regionGroup: draft.region && 'kind' in draft.region ? draft.region.kind : undefined,
+        // One Wilayah control, one canonical price list. Item browsing is never
+        // implicit, and the selected price still states its exact region.
         sortBy,
         sortOrder: sortDirection,
       };
