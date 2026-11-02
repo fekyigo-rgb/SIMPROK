@@ -52,6 +52,7 @@ import {
   type ProvenHistoryRow,
 } from './basic-price-proven-history';
 import { toDecimalString2 } from '../common/money';
+import { buildBasicPriceItemIndex, pageBasicPriceItems, selectBasicPriceItemId, type BasicPriceItemIndex } from './basic-price-item-summary';
 import {
   buildRegionFirstIndex,
   regionFirstGroupKeys,
@@ -1024,6 +1025,8 @@ export class BasicPriceService {
     meta: { total: number; page: number; limit: number; totalPages: number };
     regionIndex?: RegionFirstIndex;
     selectedRegionGroup?: string | null;
+    itemIndex?: BasicPriceItemIndex;
+    selectedItemId?: string | null;
   }> {
     const {
       search,
@@ -1049,7 +1052,16 @@ export class BasicPriceService {
       sortOrder = 'desc',
       regionBrowse,
       regionGroup,
+      itemBrowse,
+      itemGroup,
+      itemPage = 1,
     } = query;
+    if ((itemBrowse === 'true' || itemGroup) && regionBrowse !== 'true') {
+      throw new BadRequestException('BP_ITEM_BROWSE_REQUIRES_REGION_BROWSE');
+    }
+    if (itemGroup && itemBrowse !== 'true') {
+      throw new BadRequestException('BP_ITEM_GROUP_REQUIRES_ITEM_BROWSE');
+    }
     if (regionGroup && regionBrowse !== 'true') {
       throw new BadRequestException('BP_REGION_GROUP_REQUIRES_REGION_BROWSE');
     }
@@ -1318,6 +1330,44 @@ export class BasicPriceService {
       }
     }
 
+    // Summary of actual canonical Resource IDs, before price pagination.
+    // Only the selected item narrows the existing lawful region predicate.
+    let itemIndex: BasicPriceItemIndex | undefined;
+    let selectedItemId: string | null | undefined;
+    if (itemBrowse === 'true') {
+      const itemWhere: Prisma.BasicPriceWhereInput = {
+        ...where,
+        AND: [...(where.AND as Prisma.BasicPriceWhereInput[])],
+      };
+      const itemCounts = await this.prisma.basicPrice.groupBy({
+        by: ['resourceId'],
+        where: itemWhere,
+        _count: { _all: true },
+      });
+      const ids = itemCounts.map((count) => count.resourceId);
+      const identities = ids.length
+        ? await this.prisma.resourceCatalog.findMany({
+            where: { id: { in: ids } },
+            select: { id: true, name: true, code: true, type: true, baseUnit: true },
+          })
+        : [];
+      const fullIndex = buildBasicPriceItemIndex(
+        itemCounts.map((count) => ({ resourceId: count.resourceId, count: count._count._all })),
+        identities,
+      );
+      // The full index proves selection; transport/UI receive at most 50 items.
+      itemIndex = pageBasicPriceItems(fullIndex, itemPage);
+      selectedItemId = !itemGroup || itemGroup === 'first'
+        ? (itemIndex.items[0]?.id ?? null)
+        : selectBasicPriceItemId(fullIndex, itemGroup);
+      if (itemGroup && itemGroup !== 'first' && selectedItemId === null) {
+        throw new BadRequestException('BP_ITEM_GROUP_NOT_AVAILABLE');
+      }
+      (where.AND as Prisma.BasicPriceWhereInput[]).push(
+        selectedItemId ? { resourceId: selectedItemId } : { id: { in: [] } },
+      );
+    }
+
     // BP-EXPLORER-SORT50: server orders the full eligible set BEFORE
     // pagination. Keep original canonical value and resource identity.
     const sortHead: Prisma.BasicPriceOrderByWithRelationInput =
@@ -1411,6 +1461,7 @@ export class BasicPriceService {
         totalPages: Math.ceil(total / limit),
       },
       ...(regionIndex ? { regionIndex, selectedRegionGroup } : {}),
+      ...(itemIndex ? { itemIndex, selectedItemId } : {}),
     };
   }
 

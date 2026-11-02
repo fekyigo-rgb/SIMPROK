@@ -8,7 +8,7 @@ test('neutral Basic Price Explorer starts on canonical Item A-Z, not date or loc
   assert.match(page, /useState<SortChoice>\('resourceName:asc'\)/);
   assert.match(page, /sortBy,\s*sortOrder: sortDirection,/);
   assert.match(page, /limit: 50,/);
-  assert.match(page, /\[draft, collection, sortOrder, page, reloadNonce, regionGroup\]/);
+  assert.match(page, /\[draft, collection, sortOrder, page, reloadNonce, regionGroup, itemGroup, itemPage\]/);
   assert.doesNotMatch(page, /state\.items\.sort\(/);
 });
 

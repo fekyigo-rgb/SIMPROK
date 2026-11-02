@@ -166,6 +166,20 @@ export class GetBasicPricesDto {
   regionGroup?: string;
 
   @IsOptional()
+  @IsIn(['true'])
+  itemBrowse?: 'true';
+
+  @IsOptional()
+  @Matches(/^(?:first|[0-9a-fA-F-]{36})$/)
+  itemGroup?: string;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  itemPage?: number = 1;
+
+  @IsOptional()
   @IsIn(['asc', 'desc'])
   sortOrder?: 'asc' | 'desc' = 'desc';
 

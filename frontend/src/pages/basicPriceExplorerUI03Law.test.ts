@@ -23,7 +23,7 @@ test('Koleksi is beside the existing sort and has three Owner-approved labels', 
   assert.match(page, /<option value="WORKSPACE_PRIVATE">Harga Privat<\/option>/);
   assert.match(page, /<option value="SIMPROK_CATALOG">Pustaka SIMPROK<\/option>/);
   assert.match(page, /setCollection\(''\)/);
-  assert.match(page, /\[draft, collection, sortOrder, page, reloadNonce, regionGroup\]/);
+  assert.match(page, /\[draft, collection, sortOrder, page, reloadNonce, regionGroup, itemGroup, itemPage\]/);
 });
 
 test('Explorer header reuses exactly AHSP blue, scoped to this table only', () => {
