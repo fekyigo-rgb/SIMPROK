@@ -1318,13 +1318,19 @@ export class BasicPriceService {
       if (selectedRegionGroup !== null) {
         const scopeIds = regionFirstGroupRegionIds(regionIndex, selectedRegionGroup);
         if (scopeIds === undefined) {
-          throw new BadRequestException('BP_REGION_GROUP_NOT_AVAILABLE');
+          if (selectedRegionGroup !== 'general' && selectedRegionGroup !== 'unverified') {
+            throw new BadRequestException('BP_REGION_GROUP_NOT_AVAILABLE');
+          }
+          // Valid semantic scope with zero eligible prices: an empty table,
+          // never a 400 and never a fabricated administrative Region.
+          (where.AND as Prisma.BasicPriceWhereInput[]).push({ id: { in: [] } });
+        } else {
+          // A browsing GROUP, not a new meaning of price applicability.
+          // An explicit regionId filter remains composed via existing AND.
+          (where.AND as Prisma.BasicPriceWhereInput[]).push(
+            scopeIds === null ? { regionId: null } : { regionId: { in: scopeIds } },
+          );
         }
-        // A browsing GROUP, not a new meaning of price applicability.
-        // An explicit regionId filter remains composed via existing AND.
-        (where.AND as Prisma.BasicPriceWhereInput[]).push(
-          scopeIds === null ? { regionId: null } : { regionId: { in: scopeIds } },
-        );
       } else {
         (where.AND as Prisma.BasicPriceWhereInput[]).push({ id: { in: [] } });
       }

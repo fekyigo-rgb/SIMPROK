@@ -10,10 +10,12 @@ import {
   regionSearchShouldReloadOnFocus,
 } from '../../utils/regionSearchRecovery';
 
+export type ExplorerRegionSelection = RegionLookupItem | { kind: 'unverified' | 'general' };
+
 interface ExplorerRegionFilterSelectProps {
-  selected: RegionLookupItem | null;
+  selected: ExplorerRegionSelection | null;
   disabled?: boolean;
-  onSelect: (region: RegionLookupItem | null) => void;
+  onSelect: (region: ExplorerRegionSelection | null) => void;
 }
 
 /**
@@ -127,7 +129,11 @@ export function ExplorerRegionFilterSelect({
           disabled={disabled}
           // The chosen region reads back IN the field, so a narrowed table
           // never leaves a person hunting for what narrowed it.
-          value={selected ? regionChosenLabel(selected) : query}
+          value={selected
+            ? 'kind' in selected
+              ? selected.kind === 'unverified' ? 'Wilayah belum terverifikasi' : 'Umum (tanpa wilayah)'
+              : regionChosenLabel(selected)
+            : query}
           placeholder="Semua wilayah"
           onFocus={() => {
             setHasInteracted(true);
@@ -167,6 +173,33 @@ export function ExplorerRegionFilterSelect({
 
         {open ? (
           <div className="bp-pop__panel bp-pop__panel--list">
+            <ul className="bp-optionlist" role="listbox" aria-label="Cakupan wilayah lainnya">
+              <li role="option" aria-selected={selected !== null && 'kind' in selected && selected.kind === 'unverified'}>
+                <button type="button" className="bp-option"
+                  onClick={() => {
+                    onSelect({ kind: 'unverified' });
+                    setQuery('');
+                    setResults([]);
+                    setState('idle');
+                    setOpen(false);
+                  }}>
+                  Wilayah belum terverifikasi
+                  <small>Hierarki administrasi belum lengkap</small>
+                </button>
+              </li>
+              <li role="option" aria-selected={selected !== null && 'kind' in selected && selected.kind === 'general'}>
+                <button type="button" className="bp-option"
+                  onClick={() => {
+                    onSelect({ kind: 'general' });
+                    setQuery('');
+                    setResults([]);
+                    setState('idle');
+                    setOpen(false);
+                  }}>
+                  Umum (tanpa wilayah)
+                </button>
+              </li>
+            </ul>
             {state === 'loading' ? (
               <p className="bp-pop__body" role="status">
                 Mencari wilayah...
@@ -183,7 +216,7 @@ export function ExplorerRegionFilterSelect({
             {state === 'ready' ? (
               <ul id={listId} role="listbox" aria-label="Hasil pencarian Wilayah" className="bp-optionlist">
                 {results.map((region) => (
-                  <li key={region.id} role="option" aria-selected={selected?.id === region.id}>
+                  <li key={region.id} role="option" aria-selected={selected !== null && !('kind' in selected) && selected.id === region.id}>
                     <button
                       type="button"
                       className="bp-option"
