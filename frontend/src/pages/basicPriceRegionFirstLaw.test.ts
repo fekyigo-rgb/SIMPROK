@@ -3,36 +3,34 @@ import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { buildExplorerQueryParams } from '../utils/basicPriceExplorerDisplay.ts';
 const page = readFileSync(new URL('./BasicPriceExplorerPage.tsx', import.meta.url), 'utf8');
+const picker = readFileSync(new URL('../components/basic-price/ExplorerRegionFilterSelect.tsx', import.meta.url), 'utf8');
 const service = readFileSync(new URL('../../../backend/src/basic-price/basic-price.service.ts', import.meta.url), 'utf8');
 
-test('Owner: optional region-first navigates the full canonical server grouped index', () => {
-  assert.match(page, /regionBrowse: browseMode \? 'true' : undefined/);
-  assert.match(page, /regionGroup,/);
-  assert.match(page, /state\.regionIndex\.provinces\.map/);
-  assert.match(page, /state\.regionIndex\.unverified\.count/);
-  assert.match(page, /selectedRegionGroup === city\.key/);
-  assert.match(page, /Jelajahi wilayah/);
-  assert.doesNotMatch(page, /state\.items\.reduce\([^)]*region/u);
+test('Owner: exactly one visible Wilayah entry point; no second browse view', () => {
+  assert.match(page, /<ExplorerRegionFilterSelect/);
+  assert.doesNotMatch(page, /Jelajahi wilayah &amp; item|bp-browse-switch|bp-region-first|bp-item-summary/);
+  assert.doesNotMatch(page, /setBrowseMode|setRegionGroup|setItemGroup|setItemPage/);
+  assert.match(picker, /Wilayah belum terverifikasi/);
+  assert.match(picker, /Umum \(tanpa wilayah\)/);
+  assert.match(picker, /regionOptionLabels\(results\)/);
 });
-test('group pagination retains server-side 50 and canonical one row detail', () => {
+
+test('verified region remains canonical regionId, not a group guessed from names', () => {
+  assert.match(page, /regionId: draft\.region && !\('kind' in draft\.region\) \? draft\.region\.id : undefined/);
+  assert.match(service, /basicPriceRegionApplicabilityWhere\(regionId\)/);
   assert.match(page, /limit: 50,/);
-  assert.match(page, /item\.basicPriceId/);
   assert.match(page, /<BasicPriceDetailPanel/);
-  assert.match(service, /this\.prisma\.basicPrice\.groupBy\(/);
-  assert.match(service, /this\.prisma\.basicPrice\.findMany\(/);
 });
-test('region group switches are passed via the existing query without adding tenant identity', () => {
-  const p = buildExplorerQueryParams({
-    regionBrowse: 'true', regionGroup: 'city:20000000-0000-4000-8000-000000000002',
-    sortBy: 'resourceName', sortOrder: 'asc', page: 2, limit: 50,
-  });
-  assert.equal(p.regionBrowse, 'true');
-  assert.equal(p.regionGroup, 'city:20000000-0000-4000-8000-000000000002');
-  assert.equal(p.sortBy, 'resourceName');
-  assert.equal(p.page, '2');
-  assert.ok(!Object.hasOwn(p, 'workspaceId'));
-});
-test('unknown historical region is presented separately, not assigned to guessed city', () => {
-  assert.match(page, /Wilayah belum terverifikasi/);
-  assert.doesNotMatch(page, /\(Kec\.\)/);
+
+test('unverified and general still reuse canonical backend region index but do not choose first item', () => {
+  assert.match(page, /regionBrowse: draft\.region && 'kind' in draft\.region \? 'true' : undefined/);
+  assert.match(page, /regionGroup: draft\.region && 'kind' in draft\.region \? draft\.region\.kind : undefined/);
+  assert.doesNotMatch(page, /itemBrowse:/);
+  assert.doesNotMatch(page, /itemGroup:/);
+  assert.match(service, /regionFirstGroupRegionIds\(regionIndex, selectedRegionGroup\)/);
+  assert.match(service, /this\.prisma\.basicPrice\.groupBy/);
+  const query=buildExplorerQueryParams({regionBrowse:'true',regionGroup:'unverified',limit:50,page:1});
+  assert.equal(query.regionGroup,'unverified');
+  assert.equal(query.itemBrowse,undefined);
+  assert.equal(query.workspaceId,undefined);
 });

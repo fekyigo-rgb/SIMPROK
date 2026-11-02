@@ -9,11 +9,8 @@ import {
   type BasicPriceExplorerItem,
   type ExplorerFilters,
   type ExplorerPageMeta,
-  type BasicPriceRegionIndex,
-  type BasicPriceItemIndex,
-  type RegionLookupItem,
 } from '../api/basicPriceExplorer';
-import { ExplorerRegionFilterSelect } from '../components/basic-price/ExplorerRegionFilterSelect';
+import { ExplorerRegionFilterSelect, type ExplorerRegionSelection } from '../components/basic-price/ExplorerRegionFilterSelect';
 import { FreshnessChip } from '../components/basic-price/FreshnessChip';
 import { BasicPriceDetailPanel } from '../components/basic-price/BasicPriceDetailPanel';
 import { useAuth } from '../contexts/AuthContext';
@@ -74,7 +71,7 @@ import '../styles/basicPrice.css';
  */
 interface DraftFilters {
   search: string;
-  region: RegionLookupItem | null;
+  region: ExplorerRegionSelection | null;
   resourceType: string;
   sourceFamily: string;
   sourceName: string;
@@ -106,10 +103,6 @@ type ListState =
       kind: 'ready';
       items: BasicPriceExplorerItem[];
       meta: ExplorerPageMeta;
-      regionIndex?: BasicPriceRegionIndex;
-      selectedRegionGroup?: string | null;
-      itemIndex?: BasicPriceItemIndex;
-      selectedItemId?: string | null;
       /**
        * BP-UX-FINAL-01D GAP-D — THE TEMPORAL CONTEXT THESE EXACT ROWS WERE
        * SELECTED FOR, carried WITH them rather than re-read from the draft.
@@ -202,12 +195,6 @@ export function BasicPriceExplorerPage() {
   // Collection is table-scoped, as is sorting. Empty = unchanged combined list.
   const [collection, setCollection] = useState<'' | 'WORKSPACE_PRIVATE' | 'SIMPROK_CATALOG'>('');
   const [page, setPage] = useState(1);
-  // The original full-price table is the default, with geographic browsing optional.
-  const [browseMode, setBrowseMode] = useState(false);
-  /** The first region group is server-selected from the canonical eligible set. */
-  const [regionGroup, setRegionGroup] = useState('first');
-  const [itemGroup, setItemGroup] = useState('first');
-  const [itemPage, setItemPage] = useState(1);
   const [reloadNonce, setReloadNonce] = useState(0);
   const [state, setState] = useState<ListState>({ kind: 'loading' });
   const [openDetailId, setOpenDetailId] = useState<string | null>(null);
@@ -253,7 +240,7 @@ export function BasicPriceExplorerPage() {
 
       const filters: ExplorerFilters = {
         search: draft.search || undefined,
-        regionId: draft.region?.id,
+        regionId: draft.region && !('kind' in draft.region) ? draft.region.id : undefined,
         // ONE DATE, ONE QUESTION, ANSWERED SERVER-SIDE.
         //
         // `dateFrom`, `dateTo` and `year` are deliberately not sent. They narrow
@@ -271,11 +258,10 @@ export function BasicPriceExplorerPage() {
         collection: collection || undefined,
         page,
         limit: 50,
-        regionBrowse: browseMode ? 'true' : undefined,
-        regionGroup: browseMode ? regionGroup : undefined,
-        itemBrowse: browseMode ? 'true' : undefined,
-        itemGroup: browseMode ? itemGroup : undefined,
-        itemPage: browseMode ? itemPage : undefined,
+        // One Wilayah control. Special groups reuse the canonical region index.
+        // Item grouping must not silently narrow the table to the first item.
+        regionBrowse: draft.region && 'kind' in draft.region ? 'true' : undefined,
+        regionGroup: draft.region && 'kind' in draft.region ? draft.region.kind : undefined,
         sortBy,
         sortOrder: sortDirection,
       };
@@ -301,10 +287,6 @@ export function BasicPriceExplorerPage() {
             items: result.data,
             meta: result.meta,
             temporal,
-            regionIndex: result.regionIndex,
-            selectedRegionGroup: result.selectedRegionGroup,
-            itemIndex: result.itemIndex,
-            selectedItemId: result.selectedItemId,
           });
         } catch (error) {
           if (!requestGate.current.isLatest(sequence)) return;
@@ -326,7 +308,7 @@ export function BasicPriceExplorerPage() {
     // eleven fields plus a client-side validity check, so the dependency list
     // could not be stated honestly and the rule was silenced. Four values now
     // decide this request, all four are listed, and the linter agrees.
-  }, [draft, collection, sortOrder, page, reloadNonce, regionGroup, itemGroup, itemPage, browseMode]);
+  }, [draft, collection, sortOrder, page, reloadNonce]);
 
   const filtersActive = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(EMPTY_DRAFT) || collection !== '',
@@ -338,9 +320,6 @@ export function BasicPriceExplorerPage() {
     replaceSelectedIds(new Set());
     setSelectionNotice(null);
     setPage(1);
-    setRegionGroup('first');
-    setItemGroup('first');
-    setItemPage(1);
     // A detail panel describes ONE row. When the list beneath it changes, the
     // row it describes may no longer be there, so the panel closes rather than
     // lingering over a table that no longer contains its subject.
@@ -351,9 +330,6 @@ export function BasicPriceExplorerPage() {
   const resetFilters = () => {
     setDraft(EMPTY_DRAFT);
     setCollection('');
-    setRegionGroup('first');
-    setItemGroup('first');
-    setItemPage(1);
     setSortOrder('resourceName:asc');
     replaceSelectedIds(new Set());
     setSelectionNotice(null);
@@ -374,48 +350,6 @@ export function BasicPriceExplorerPage() {
     nextOrder: SortDirection,
   ) => {
     setSortOrder(`${nextBy}:${nextOrder}`);
-    replaceSelectedIds(new Set());
-    setSelectionNotice(null);
-    setPage(1);
-    setOpenDetailId(null);
-    setDetailNotice(null);
-  };
-
-  const chooseBrowseMode = (next: boolean) => {
-    if (browseMode === next) return;
-    setBrowseMode(next);
-    setRegionGroup('first');
-    setItemGroup('first');
-    setItemPage(1);
-    setPage(1);
-    replaceSelectedIds(new Set());
-    setSelectionNotice(null);
-    setOpenDetailId(null);
-    setDetailNotice(null);
-  };
-
-  const chooseRegionGroup = (key: string) => {
-    setRegionGroup(key);
-    setItemGroup('first');
-    setItemPage(1);
-    replaceSelectedIds(new Set());
-    setSelectionNotice(null);
-    setPage(1);
-    setOpenDetailId(null);
-    setDetailNotice(null);
-  };
-  const chooseItemPage = (nextPage: number) => {
-    setItemPage(nextPage);
-    setItemGroup('first');
-    replaceSelectedIds(new Set());
-    setSelectionNotice(null);
-    setPage(1);
-    setOpenDetailId(null);
-    setDetailNotice(null);
-  };
-
-  const chooseItemGroup = (id: string) => {
-    setItemGroup(id);
     replaceSelectedIds(new Set());
     setSelectionNotice(null);
     setPage(1);
@@ -826,108 +760,10 @@ export function BasicPriceExplorerPage() {
         Said once, above the table, and only when a date is actually set —
         a permanent line would be noise on the ordinary present-day view.
       */}
-      <div className="bp-browse-switch" role="group" aria-label="Cara melihat daftar Basic Price">
-        <button type="button" className="bp-browse-switch__button"
-          aria-pressed={!browseMode} onClick={() => chooseBrowseMode(false)}>
-          Semua harga
-        </button>
-        <button type="button" className="bp-browse-switch__button"
-          aria-pressed={browseMode} onClick={() => chooseBrowseMode(true)}>
-          Jelajahi wilayah &amp; item
-        </button>
-      </div>
-
       {draft.effectiveOn ? (
         <p className="bp-note bp-note--info" aria-live="polite">
           {asOfContextLine(draft.effectiveOn, formatDate)}
         </p>
-      ) : null}
-
-      {browseMode && state.kind === 'ready' && state.regionIndex ? (
-        <nav className="bp-region-first" aria-label="Jelajah harga berdasarkan provinsi dan kota">
-          <div className="bp-region-first__heading">
-            <strong>Jelajahi wilayah</strong>
-            <span>{state.regionIndex.total} harga di seluruh wilayah</span>
-          </div>
-          {state.regionIndex.provinces.map((province) => (
-            <details className="bp-region-first__province" key={province.id}>
-              <summary>{province.name} <span>{province.priceCount} harga</span></summary>
-              <div className="bp-region-first__cities">
-                {province.provinceOnly.count > 0 ? (
-                  <button type="button" className="bp-region-first__city"
-                    aria-pressed={state.selectedRegionGroup === province.provinceOnly.key}
-                    onClick={() => chooseRegionGroup(province.provinceOnly.key)}>
-                    Berlaku seluruh provinsi <span>{province.provinceOnly.count}</span>
-                  </button>
-                ) : null}
-                {province.cities.map((city) => (
-                  <button type="button" key={city.key} className="bp-region-first__city"
-                    aria-pressed={state.selectedRegionGroup === city.key}
-                    onClick={() => chooseRegionGroup(city.key)}>
-                    {city.name} <span>{city.priceCount}</span>
-                  </button>
-                ))}
-              </div>
-            </details>
-          ))}
-          {state.regionIndex.unverified.count > 0 ? (
-            <button type="button" className="bp-region-first__uncertain"
-              aria-pressed={state.selectedRegionGroup === 'unverified'}
-              title="Hierarki wilayah harga historis belum terverifikasi"
-              onClick={() => chooseRegionGroup('unverified')}>
-              Wilayah belum terverifikasi <span>{state.regionIndex.unverified.count} harga</span>
-            </button>
-          ) : null}
-          {state.regionIndex.general.count > 0 ? (
-            <button type="button" className="bp-region-first__uncertain"
-              aria-pressed={state.selectedRegionGroup === 'general'}
-              onClick={() => chooseRegionGroup('general')}>
-              Umum (tanpa wilayah) <span>{state.regionIndex.general.count} harga</span>
-            </button>
-          ) : null}
-        </nav>
-      ) : null}
-
-      {browseMode && state.kind === 'ready' && state.itemIndex ? (
-        <details className="bp-item-summary" aria-label="Item harga pada wilayah terpilih">
-          <summary className="bp-item-summary__heading">
-            <strong>Pilih item A-Z</strong>
-            <span>{state.itemIndex.totalItems} item · {state.itemIndex.totalPrices} catatan harga</span>
-          </summary>
-          <ul className="bp-item-summary__list">
-            {state.itemIndex.items.map((item) => (
-              <li key={item.id}>
-                <button type="button" className="bp-item-summary__button"
-                  aria-pressed={state.selectedItemId === item.id}
-                  aria-label={`Buka ${item.priceCount} catatan harga ${item.name}${item.duplicateName ? `, kode ${item.code ?? item.id.slice(0, 8)}` : ''}`}
-                  onClick={() => chooseItemGroup(item.id)}>
-                  <span className="bp-item-summary__identity">
-                    <strong>{item.name}</strong>
-                    <small>{resourceTypeLabel(item.type)} · {item.baseUnit}
-                      {item.duplicateName
-                        ? ` · ${item.code ?? 'Ref. ' + item.id.slice(0, 8)}` : ''}
-                    </small>
-                  </span>
-                  <span className="bp-item-summary__count">{item.priceCount} harga</span>
-                </button>
-              </li>
-            ))}
-          </ul>
-          {(state.itemIndex.totalPages ?? 0) > 1 ? (
-            <div className="bp-item-summary__pager" aria-label="Halaman daftar item">
-              <button type="button" disabled={(state.itemIndex.page ?? 1) <= 1}
-                onClick={() => chooseItemPage((state.itemIndex!.page ?? 1) - 1)}>
-                Sebelumnya
-              </button>
-              <span>Item halaman {state.itemIndex.page} dari {state.itemIndex.totalPages}</span>
-              <button type="button"
-                disabled={(state.itemIndex.page ?? 1) >= (state.itemIndex.totalPages ?? 1)}
-                onClick={() => chooseItemPage((state.itemIndex!.page ?? 1) + 1)}>
-                Berikutnya
-              </button>
-            </div>
-          ) : null}
-        </details>
       ) : null}
 
       <div className="bp-tablebar">
@@ -956,10 +792,7 @@ export function BasicPriceExplorerPage() {
                 replaceSelectedIds(new Set());
                 setSelectionNotice(null);
                 setPage(1);
-                setRegionGroup('first');
-    setItemGroup('first');
-    setItemPage(1);
-                setOpenDetailId(null);
+                            setOpenDetailId(null);
                 setDetailNotice(null);
               }}
             >
