@@ -173,6 +173,7 @@ export function ExplorerRegionFilterSelect({
 
         {open ? (
           <div className="bp-pop__panel bp-pop__panel--list">
+            {query.trim().length === 0 ? (
             <ul className="bp-optionlist" role="listbox" aria-label="Cakupan wilayah lainnya">
               <li role="option" aria-selected={selected !== null && 'kind' in selected && selected.kind === 'unverified'}>
                 <button type="button" className="bp-option"
@@ -183,8 +184,8 @@ export function ExplorerRegionFilterSelect({
                     setState('idle');
                     setOpen(false);
                   }}>
-                  Wilayah belum terverifikasi
-                  <small>Hierarki administrasi belum lengkap</small>
+                  <span className="bp-region-option__name">Wilayah belum terverifikasi</span>
+                  <span className="bp-region-option__context">Hierarki administrasi belum lengkap</span>
                 </button>
               </li>
               <li role="option" aria-selected={selected !== null && 'kind' in selected && selected.kind === 'general'}>
@@ -196,10 +197,14 @@ export function ExplorerRegionFilterSelect({
                     setState('idle');
                     setOpen(false);
                   }}>
-                  Umum (tanpa wilayah)
+                  <span className="bp-region-option__name">Umum (tanpa wilayah)</span>
                 </button>
               </li>
             </ul>
+            ) : null}
+            {query.trim().length > 0 ? (
+              <p className="bp-region-option__hint">Pilih wilayah pada daftar untuk memfilter harga.</p>
+            ) : null}
             {state === 'loading' ? (
               <p className="bp-pop__body" role="status">
                 Mencari wilayah...
@@ -228,7 +233,12 @@ export function ExplorerRegionFilterSelect({
                         setOpen(false);
                       }}
                     >
-                      {labels.get(region.id) ?? region.name}
+                      <span className="bp-region-option__name">
+                        {labels.get(region.id) ?? region.name}
+                      </span>
+                      {region.parentName && !(labels.get(region.id) ?? region.name).includes(region.parentName) ? (
+                        <span className="bp-region-option__context">{region.parentName}</span>
+                      ) : null}
                     </button>
                   </li>
                 ))}
