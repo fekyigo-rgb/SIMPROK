@@ -15,7 +15,7 @@ test('BP item summary uses server-authored complete resource counts, not the 50 
   assert.match(service, /this\.prisma\.basicPrice\.groupBy/);
 });
 test('item selection narrows only canonical IDs and preserves 50-row server paging and Detail', () => {
-  assert.match(page, /itemBrowse: 'true'/);
+  assert.match(page, /itemBrowse: browseMode \? 'true' : undefined/);
   assert.match(page, /itemGroup,/);
   assert.match(page, /setItemGroup\(id\)/);
   assert.match(page, /limit: 50/);
