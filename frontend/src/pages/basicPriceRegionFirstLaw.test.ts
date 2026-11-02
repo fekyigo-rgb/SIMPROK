@@ -5,8 +5,8 @@ import { buildExplorerQueryParams } from '../utils/basicPriceExplorerDisplay.ts'
 const page = readFileSync(new URL('./BasicPriceExplorerPage.tsx', import.meta.url), 'utf8');
 const service = readFileSync(new URL('../../../backend/src/basic-price/basic-price.service.ts', import.meta.url), 'utf8');
 
-test('Owner: default region-first navigates the full canonical server grouped index', () => {
-  assert.match(page, /regionBrowse: 'true'/);
+test('Owner: optional region-first navigates the full canonical server grouped index', () => {
+  assert.match(page, /regionBrowse: browseMode \? 'true' : undefined/);
   assert.match(page, /regionGroup,/);
   assert.match(page, /state\.regionIndex\.provinces\.map/);
   assert.match(page, /state\.regionIndex\.unverified\.count/);

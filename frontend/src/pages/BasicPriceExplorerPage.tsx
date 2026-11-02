@@ -202,6 +202,8 @@ export function BasicPriceExplorerPage() {
   // Collection is table-scoped, as is sorting. Empty = unchanged combined list.
   const [collection, setCollection] = useState<'' | 'WORKSPACE_PRIVATE' | 'SIMPROK_CATALOG'>('');
   const [page, setPage] = useState(1);
+  // The original full-price table is the default, with geographic browsing optional.
+  const [browseMode, setBrowseMode] = useState(false);
   /** The first region group is server-selected from the canonical eligible set. */
   const [regionGroup, setRegionGroup] = useState('first');
   const [itemGroup, setItemGroup] = useState('first');
@@ -269,11 +271,11 @@ export function BasicPriceExplorerPage() {
         collection: collection || undefined,
         page,
         limit: 50,
-        regionBrowse: 'true',
-        regionGroup,
-        itemBrowse: 'true',
-        itemGroup,
-        itemPage,
+        regionBrowse: browseMode ? 'true' : undefined,
+        regionGroup: browseMode ? regionGroup : undefined,
+        itemBrowse: browseMode ? 'true' : undefined,
+        itemGroup: browseMode ? itemGroup : undefined,
+        itemPage: browseMode ? itemPage : undefined,
         sortBy,
         sortOrder: sortDirection,
       };
@@ -324,7 +326,7 @@ export function BasicPriceExplorerPage() {
     // eleven fields plus a client-side validity check, so the dependency list
     // could not be stated honestly and the rule was silenced. Four values now
     // decide this request, all four are listed, and the linter agrees.
-  }, [draft, collection, sortOrder, page, reloadNonce, regionGroup, itemGroup, itemPage]);
+  }, [draft, collection, sortOrder, page, reloadNonce, regionGroup, itemGroup, itemPage, browseMode]);
 
   const filtersActive = useMemo(
     () => JSON.stringify(draft) !== JSON.stringify(EMPTY_DRAFT) || collection !== '',
@@ -375,6 +377,19 @@ export function BasicPriceExplorerPage() {
     replaceSelectedIds(new Set());
     setSelectionNotice(null);
     setPage(1);
+    setOpenDetailId(null);
+    setDetailNotice(null);
+  };
+
+  const chooseBrowseMode = (next: boolean) => {
+    if (browseMode === next) return;
+    setBrowseMode(next);
+    setRegionGroup('first');
+    setItemGroup('first');
+    setItemPage(1);
+    setPage(1);
+    replaceSelectedIds(new Set());
+    setSelectionNotice(null);
     setOpenDetailId(null);
     setDetailNotice(null);
   };
@@ -811,13 +826,24 @@ export function BasicPriceExplorerPage() {
         Said once, above the table, and only when a date is actually set —
         a permanent line would be noise on the ordinary present-day view.
       */}
+      <div className="bp-browse-switch" role="group" aria-label="Cara melihat daftar Basic Price">
+        <button type="button" className="bp-browse-switch__button"
+          aria-pressed={!browseMode} onClick={() => chooseBrowseMode(false)}>
+          Semua harga
+        </button>
+        <button type="button" className="bp-browse-switch__button"
+          aria-pressed={browseMode} onClick={() => chooseBrowseMode(true)}>
+          Jelajahi wilayah &amp; item
+        </button>
+      </div>
+
       {draft.effectiveOn ? (
         <p className="bp-note bp-note--info" aria-live="polite">
           {asOfContextLine(draft.effectiveOn, formatDate)}
         </p>
       ) : null}
 
-      {state.kind === 'ready' && state.regionIndex ? (
+      {browseMode && state.kind === 'ready' && state.regionIndex ? (
         <nav className="bp-region-first" aria-label="Jelajah harga berdasarkan provinsi dan kota">
           <div className="bp-region-first__heading">
             <strong>Jelajahi wilayah</strong>
@@ -862,12 +888,12 @@ export function BasicPriceExplorerPage() {
         </nav>
       ) : null}
 
-      {state.kind === 'ready' && state.itemIndex ? (
-        <section className="bp-item-summary" aria-label="Item harga pada wilayah terpilih">
-          <div className="bp-item-summary__heading">
-            <strong>Item A–Z</strong>
+      {browseMode && state.kind === 'ready' && state.itemIndex ? (
+        <details className="bp-item-summary" aria-label="Item harga pada wilayah terpilih">
+          <summary className="bp-item-summary__heading">
+            <strong>Pilih item A-Z</strong>
             <span>{state.itemIndex.totalItems} item · {state.itemIndex.totalPrices} catatan harga</span>
-          </div>
+          </summary>
           <ul className="bp-item-summary__list">
             {state.itemIndex.items.map((item) => (
               <li key={item.id}>
@@ -901,7 +927,7 @@ export function BasicPriceExplorerPage() {
               </button>
             </div>
           ) : null}
-        </section>
+        </details>
       ) : null}
 
       <div className="bp-tablebar">
