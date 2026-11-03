@@ -189,7 +189,7 @@ describe('RAB-AUTO-07 contract: SOURCE FACT → AHSP → COST → CANONICAL RAB 
   it('never calculates a BOQ whose source has no explicitly approved AHSP code', async () => {
     state.sourceAhspCode = null;
     const result = await first.execute(context);
-    expect(result.summary).toEqual({ EXPLICIT_SOURCE_REFERENCE_MISSING: 1 });
+    expect(result.summary).toEqual({ UNCODED_EXACT_WORK_NOT_PROVEN: 1 });
     expect(selection.selectForBoqItem).not.toHaveBeenCalled();
 
     const computed = await price.execute({

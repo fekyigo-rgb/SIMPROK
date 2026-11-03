@@ -32,7 +32,7 @@ import { UNIT_REASON } from '../unit-kernel/unit-kernel.contracts';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import { hasGovernedUnindexedSource, isProvenContextRefreshOccurrence, samePreviouslyDecidedUnindexedWorkFact, sameProvenBoqSourceFact, unindexedWorkSearchTerm } from './rab-auto-source-proof';
-import { explicitAhspSourceProof } from './rab-auto-first-source-reference';
+import { exactUncodedFirstCandidateProven, exactUncodedSearchAnchor, explicitAhspSourceProof } from './rab-auto-first-source-reference';
 import {
   AhspResourceResolutionOrchestrator,
   E1A_RESOLUTION_POLICY_VERSION,
@@ -61,6 +61,8 @@ export interface SelectAhspForBoqItemInput {
   reuseSourceBoqItemId?: string;
   /** Exact, approved BOQ document's source AHSP code (not WBS). */
   firstSourceAhspCode?: string;
+  /** Internal RAB-AUTO-06 first binding for a strict, unique, fully classified uncoded work. */
+  firstUncodedExactWork?: true;
   /** Previously authorized working occurrence being refreshed, never overwritten. */
   refreshSourceOccurrenceId?: string;
   /** Compare the BOQ revision under the project lock to prohibit stale refresh. */
@@ -285,8 +287,9 @@ export class ProjectAhspService {
     projectId: string,
     item: { name: string; unit: string },
     listed: T[],
+    store: Pick<PrismaService, 'projectClassificationSelection' | 'ahspClassificationAssignment'> = this.prisma,
   ): Promise<Array<T & { preference: AhspPreference }>> {
-    const selections = await this.prisma.projectClassificationSelection.findMany({
+    const selections = await store.projectClassificationSelection.findMany({
       where: { projectId },
       select: {
         classificationNode: { select: { id: true, level: true, parentId: true } },
@@ -307,7 +310,7 @@ export class ProjectAhspService {
     const assignments =
       listed.length === 0
         ? []
-        : await this.prisma.ahspClassificationAssignment.findMany({
+        : await store.ahspClassificationAssignment.findMany({
             where: {
               ahspId: { in: listed.map((version) => version.ahsp.id) },
               isActive: true,
@@ -374,6 +377,7 @@ export class ProjectAhspService {
       resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
       ...(input.reuseSourceBoqItemId ? { reuseSourceBoqItemId: input.reuseSourceBoqItemId } : {}),
       ...(input.firstSourceAhspCode ? { firstSourceAhspCode: input.firstSourceAhspCode } : {}),
+      ...(input.firstUncodedExactWork ? { firstUncodedExactWork: true } : {}),
       ...(input.refreshSourceOccurrenceId ? {
         refreshSourceOccurrenceId: input.refreshSourceOccurrenceId,
         refreshExpectedBoqUpdatedAt: input.refreshExpectedBoqUpdatedAt,
@@ -508,7 +512,8 @@ export class ProjectAhspService {
           // Do not reverse engineer prior WBS reuse: without its source ref,
           // reauthorization needs review rather than a fabricated proof.
           const sourceIsExplicit = former.idempotencyKey.startsWith('rab-auto-05-');
-          if (!sourceIsExplicit || item.sourceAhspCode) {
+          const sourceIsUncoded = former.idempotencyKey.startsWith('rab-auto-06-');
+          if (sourceIsUncoded ? !item.sourceAhspCode : (!sourceIsExplicit || item.sourceAhspCode)) {
             originalBoqIdentityProven = former.requestPayloadHash === sha256({
               boqItemId: item.id,
               ahspVersionId: input.ahspVersionId,
@@ -519,6 +524,7 @@ export class ProjectAhspService {
               ...(sourceIsExplicit
                 ? { firstSourceAhspCode: item.sourceAhspCode }
                 : {}),
+              ...(sourceIsUncoded ? { firstUncodedExactWork: true } : {}),
             });
           }
         }
@@ -641,10 +647,14 @@ export class ProjectAhspService {
       // RAB-AUTO-05 — first-time binding: independent explicit BOQ evidence
       // is rechecked under the existing project lock/transaction. A
       // recommendation alone cannot authorize the binding.
-      if (input.firstSourceAhspCode) {
+      if (input.firstSourceAhspCode || input.firstUncodedExactWork) {
         if (item.ahspVersionId || item.workingOccurrenceId ||
             item.calculationOccurrenceId || item.priceOrigin ||
-            item.sourceAhspCode !== input.firstSourceAhspCode) {
+            (input.firstSourceAhspCode
+              ? item.sourceAhspCode !== input.firstSourceAhspCode
+              : item.sourceAhspCode !== null) ||
+            (input.firstSourceAhspCode && input.firstUncodedExactWork) ||
+            (input.firstUncodedExactWork && (input.reuseSourceBoqItemId || input.refreshSourceOccurrenceId))) {
           throw new ConflictException('FIRST_ASSOCIATION_SOURCE_NOT_CURRENT');
         }
         const approvedSource = await tx.boqBusinessUseEvent.findFirst({
@@ -702,6 +712,71 @@ export class ProjectAhspService {
           methodName: version.ahsp.methodName },
       )) {
         throw new ConflictException('FIRST_ASSOCIATION_REFERENCE_MISMATCH');
+      }
+
+      // RAB-AUTO-06: the official writer rechecks the SAME bounded,
+      // complete eligible catalog, current version, classification and Unit
+      // Kernel preference under the project lock. No rank-only authorization.
+      if (input.firstUncodedExactWork) {
+        const anchor = exactUncodedSearchAnchor(item.name);
+        if (anchor.length < 2) {
+          throw new ConflictException('FIRST_UNCODED_WORK_UNSEARCHABLE');
+        }
+        const eligibility = buildEligibleAhspVersionWhere(
+          input.workspaceId, asOf,
+        );
+        const parents = await tx.aHSP.findMany({
+          where: {
+            versions: { some: eligibility },
+            OR: [
+              { code: { contains: anchor, mode: 'insensitive' } },
+              { workType: { contains: anchor, mode: 'insensitive' } },
+              { methodName: { contains: anchor, mode: 'insensitive' } },
+            ],
+          },
+          select: {
+            id: true, workType: true, methodName: true,
+            versions: {
+              where: eligibility,
+              orderBy: [{ versionNumber: 'desc' }, { id: 'asc' }],
+              take: 1,
+              select: {
+                id: true, outputUnit: true,
+                _count: { select: { resources: true } },
+              },
+            },
+          },
+          orderBy: [
+            { workType: 'asc' }, { methodName: 'asc' }, { id: 'asc' },
+          ],
+          take: 51,
+        });
+        if (parents.length > 50) {
+          throw new ConflictException('FIRST_UNCODED_UNIVERSE_INCOMPLETE');
+        }
+        const candidates = parents.flatMap((parent) => {
+          const newest = parent.versions[0];
+          return newest ? [{
+            ...newest,
+            ahsp: {
+              id: parent.id,
+              workType: parent.workType,
+              methodName: parent.methodName,
+            },
+          }] : [];
+        });
+        const ranked = await this.attachProjectPreference(
+          input.projectId, item, candidates, tx,
+        );
+        const proven = ranked.filter((candidate) =>
+          exactUncodedFirstCandidateProven(
+            { sourceAhspCode: item.sourceAhspCode, name: item.name },
+            candidate,
+          ),
+        );
+        if (proven.length !== 1 || proven[0].id !== version.id) {
+          throw new ConflictException('FIRST_UNCODED_EXACT_WORK_NOT_PROVEN');
+        }
       }
 
       const newerApplicable = await tx.aHSPVersion.findFirst({

@@ -34,9 +34,14 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
     expectedUnit: (line.coeff * 100000).toFixed(2),
     expectedTotal: (line.coeff * 100000 * line.qty).toFixed(2),
   }));
+  const uncodedLine = {
+    wbs: '1.7', description: 'Pek. ' + lines[0].description,
+    qty: 2, expectedUnit: '200000.00', expectedTotal: '400000.00',
+  };
   const description = lines[0].description;
   const expectedProjectTotal = lines
-    .reduce((sum, line) => sum + Number(line.expectedTotal), 0)
+    .reduce((sum, line) => sum + Number(line.expectedTotal),
+      Number(uncodedLine.expectedTotal))
     .toFixed(2);
   const resourceName = tag + ' Besi Beton';
   const asOfDate = '2026-10-29';
@@ -360,6 +365,8 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
     for (const line of lines) {
       sheet.addRow([line.wbs, line.description, line.qty, 'Kg', line.code]);
     }
+    sheet.addRow([uncodedLine.wbs, uncodedLine.description,
+      uncodedLine.qty, 'Kg', '']);
     docBuffer = Buffer.from(await workbook.xlsx.writeBuffer());
   }, 90000);
 
@@ -523,7 +530,13 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
     const imported = await prisma.boqItem.findMany({
       where: { boqStructureId: structureId, itemType: 'WORK_ITEM' },
     });
-    expect(imported).toHaveLength(lines.length);
+    expect(imported).toHaveLength(lines.length + 1);
+    const newUncoded = imported.find((row) =>
+      row.name === uncodedLine.description);
+    expect(newUncoded).toBeDefined();
+    expect(newUncoded).toMatchObject({
+      sourceAhspCode: null, unit: 'Kg', priceOrigin: null,
+    });
     for (const line of lines) {
       const item = imported.find((row) => row.name === line.description);
       expect(item).toBeDefined();
@@ -542,7 +555,7 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       initialDraft.body.items.filter(
         (row: { itemType: string }) => row.itemType === 'WORK_ITEM',
       ),
-    ).toHaveLength(lines.length);
+    ).toHaveLength(lines.length + 1);
     expect(initialDraft.body.recap).toMatchObject({
       pricingStatus: 'INCOMPLETE',
       grandTotal: null,
@@ -570,7 +583,7 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
         .send({ businessPricingAsOfDate: asOfDate })
         .expect(201);
       expect(blocked.body.automaticBindingPerformed).toBe(false);
-      expect(blocked.body.summary.PRICE_REGION_NOT_UNIQUE).toBe(lines.length);
+      expect(blocked.body.summary.PRICE_REGION_NOT_UNIQUE).toBe(lines.length + 1);
       expect(
         await prisma.projectAhspOccurrence.count({ where: { projectId } }),
       ).toBe(0);
@@ -596,22 +609,23 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
     expect(chosen.body.summary.FIRST_ASSOCIATION_PROVEN_AND_LINKED).toBe(
       lines.length,
     );
+    expect(chosen.body.summary.FIRST_UNCODED_EXACT_WORK_LINKED).toBe(1);
     expect(chosen.body.automaticBindingPerformed).toBe(true);
     expect(
       await prisma.projectAhspOccurrence.count({ where: { projectId } }),
-    ).toBe(lines.length);
+    ).toBe(lines.length + 1);
 
     const calculated = await request(app.getHttpServer())
       .post(`/projects/${projectId}/rab/auto-price-ready?page=1&limit=25`)
       .set('Authorization', `Bearer ${editorToken}`)
       .send({ calculationAsOfDate: asOfDate })
       .expect(201);
-    expect(calculated.body.counts.calculatedAndPersisted).toBe(lines.length);
+    expect(calculated.body.counts.calculatedAndPersisted).toBe(lines.length + 1);
 
     const saved = await prisma.boqItem.findMany({
       where: { boqStructureId: structureId, itemType: 'WORK_ITEM' },
     });
-    expect(saved).toHaveLength(lines.length);
+    expect(saved).toHaveLength(lines.length + 1);
     let storedTotal = 0;
     for (const line of lines) {
       const item = saved.find((row) => row.name === line.description);
@@ -627,6 +641,15 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       expect(item!.lineTotal?.toFixed(2)).toBe(line.expectedTotal);
       storedTotal += Number(item!.lineTotal!.toFixed(2));
     }
+    const uncodedSaved = saved.find((row) =>
+      row.name === uncodedLine.description);
+    expect(uncodedSaved).toBeDefined();
+    expect(uncodedSaved?.sourceAhspCode).toBeNull();
+    expect(uncodedSaved?.ahspVersionId).toBe(versionIds[0]);
+    expect(uncodedSaved?.priceOrigin).toBe('SERVER_COST_KERNEL');
+    expect(uncodedSaved?.unitPrice?.toFixed(2)).toBe(uncodedLine.expectedUnit);
+    expect(uncodedSaved?.lineTotal?.toFixed(2)).toBe(uncodedLine.expectedTotal);
+    storedTotal += Number(uncodedSaved?.lineTotal?.toFixed(2));
     expect(storedTotal.toFixed(2)).toBe(expectedProjectTotal);
     expect(await prisma.aHSP.count({ where: { id: { in: ahspIds } } })).toBe(
       lines.length,
@@ -647,15 +670,15 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       officialDraft.body.items.filter(
         (row: { itemType: string }) => row.itemType === 'WORK_ITEM',
       ),
-    ).toHaveLength(lines.length);
+    ).toHaveLength(lines.length + 1);
     expect(officialDraft.body.recap).toMatchObject({
       pricingStatus: 'COMPLETE',
       subtotal: expectedProjectTotal,
       marginPercent: '10.00',
-      marginAmount: '1230000.00',
+      marginAmount: '1270000.00',
       taxPercent: '11.00',
-      taxAmount: '1488300.00',
-      grandTotal: '15018300.00',
+      taxAmount: '1536700.00',
+      grandTotal: '15506700.00',
     });
     let verifiedTotal = 0;
     for (const line of lines) {
@@ -690,13 +713,28 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       );
       verifiedTotal += Number(response.body.stored.lineTotal);
     }
+    const persistedUncoded = await request(app.getHttpServer())
+      .get('/projects/' + projectId + '/boq/items/' +
+        uncodedSaved!.id + '/persisted-calculation')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .expect(200);
+    expect(persistedUncoded.body).toMatchObject({
+      status: 'VERIFIED', priceOrigin: 'SERVER_COST_KERNEL',
+      stored: { unitPrice: '200000.00', lineTotal: '400000.00' },
+      recomputed: { unitPrice: '200000.00', lineTotal: '400000.00' },
+      integrity: {
+        unitPriceMatches: true, lineTotalMatches: true,
+        allResourceCostsReproduced: true,
+      },
+    });
+    verifiedTotal += Number(persistedUncoded.body.stored.lineTotal);
     expect(verifiedTotal.toFixed(2)).toBe(expectedProjectTotal);
     const repeated = await request(app.getHttpServer())
       .post(`/projects/${projectId}/rab/auto-price-ready?page=1&limit=25`)
       .set('Authorization', `Bearer ${editorToken}`)
       .send({ calculationAsOfDate: asOfDate })
       .expect(201);
-    expect(repeated.body.results).toHaveLength(lines.length);
+    expect(repeated.body.results).toHaveLength(lines.length + 1);
     expect(
       repeated.body.results.every(
         (row: { status: string }) => row.status === 'ALREADY_CALCULATED',
@@ -704,7 +742,7 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
     ).toBe(true);
     expect(
       await prisma.projectAhspOccurrence.count({ where: { projectId } }),
-    ).toBe(lines.length);
+    ).toBe(lines.length + 1);
   }, 120000);
 
   it('reuses a previously governed AHSP decision for a NO-CODE legacy BOQ and persists RAB via real HTTP and PostgreSQL', async () => {
@@ -804,6 +842,6 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       .send({ calculationAsOfDate: asOfDate })
       .expect(201);
     expect(repeated.body.counts.calculatedAndPersisted).toBe(0);
-    expect(repeated.body.counts.alreadyCalculated).toBe(8);
+    expect(repeated.body.counts.alreadyCalculated).toBe(9);
   }, 120000);
 });
