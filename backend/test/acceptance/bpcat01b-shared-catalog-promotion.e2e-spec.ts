@@ -950,6 +950,9 @@ describe('BP-CAT-01B shared SIMPROK catalog promotion (e2e)', () => {
           },
         })
       ).id;
+      await prisma.projectRegionSelection.create({
+        data: { projectId: ckProjectId, regionId },
+      });
       const consumer = await createActor({
         suffix: 'ckconsumer',
         workspaceId: workspaceBId,

@@ -283,6 +283,9 @@ describe('PAB-03 RAB approval → ACTIVE baseline (e2e)', () => {
       },
     });
     projectIds.push(project.id);
+    await prisma.projectRegionSelection.create({
+      data: { projectId: project.id, regionId },
+    });
     for (const membershipId of membershipBySuffix.values()) {
       // Skip memberships that belong to the other tenant.
       const membership = await prisma.workspaceMembership.findUniqueOrThrow({

@@ -181,6 +181,10 @@ function createHarness(fixture: Fixture) {
         { id: PROJECT_ID, status: 'PLANNED', workspaceId: WORKSPACE_ID },
       ]),
     projectBaseline: { count: jest.fn().mockResolvedValue(0) },
+    projectRegionSelection: {
+      // Existing Preparation choice: the old occurrence remains authorized by default.
+      findFirst: jest.fn().mockResolvedValue({ id: 'project-region-selection-fixture' }),
+    },
     rabDocument: {
       count: jest.fn().mockResolvedValue(0),
       findFirst: rabDocumentFindFirst,
@@ -992,5 +996,68 @@ describe('RabKernelPersistenceService', () => {
       });
       expect(boqItemUpdate).not.toHaveBeenCalled();
     });
+  });
+});
+
+
+describe('RAB-PREP-CONTEXT — reuse current Preparation authority before writing money', () => {
+  it('rejects a frozen occurrence from an old reference region after Preparation changes', async () => {
+    const { service, tx, boqItemUpdate, rabDocumentCreate } =
+      createHarness(withNoOtherItems());
+    // The frozen occurrence and its Basic Price are still valid for
+    // REGION_ID, but that region is no longer selected in Preparation.
+    tx.projectRegionSelection.findFirst.mockResolvedValue(null);
+    await expect(call(service)).rejects.toThrow(
+      RAB_KERNEL_PERSISTENCE_REASON.PROJECT_REGION_CONTEXT_MISMATCH,
+    );
+    expect(tx.projectRegionSelection.findFirst).toHaveBeenCalledWith({
+      where: { projectId: PROJECT_ID, regionId: REGION_ID },
+      select: { id: true },
+    });
+    expect(boqItemUpdate).not.toHaveBeenCalled();
+    expect(rabDocumentCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a historical reference when no active Preparation region is selected', async () => {
+    const { service, tx, boqItemUpdate } = createHarness(withNoOtherItems());
+    tx.projectRegionSelection.findFirst.mockResolvedValue(null);
+    await expect(call(service)).rejects.toThrow(
+      RAB_KERNEL_PERSISTENCE_REASON.PROJECT_REGION_CONTEXT_MISMATCH,
+    );
+    expect(boqItemUpdate).not.toHaveBeenCalled();
+  });
+
+  it('accepts matching Preparation reference with an ancestor Basic Price via existing RAB-36B', async () => {
+    const { service, tx, boqItemUpdate } = createHarness(
+      withNoOtherItems({ basicPrice: buildBasicPrice({ regionId: 'district-fixture' }) }),
+    );
+    const result = await call(service);
+    expect(result.unitPrice).toBe('200000.00');
+    expect(tx.projectRegionSelection.findFirst).toHaveBeenCalledWith({
+      where: { projectId: PROJECT_ID, regionId: REGION_ID },
+      select: { id: true },
+    });
+    expect(boqItemUpdate).toHaveBeenCalledTimes(1);
+  });
+
+  it('uses the occurrence reference among multiple Preparation choices, without selecting an arbitrary other region', async () => {
+    const { service, tx, boqItemUpdate } = createHarness(withNoOtherItems());
+    const currentSelections = [
+      { id: 'selection-other', projectId: PROJECT_ID, regionId: 'other-district' },
+      { id: 'selection-matching', projectId: PROJECT_ID, regionId: REGION_ID },
+    ];
+    tx.projectRegionSelection.findFirst.mockImplementation(
+      async ({ where }: { where: { projectId: string; regionId: string } }) =>
+        currentSelections.find((selection) =>
+          selection.projectId === where.projectId &&
+          selection.regionId === where.regionId) ?? null,
+    );
+    const result = await call(service);
+    expect(result.priceOrigin).toBe('SERVER_COST_KERNEL');
+    expect(tx.projectRegionSelection.findFirst).toHaveBeenCalledWith({
+      where: { projectId: PROJECT_ID, regionId: REGION_ID },
+      select: { id: true },
+    });
+    expect(boqItemUpdate).toHaveBeenCalledTimes(1);
   });
 });

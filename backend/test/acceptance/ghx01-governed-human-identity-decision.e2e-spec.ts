@@ -258,6 +258,10 @@ describe('GHX-01 governed human Resource Identity decision (e2e)', () => {
       data: { code: `${tag}-REG`, name: `${tag} Region`, isActive: true },
     });
     regionId = region.id;
+    // Preparation selections are required by the real RAB writer.
+    await prisma.projectRegionSelection.createMany({
+      data: [projectId, projectTwoId, projectBId].map((projectId) => ({ projectId, regionId })),
+    });
 
     // ---- BOQ working drafts ----
     const makeStructure = async (pid: string) =>
@@ -799,6 +803,9 @@ describe('GHX-01 governed human Resource Identity decision (e2e)', () => {
     if (createdUnitAliasIds.length > 0) {
       await prisma.unitAlias.deleteMany({ where: { id: { in: createdUnitAliasIds } } });
     }
+    await prisma.projectRegionSelection.deleteMany({
+      where: { projectId: { in: allProjectIds } },
+    });
     if (regionId) await prisma.region.deleteMany({ where: { id: regionId } });
 
     await prisma.projectAssignment.deleteMany({
