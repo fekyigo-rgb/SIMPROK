@@ -663,7 +663,9 @@ describe('RAB-AUTO-07 — one authentic first-binding Golden Thread (e2e)', () =
     expect(verification.body).toMatchObject({
       status: 'VERIFIED',
       priceOrigin: 'SERVER_COST_KERNEL',
-      stored: { unitPrice: '200000.00', lineTotal: '1000000.00', unit: 'M1' },
+      // The BOQ source explicitly says M. Unit Kernel proves M == M1,
+      // but neither pricing nor re-proof may rewrite source provenance.
+      stored: { unitPrice: '200000.00', lineTotal: '1000000.00', unit: 'M' },
       recomputed: { unitPrice: '200000.00', lineTotal: '1000000.00' },
       integrity: {
         unitPriceMatches: true,
