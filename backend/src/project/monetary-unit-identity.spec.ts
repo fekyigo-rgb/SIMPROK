@@ -142,3 +142,31 @@ describe('monetary unit identity', () => {
     });
   });
 });
+
+
+describe('RAB one-unit-truth: existing frozen Unit Kernel proof, no second alias dictionary', () => {
+  const frozen = {
+    boqUnitAtSelection: 'm',
+    ahspOutputUnitAtSelection: 'M1',
+    canonicalOutputUnitDefinitionId: '10000000-0000-4000-8000-000000000001',
+  };
+  it('never assumes m and M1 are identical from text alone', () => {
+    expect(monetaryUnitIdentity('m', 'M1').admissible).toBe(false);
+  });
+  it('accepts only the original frozen spelling and nonempty canonical ID', () => {
+    expect(monetaryUnitIdentity('m', 'M1', frozen)).toEqual({
+      admissible: true, outputUnit: 'M1',
+    });
+    expect(monetaryUnitIdentity('M', 'M1', frozen).admissible).toBe(false);
+    expect(monetaryUnitIdentity('m', 'M2', frozen).admissible).toBe(false);
+    expect(monetaryUnitIdentity('m', 'M1', {
+      ...frozen, canonicalOutputUnitDefinitionId: null,
+    }).admissible).toBe(false);
+  });
+  it('never treats missing AHSP output unit as a match, even if proof is supplied', () => {
+    expect(monetaryUnitIdentity('m', null, frozen)).toEqual({
+      admissible: false,
+      refusal: COST_CALCULATION_REASON.MISSING_AHSP_OUTPUT_UNIT,
+    });
+  });
+});

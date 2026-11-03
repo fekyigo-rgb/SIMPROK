@@ -292,7 +292,9 @@ describe('RAB-AUTO-07 — one authentic first-binding Golden Thread (e2e)', () =
         versionNumber: 1,
         status: 'DRAFT',
         effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
-        outputUnit: 'Kg',
+        // BOQ uses M while AHSP output uses M1: the Unit Kernel alone
+        // proves one canonical metre, without a conversion engine.
+        outputUnit: 'M1',
         resources: {
           create: [
             {
@@ -318,7 +320,7 @@ describe('RAB-AUTO-07 — one authentic first-binding Golden Thread (e2e)', () =
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('RAB');
     sheet.addRow(['No', 'Uraian Pekerjaan', 'Volume', 'Satuan', 'Kode AHSP']);
-    sheet.addRow(['1.1', description, 5, 'Kg', 'B.64']);
+    sheet.addRow(['1.1', description, 5, 'M', 'B.64']);
     docBuffer = Buffer.from(await workbook.xlsx.writeBuffer());
   }, 90000);
 
@@ -503,7 +505,7 @@ describe('RAB-AUTO-07 — one authentic first-binding Golden Thread (e2e)', () =
     boqItemId = item.id;
     expect(item.sourceAhspCode).toBe('B.64');
     expect(item.name).toBe(description);
-    expect(item.unit).toBe('Kg');
+    expect(item.unit).toBe('M');
     expect(item.priceOrigin).toBeNull();
 
     // The exact same BOQ must refuse an ambiguous pricing region BEFORE
@@ -561,6 +563,16 @@ describe('RAB-AUTO-07 — one authentic first-binding Golden Thread (e2e)', () =
     });
     expect(linked.ahspVersionId).toBe(versionId);
     expect(linked.workingOccurrenceId).not.toBeNull();
+    const outputUnitProof = await prisma.projectAhspOccurrence.findUniqueOrThrow({
+      where: { id: linked.workingOccurrenceId! },
+    });
+    expect(outputUnitProof.boqUnitAtSelection).toBe('M');
+    expect(outputUnitProof.ahspOutputUnitAtSelection).toBe('M1');
+    expect(outputUnitProof.canonicalOutputUnitDefinitionId).toBeTruthy();
+    const canonicalUnit = await prisma.unitDefinition.findUniqueOrThrow({
+      where: { id: outputUnitProof.canonicalOutputUnitDefinitionId! },
+    });
+    expect(canonicalUnit.code).toBe('M1');
     expect(
       await prisma.projectAhspOccurrence.count({
         where: { projectId, ahspVersionId: versionId },
@@ -651,7 +663,7 @@ describe('RAB-AUTO-07 — one authentic first-binding Golden Thread (e2e)', () =
     expect(verification.body).toMatchObject({
       status: 'VERIFIED',
       priceOrigin: 'SERVER_COST_KERNEL',
-      stored: { unitPrice: '200000.00', lineTotal: '1000000.00', unit: 'Kg' },
+      stored: { unitPrice: '200000.00', lineTotal: '1000000.00', unit: 'M1' },
       recomputed: { unitPrice: '200000.00', lineTotal: '1000000.00' },
       integrity: {
         unitPriceMatches: true,

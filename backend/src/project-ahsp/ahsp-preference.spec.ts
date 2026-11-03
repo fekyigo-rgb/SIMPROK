@@ -281,3 +281,47 @@ describe('RI-01 review: preserve dimensional evidence and bounded search claims'
     expect(page.preference.band).toBe(all.preference.band);
   });
 });
+
+
+describe('RAB-AUTO terminology — Pek. = Pekerjaan only as a leading work heading', () => {
+  const fullPath = [{
+    kategoriId: BINA,
+    subkategoriId: JALAN,
+    jenisPekerjaan: 'Pekerjaan Pengecatan Dinding Beton Sandaran',
+    label: 'Pengecatan Dinding Beton Sandaran',
+  }];
+  const item = candidate(
+    'J.75', 'Pekerjaan Pengecatan Dinding Beton Sandaran',
+    fullPath, true, 'Metode standar',
+  );
+  it.each([
+    'Pek.Pengecatan Dinding Beton Sandaran',
+    'pek. Pengecatan Dinding Beton Sandaran',
+    'PEK.PENGECATAN DINDING BETON SANDARAN',
+    'Pekerjaan Pengecatan Dinding Beton Sandaran',
+    'PEKERJAAN PENGECATAN DINDING BETON SANDARAN',
+  ])('recommends J.75 for safe equivalent heading %s', (name) => {
+    const [ranked] = rankAhspPreference([item], {
+      selectedKategoriIds: [BINA], selectedSubkategoriIds: [JALAN], boqName: name,
+    });
+    expect(ranked.preference.recommended).toBe(true);
+  });
+  it.each([
+    'Pek. Pengecatan Dinding Baja Sandaran',
+    'Pek. Pengecatan Dinding Beton 20 cm Sandaran',
+    'Pek. Pengecatan Dinding Beton Sandaran Metode Khusus',
+  ])('does not erase work-changing specification in %s', (name) => {
+    const [ranked] = rankAhspPreference([item], {
+      selectedKategoriIds: [BINA], selectedSubkategoriIds: [JALAN], boqName: name,
+    });
+    expect(ranked.preference.recommended).toBe(false);
+  });
+  it('a suggestion is still rejected when Unit Kernel says unit is not compatible', () => {
+    const [ranked] = rankAhspPreference([{ ...item, unitCompatible: false }], {
+      selectedKategoriIds: [BINA],
+      selectedSubkategoriIds: [JALAN],
+      boqName: 'Pek.Pengecatan Dinding Beton Sandaran',
+    });
+    expect(ranked.preference.recommended).toBe(false);
+  });
+});

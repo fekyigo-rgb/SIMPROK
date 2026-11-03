@@ -486,7 +486,39 @@ export class RabKernelPersistenceService {
         }
       }
 
-      // 9. The existing Cost Kernel, unchanged — exact Decimal, no
+      // 9. An occurrence may carry the existing Unit Kernel's identity proof
+      // for differently spelled but zero-conversion output units. Re-prove
+      // that immutable assertion against the CURRENT one Unit Kernel under
+      // this locked transaction, before any money is persisted. Cost Kernel
+      // remains Grade A and never calls an alias resolver itself.
+      if (occurrence.canonicalOutputUnitDefinitionId) {
+        if (
+          occurrence.boqUnitAtSelection !== item.unit ||
+          !ahspVersion.outputUnit ||
+          occurrence.ahspOutputUnitAtSelection !== ahspVersion.outputUnit
+        ) {
+          throw new ConflictException(COST_CALCULATION_REASON.BOQ_AHSP_UNIT_MISMATCH);
+        }
+        const identities = await new UnitKernelService(
+          tx as never,
+        ).resolveCanonicalUnitIdentities(
+          [item.unit, ahspVersion.outputUnit], undefined, tx,
+        );
+        const boq = identities.find((row) => row.rawUnit === item.unit);
+        const output = identities.find((row) => row.rawUnit === ahspVersion.outputUnit);
+        if (
+          boq?.status !== 'RESOLVED' ||
+          output?.status !== 'RESOLVED' ||
+          boq.unitDefinition?.id !== occurrence.canonicalOutputUnitDefinitionId ||
+          output.unitDefinition?.id !== occurrence.canonicalOutputUnitDefinitionId ||
+          (ahspVersion.outputUnitDefinitionId &&
+            ahspVersion.outputUnitDefinitionId !== occurrence.canonicalOutputUnitDefinitionId)
+        ) {
+          throw new ConflictException(COST_CALCULATION_REASON.BOQ_AHSP_UNIT_MISMATCH);
+        }
+      }
+
+      // 10. The same existing Cost Kernel, pure Grade A — exact Decimal, no
       // intermediate rounding.
       const kernelResult = calculateCostKernel({
         boqItemId: item.id,
@@ -497,6 +529,11 @@ export class RabKernelPersistenceService {
         volume: item.quantity.toString(),
         boqUnit: item.unit,
         outputUnit: ahspVersion?.outputUnit ?? null,
+        frozenOutputUnitProof: {
+          boqUnitAtSelection: occurrence.boqUnitAtSelection,
+          ahspOutputUnitAtSelection: occurrence.ahspOutputUnitAtSelection,
+          canonicalOutputUnitDefinitionId: occurrence.canonicalOutputUnitDefinitionId,
+        },
         ownershipMatches: true,
         resources,
       });

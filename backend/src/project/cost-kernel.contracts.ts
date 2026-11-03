@@ -36,6 +36,8 @@ export interface CostKernelResourceInput {
   adaptedPriceValue: string | null;
 }
 
+import type { FrozenMonetaryUnitProof } from './monetary-unit-identity';
+
 export interface CostKernelInput {
   boqItemId: string;
   ahspVersionId: string | null;
@@ -45,6 +47,9 @@ export interface CostKernelInput {
   volume: string;
   boqUnit: string;
   outputUnit: string | null;
+  /** Immutable proof from the official AHSP occurrence; legacy NULL means
+   * use the existing exact-string monetary unit identity law. */
+  frozenOutputUnitProof?: FrozenMonetaryUnitProof | null;
   ownershipMatches: boolean;
   resources: readonly CostKernelResourceInput[];
 }

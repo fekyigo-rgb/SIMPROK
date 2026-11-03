@@ -329,3 +329,44 @@ describe('Cost Kernel Grade A R1', () => {
     );
   });
 });
+
+
+describe('Cost Kernel Grade A consumes existing frozen Unit Kernel identity without resolving aliases', () => {
+  const sameUnitProof = {
+    boqUnitAtSelection: 'm',
+    ahspOutputUnitAtSelection: 'M1',
+    canonicalOutputUnitDefinitionId: '10000000-0000-4000-8000-000000000001',
+  };
+  it('prices a canonical zero-conversion alias pair only with matching frozen proof', () => {
+    const legacy = calculateCostKernel({ ...makeInput(), boqUnit: 'm', outputUnit: 'M1' });
+    expect(legacy).toMatchObject({
+      status: COST_CALCULATION_STATUS.FAIL_CLOSED,
+      reason: COST_CALCULATION_REASON.BOQ_AHSP_UNIT_MISMATCH,
+    });
+    const proven = calculateCostKernel({
+      ...makeInput(),
+      boqUnit: 'm', outputUnit: 'M1',
+      frozenOutputUnitProof: sameUnitProof,
+    });
+    expect(proven).toMatchObject({
+      status: COST_CALCULATION_STATUS.CALCULATED,
+      ahspUnitPrice: '2004055',
+      lineTotal: '20040550',
+      outputUnit: 'M1',
+    });
+  });
+  it('never permits an old frozen proof to authorize changed BOQ or AHSP units', () => {
+    for (const changed of [
+      { boqUnit: 'M2', outputUnit: 'M1' },
+      { boqUnit: 'm', outputUnit: 'M3' },
+      { boqUnit: 'PERSON_HOUR', outputUnit: 'HOUR' },
+    ]) {
+      expect(calculateCostKernel({
+        ...makeInput(), ...changed, frozenOutputUnitProof: sameUnitProof,
+      })).toMatchObject({
+        status: COST_CALCULATION_STATUS.FAIL_CLOSED,
+        reason: COST_CALCULATION_REASON.BOQ_AHSP_UNIT_MISMATCH,
+      });
+    }
+  });
+});

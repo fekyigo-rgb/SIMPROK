@@ -714,9 +714,40 @@ export class ProjectAhspService {
       // any of them would persist a relationship that can never produce money.
       // This is THE same function the Cost Kernel itself asks, so what binds
       // here is exactly what calculates there.
+      // A canonical Unit Kernel identity is distinct from conversion. When
+      // the historical monetary string gate would reject harmless spellings,
+      // resolve BOTH raw units through the ONE existing Unit Kernel under the
+      // project transaction, and freeze that single UnitDefinition identity.
+      // Do NOT rewrite source units or mint a second alias dictionary.
+      let frozenOutputUnitProof: {
+        boqUnitAtSelection: string;
+        ahspOutputUnitAtSelection: string;
+        canonicalOutputUnitDefinitionId: string;
+      } | null = null;
+      const strictIdentity = monetaryUnitIdentity(item.unit, version.outputUnit);
+      if (!strictIdentity.admissible && version.outputUnit) {
+        const identities = await this.units.resolveCanonicalUnitIdentities(
+          [item.unit, version.outputUnit], undefined, tx,
+        );
+        const boqProof = identities.find((row) => row.rawUnit === item.unit);
+        const outputProof = identities.find((row) => row.rawUnit === version.outputUnit);
+        if (
+          boqProof?.status === 'RESOLVED' &&
+          outputProof?.status === 'RESOLVED' &&
+          boqProof.unitDefinition?.id &&
+          boqProof.unitDefinition.id === outputProof.unitDefinition?.id &&
+          (!version.outputUnitDefinitionId ||
+            version.outputUnitDefinitionId === boqProof.unitDefinition.id)
+        ) {
+          frozenOutputUnitProof = {
+            boqUnitAtSelection: item.unit,
+            ahspOutputUnitAtSelection: version.outputUnit,
+            canonicalOutputUnitDefinitionId: boqProof.unitDefinition.id,
+          };
+        }
+      }
       const monetaryIdentity = monetaryUnitIdentity(
-        item.unit,
-        version.outputUnit,
+        item.unit, version.outputUnit, frozenOutputUnitProof,
       );
       if (!monetaryIdentity.admissible) {
         throw new ConflictException(monetaryIdentity.refusal);
@@ -789,6 +820,10 @@ export class ProjectAhspService {
           referenceRegionId: input.referenceRegionId,
           resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
           requestPayloadHash,
+          // Frozen positive Unit Kernel proof for equivalent BOQ/AHSP
+          // spellings, retained alongside the same immutable occurrence.
+          // Old occurrences remain NULL and obey strict monetary identity.
+          ...(frozenOutputUnitProof ?? {}),
           generation: (previous?.generation ?? 0) + 1,
           previousOccurrenceId: input.refreshSourceOccurrenceId ?? previous?.id ?? null,
           resolutionContentFingerprint: fingerprint,

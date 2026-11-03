@@ -324,3 +324,33 @@ describe('RAB-AUTO existing selection context refresh — same canonical writer,
     expect(result.automaticBindingPerformed).toBe(false);
   });
 });
+
+
+describe('RAB-AUTO source-fact terminology law', () => {
+  const sameWbs = {
+    wbsNodeId: 'canonical-wbs-id',
+    wbsCode: '4.1',
+    name: 'Pekerjaan Pengecatan Dinding Beton Sandaran',
+    unit: 'm2',
+  };
+  it.each([
+    'Pek.Pengecatan Dinding Beton Sandaran',
+    'pek. Pengecatan Dinding Beton Sandaran',
+    'PEK. PENGECATAN DINDING BETON SANDARAN',
+    'Pekerjaan Pengecatan Dinding Beton Sandaran',
+  ])('recognizes proven same-WBS work heading: %s', (value) => {
+    expect(sameProvenBoqSourceFact(sameWbs, { ...sameWbs, name: value })).toBe(true);
+  });
+  it('refuses to turn wording equivalence into source identity without a proven WBS id', () => {
+    expect(sameProvenBoqSourceFact(
+      { ...sameWbs, wbsNodeId: null },
+      { ...sameWbs, name: 'Pek.Pengecatan Dinding Beton Sandaran', wbsNodeId: null },
+    )).toBe(false);
+  });
+  it.each([
+    'Pek.Pengecatan Dinding Baja Sandaran',
+    'Pek.Pengecatan Dinding Beton Sandaran 30 cm',
+  ])('keeps meaning-bearing specifications distinct: %s', (name) => {
+    expect(sameProvenBoqSourceFact(sameWbs, { ...sameWbs, name })).toBe(false);
+  });
+});
