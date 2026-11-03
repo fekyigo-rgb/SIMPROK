@@ -247,6 +247,7 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
       },
     });
     projectId = project.id;
+    await prisma.projectRegionSelection.create({ data: { projectId, regionId } });
 
     const owner = await createActor({
       suffix: 'owner',
@@ -455,6 +456,7 @@ describe('RM-03C workspace-private Basic Price (e2e)', () => {
     await prisma.resourceCatalog.deleteMany({
       where: { code: { startsWith: tag } },
     });
+    await prisma.projectRegionSelection.deleteMany({ where: { projectId } });
     await prisma.region.deleteMany({
       where: { id: { in: [regionId, otherRegionId] } },
     });

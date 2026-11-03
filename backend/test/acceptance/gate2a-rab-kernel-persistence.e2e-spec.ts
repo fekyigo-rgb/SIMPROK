@@ -291,6 +291,15 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
         name: `${tag} Fallback Region Project`, status: 'PLANNED' },
     });
     fallbackProjectId = fallbackProject.id;
+    // The persisted occurrence must be authorized by current Preparation.
+    await prisma.projectRegionSelection.createMany({
+      data: [
+        { projectId, regionId },
+        { projectId: negativeProjectId, regionId },
+        { projectId: mismatchProjectId, regionId },
+        { projectId: fallbackProjectId, regionId: fallbackChildRegionId },
+      ],
+    });
 
     const rabEditor = await createActor(
       'editor',
@@ -500,6 +509,9 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
     await prisma.priceSubmissionAudit.deleteMany({ where: { submissionId } });
     await prisma.priceSubmissionRevision.deleteMany({ where: { submissionId } });
     await prisma.priceSubmission.deleteMany({ where: { id: submissionId } });
+    await prisma.projectRegionSelection.deleteMany({
+      where: { projectId: { in: allProjectIds } },
+    });
     await prisma.region.deleteMany({ where: { id: fallbackChildRegionId } });
     await prisma.region.deleteMany({ where: { id: regionId } });
 
@@ -533,6 +545,36 @@ describe('GATE-2A traceable RAB kernel persistence (e2e)', () => {
     expect(price.sourceSubmissionId).toBe(submissionId);
     expect(price.status).toBe('PUBLISHED');
     expect(price.verificationStatus).toBe('PUBLISHED');
+  });
+
+  it('RAB-PREP-CONTEXT: refuses an old occurrence after Preparation changes district, without writing money', async () => {
+    // Real isolated PostgreSQL and authenticated HTTP, using the same
+    // project, occurrence and verified price as the next positive test.
+    const before = await prisma.boqItem.findUniqueOrThrow({ where: { id: boqItemId } });
+    expect(before.priceOrigin).toBeNull();
+    await prisma.projectRegionSelection.updateMany({
+      where: { projectId, regionId },
+      data: { regionId: fallbackChildRegionId },
+    });
+    try {
+      const denied = await request(app.getHttpServer())
+        .post(`/projects/${projectId}/boq/items/${boqItemId}/cost-calculation/persist`)
+        .set('Authorization', `Bearer ${rabEditorToken}`)
+        .send({ calculationAsOfDate: '2026-07-31' })
+        .expect(409);
+      expect(denied.body.message).toBe('PROJECT_REGION_CONTEXT_MISMATCH');
+      const unchanged = await prisma.boqItem.findUniqueOrThrow({ where: { id: boqItemId } });
+      expect(unchanged.priceOrigin).toBeNull();
+      expect(unchanged.unitPrice).toBeNull();
+      expect(unchanged.calculationOccurrenceId).toBeNull();
+      expect(unchanged.workingOccurrenceId).toBe(before.workingOccurrenceId);
+    } finally {
+      // Restore Preparation before other cases; immutable occurrence untouched.
+      await prisma.projectRegionSelection.updateMany({
+        where: { projectId, regionId: fallbackChildRegionId },
+        data: { regionId },
+      });
+    }
   });
 
   it('persists one server-computed RAB line and exact complete RAB totals from one traceable Basic Price', async () => {

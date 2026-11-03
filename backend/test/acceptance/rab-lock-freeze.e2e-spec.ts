@@ -221,6 +221,10 @@ describe('RM-03D1 RAB lock / freeze (e2e)', () => {
       },
     });
     projectIds.push(project.id);
+    // This is the saved Preparation authority for the fixture's occurrence.
+    await prisma.projectRegionSelection.create({
+      data: { projectId: project.id, regionId },
+    });
     // Project access is per-assignment: the actors are created before any
     // project exists, so each new project must admit them explicitly.
     for (const membershipId of membershipBySuffix.values()) {
@@ -487,6 +491,10 @@ describe('RM-03D1 RAB lock / freeze (e2e)', () => {
       },
     });
     projectIds.push(project.id);
+    // This is the saved Preparation authority for the fixture's occurrence.
+    await prisma.projectRegionSelection.create({
+      data: { projectId: project.id, regionId },
+    });
     for (const membershipId of membershipBySuffix.values()) {
       await prisma.projectAssignment.create({
         data: {
