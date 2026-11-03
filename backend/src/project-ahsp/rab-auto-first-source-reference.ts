@@ -1,3 +1,5 @@
+import { normalizeWorkHeadingForEvidence } from './ahsp-preference';
+
 /**
  * RAB-AUTO-05: proof of an EXPLICIT, approved source reference, not a
  * name-based AHSP matcher. Both identity channels must be independently
@@ -50,8 +52,6 @@ export function explicitAhspSourceProof(
  * preferred canonical classification, Unit Kernel identity and a current
  * approved BOQ source. The canonical transaction writer repeats these gates.
  */
-import { normalizeWorkHeadingForEvidence } from './ahsp-preference';
-
 const fullWorkFact = (raw: string): string =>
   normalizeWorkHeadingForEvidence(raw)
     .replace(/^Pekerjaan\s+/iu, '')

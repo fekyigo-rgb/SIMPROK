@@ -1819,13 +1819,15 @@ export function RabWorkspacePage() {
     setIsReusingProven(true);
     setAutoReuseNotice(null);
     let firstBound = 0;
+    let uncodedBound = 0;
     let reused = 0;
     let refreshed = 0;
     let reviewed = 0;
     try {
-      // First use the Owner-approved BOQ's EXPLICIT AHSP reference where
-      // the server proves code, full specification, unit, region and version.
-      // Existing BOQs without such source evidence remain unchanged.
+      // Reuse the existing source-approved first-association command. It
+      // proves explicit codes OR uniquely identical uncoded full-work facts
+      // with canonical Unit Kernel/classification, then revalidates in writer.
+      // Ambiguous BOQ rows are not linked or given fabricated prices.
       for (let page = 1; page <= 20; page++) {
         const query = new URLSearchParams({ page: String(page), limit: '25' });
         const response = await apiFetch(
@@ -1851,6 +1853,8 @@ export function RabWorkspacePage() {
         }
         firstBound += payload.results.filter((row: { kind: string }) =>
           row.kind === 'FIRST_ASSOCIATION_PROVEN_AND_LINKED').length;
+        uncodedBound += payload.results.filter((row: { kind: string }) =>
+          row.kind === 'FIRST_UNCODED_EXACT_WORK_LINKED').length;
         if (draftRevisionRef.current !== startedRevision ||
             currentProjectIdRef.current !== startedProject) {
           setStatusMessage('Draft berubah selama pemeriksaan. Simpan perubahan lokal sebelum memuat ulang hasil server.');
@@ -1894,9 +1898,9 @@ export function RabWorkspacePage() {
           return;
         }
         if (!payload.hasNext) {
-          const totalLinked = firstBound + reused + refreshed;
+          const totalLinked = firstBound + uncodedBound + reused + refreshed;
           const message = totalLinked > 0
-            ? `${firstBound} hubungan AHSP terbukti dari referensi BOQ yang disetujui, ${reused} keputusan terdahulu dipakai ulang, ${refreshed} occurrence dievaluasi ulang sesuai konteks Persiapan terbaru. Harga selanjutnya diperiksa oleh Cost Kernel; sisanya tetap menunggu bukti.`
+            ? `${firstBound} hubungan AHSP dari kode sumber BOQ, ${uncodedBound} hubungan pertama tanpa kode terbukti cocok secara lengkap, ${reused} keputusan terdahulu dipakai ulang, ${refreshed} occurrence dievaluasi ulang. Harga diperiksa Cost Kernel; sisanya tetap menunggu bukti.`
             : `${reviewed} baris diperiksa. Tidak ada hubungan AHSP atau occurrence baru yang dapat dibuktikan. Yang sudah sah tetap dipertahankan; sisanya menunggu bukti. SIMPROK tidak menebak pasangan atau harga.`;
           setAutoReuseNotice({ projectId: startedProject, date: calculationAsOfDate, message });
           setStatusMessage(message);

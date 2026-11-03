@@ -644,9 +644,9 @@ export class ProjectAhspService {
             }
           }
 
-      // RAB-AUTO-05 — first-time binding: independent explicit BOQ evidence
-      // is rechecked under the existing project lock/transaction. A
-      // recommendation alone cannot authorize the binding.
+      // RAB-AUTO-05/06 — first association: approved BOQ source, exact
+      // code OR bounded uncoded complete-work proof. Both are independently
+      // rechecked under the project lock. Recommendation alone never binds.
       if (input.firstSourceAhspCode || input.firstUncodedExactWork) {
         if (item.ahspVersionId || item.workingOccurrenceId ||
             item.calculationOccurrenceId || item.priceOrigin ||

@@ -17,7 +17,8 @@ test('RAB-level automation connects first-source proof before proven-reuse then 
 });
 
 test('does not trigger pricing unless canonical association actually succeeded', () => {
-  assert.match(journey, /const totalLinked = firstBound \+ reused/);
+  assert.match(journey, /row.kind === 'FIRST_UNCODED_EXACT_WORK_LINKED'/);
+  assert.match(journey, /const totalLinked = firstBound \+ uncodedBound \+ reused/);
   assert.match(journey, /if \(totalLinked > 0\) \{\s*await handleAutoPriceReady\(\)/);
   assert.match(journey, /!workingDraftLoaded \|\| !canEditDraft/);
   assert.match(journey, /draftDirty \|\| isReusingProven \|\| isAutoPricing/);

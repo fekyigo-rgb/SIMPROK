@@ -7,11 +7,12 @@ import { exactUncodedFirstCandidateProven, exactUncodedSearchAnchor, explicitAhs
 import { createHash } from 'crypto';
 
 /**
- * RAB-AUTO-05: first association ONLY from a human-approved BOQ source's
- * EXPLICIT "Kode AHSP" column, with exact full description, eligible current
- * formula, Unit Kernel/classification recommendation, and ONE selected
- * project price region. Reuse the existing official selectForBoqItem writer;
- * no source reference => NO autonomous first identity.
+ * RAB-AUTO-05/06: one existing first-association orchestrator. The approved
+ * BOQ may provide an explicit AHSP code, OR an uncoded complete work fact
+ * may have exactly one eligible, identically worded AHSP with canonical
+ * preferred classification and Unit Kernel proof. This is a narrowly bounded
+ * automatic policy, not a similarity-score or cross-category guess.
+ * Every selection is re-proven in the existing transactional writer.
  */
 @Injectable()
 export class RabAutoFirstBindService {
