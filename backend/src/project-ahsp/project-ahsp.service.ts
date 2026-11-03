@@ -32,7 +32,7 @@ import { UNIT_REASON } from '../unit-kernel/unit-kernel.contracts';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import { hasGovernedUnindexedSource, isProvenContextRefreshOccurrence, samePreviouslyDecidedUnindexedWorkFact, sameProvenBoqSourceFact, unindexedWorkSearchTerm } from './rab-auto-source-proof';
-import { exactUncodedFirstCandidateProven, exactUncodedSearchAnchor, explicitAhspSourceProof } from './rab-auto-first-source-reference';
+import { exactUncodedFirstCandidateProven, exactUncodedSearchAnchor, exactUncodedWorkFact, explicitAhspSourceProof } from './rab-auto-first-source-reference';
 import {
   AhspResourceResolutionOrchestrator,
   E1A_RESOLUTION_POLICY_VERSION,
@@ -210,6 +210,9 @@ export class ProjectAhspService {
         code: true,
         workType: true,
         methodName: true,
+        methodType: true,
+        locationType: true,
+        keterangan: true,
         workspaceId: true,
         ownershipType: true,
         versions: {
@@ -241,6 +244,8 @@ export class ProjectAhspService {
         ahsp: {
           id: ahsp.id, code: ahsp.code,
           workType: ahsp.workType, methodName: ahsp.methodName,
+          methodType: ahsp.methodType, locationType: ahsp.locationType,
+          keterangan: ahsp.keterangan,
         },
       }];
     });
@@ -350,7 +355,16 @@ export class ProjectAhspService {
       selectedKategoriIds,
       selectedSubkategoriIds,
       boqName: item.name,
-    }).map(({ sourceVersion, preference }) => ({ ...sourceVersion, preference }));
+    }).map(({ sourceVersion, preference }) => ({
+      ...sourceVersion,
+      preference,
+      // Ranking is NOT authority. A chosen subcategory cannot be replaced
+      // by a broader category during first automatic identity assignment.
+      uncodedClassificationScopeProven:
+        !selections.some((selection) =>
+          selection.classificationNode.level === 'SUBKATEGORI') ||
+        preference.band === 'PREFERRED_SUBKATEGORI',
+    }));
   }
 
   listActiveRegions() {
@@ -411,6 +425,9 @@ export class ProjectAhspService {
         // Existing manual/explicit-source idempotent behavior is unchanged.
         if (input.refreshSourceOccurrenceId) {
           throw new ConflictException('RAB_AUTO_REFRESH_REPLAY_REQUIRES_FRESH_READ');
+        }
+        if (input.firstUncodedExactWork) {
+          throw new ConflictException('FIRST_UNCODED_REPLAY_REQUIRES_FRESH_READ');
         }
         return replay;
       }
@@ -513,7 +530,10 @@ export class ProjectAhspService {
           // reauthorization needs review rather than a fabricated proof.
           const sourceIsExplicit = former.idempotencyKey.startsWith('rab-auto-05-');
           const sourceIsUncoded = former.idempotencyKey.startsWith('rab-auto-06-');
-          if (sourceIsUncoded ? !item.sourceAhspCode : (!sourceIsExplicit || item.sourceAhspCode)) {
+          // The historic uncoded association hash binds the BOQ id but NOT
+          // its exact work text. A later text/spec edit must not inherit
+          // automatic authority merely by reusing that id. Fail closed.
+          if (!sourceIsUncoded && (!sourceIsExplicit || item.sourceAhspCode)) {
             originalBoqIdentityProven = former.requestPayloadHash === sha256({
               boqItemId: item.id,
               ahspVersionId: input.ahspVersionId,
@@ -736,6 +756,7 @@ export class ProjectAhspService {
           },
           select: {
             id: true, workType: true, methodName: true,
+            methodType: true, locationType: true, keterangan: true,
             versions: {
               where: eligibility,
               orderBy: [{ versionNumber: 'desc' }, { id: 'asc' }],
@@ -762,19 +783,30 @@ export class ProjectAhspService {
               id: parent.id,
               workType: parent.workType,
               methodName: parent.methodName,
+              methodType: parent.methodType,
+              locationType: parent.locationType,
+              keterangan: parent.keterangan,
             },
           }] : [];
         });
         const ranked = await this.attachProjectPreference(
           input.projectId, item, candidates, tx,
         );
-        const proven = ranked.filter((candidate) =>
-          exactUncodedFirstCandidateProven(
+        // Count all exact eligible method labels BEFORE applying category,
+        // resource or unit gates. Another method with the same words is
+        // genuine source ambiguity even if the preference would reject it.
+        const exactWork = ranked.filter((candidate) =>
+          exactUncodedWorkFact(
             { sourceAhspCode: item.sourceAhspCode, name: item.name },
-            candidate,
+            candidate.ahsp,
           ),
         );
-        if (proven.length !== 1 || proven[0].id !== version.id) {
+        if (exactWork.length !== 1 ||
+            exactWork[0].id !== version.id ||
+            !exactUncodedFirstCandidateProven(
+              { sourceAhspCode: item.sourceAhspCode, name: item.name },
+              exactWork[0],
+            )) {
           throw new ConflictException('FIRST_UNCODED_EXACT_WORK_NOT_PROVEN');
         }
       }

@@ -30,10 +30,13 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
     ahsp: {
       code: 'B.64',
       workType: 'Saluran U Pracetak',
+      methodType: 'MANUAL',
+      locationType: 'GENERAL',
       methodName:
         'Saluran U Pracetak Tipe DS 10A (140 cm x 140 cm dengan tutup)',
     },
     preference: { recommended: true },
+    uncodedClassificationScopeProven: true,
     ...extra,
   });
   let prisma: {
@@ -188,6 +191,10 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
       } },
       { ...good, outputUnit: null },
       { ...good, _count: { resources: 0 } },
+      { ...good, uncodedClassificationScopeProven: false },
+      { ...good, ahsp: { ...good.ahsp, methodType: 'MECHANICAL' } },
+      { ...good, ahsp: { ...good.ahsp, locationType: 'SWAMP' } },
+      { ...good, ahsp: { ...good.ahsp, keterangan: 'Khusus struktur basah' } },
       { ...good, ahsp: {
         ...good.ahsp, methodName: good.ahsp.methodName.replace('10A', '10B'),
       } },
@@ -201,6 +208,25 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
     ahsp.searchEligibleVersions.mockResolvedValue({
       hasNext: false,
       items: [good, { ...good, id: 'another-approved-version' }],
+    });
+    expect((await service.execute(input)).summary)
+      .toEqual({ UNCODED_EXACT_WORK_AMBIGUOUS: 1 });
+    // Another exact AHSP cannot disappear just because the project's
+    // preference ranks its classification as a fallback.
+    ahsp.searchEligibleVersions.mockResolvedValue({
+      hasNext: false,
+      items: [
+        good,
+        {
+          ...good,
+          id: 'other-class-same-method',
+          uncodedClassificationScopeProven: false,
+          preference: {
+            recommended: true, band: 'CROSS_CATEGORY_FALLBACK',
+            classificationPath: 'Another canonical category',
+          },
+        },
+      ],
     });
     expect((await service.execute(input)).summary)
       .toEqual({ UNCODED_EXACT_WORK_AMBIGUOUS: 1 });

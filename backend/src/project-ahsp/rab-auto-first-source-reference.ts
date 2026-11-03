@@ -76,7 +76,13 @@ export function exactUncodedWorkFact(
 export function exactUncodedFirstCandidateProven(
   boq: { sourceAhspCode: string | null; name: string },
   candidate: {
-    ahsp: { methodName: string };
+    ahsp: {
+      methodName: string;
+      methodType?: string;
+      locationType?: string;
+      keterangan?: string | null;
+    };
+    uncodedClassificationScopeProven?: boolean;
     outputUnit: string | null;
     _count?: { resources: number };
     preference?: {
@@ -90,6 +96,14 @@ export function exactUncodedFirstCandidateProven(
     Boolean(candidate.outputUnit) &&
     (candidate._count?.resources ?? 0) > 0 &&
     candidate.preference?.recommended === true &&
+    candidate.uncodedClassificationScopeProven === true &&
+    // No separately proven engineering method or site condition on uncoded
+    // BOQ: do not silently infer specialized METHOD or LOCATION facts.
+    candidate.ahsp.methodType === 'MANUAL' &&
+    candidate.ahsp.locationType === 'GENERAL' &&
+    // A technical note outside the BOQ title is an unproved source fact,
+    // not authority for a silent first binding.
+    !candidate.ahsp.keterangan?.trim() &&
     candidate.preference.classificationPath != null &&
     (candidate.preference.band === 'PREFERRED_SUBKATEGORI' ||
       candidate.preference.band === 'PREFERRED_KATEGORI');

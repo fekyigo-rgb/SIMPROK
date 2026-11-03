@@ -34,8 +34,10 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
     expectedUnit: (line.coeff * 100000).toFixed(2),
     expectedTotal: (line.coeff * 100000 * line.qty).toFixed(2),
   }));
+  // Genuine NEW uncoded BOQ work, NOT a copy of any coded line.
   const uncodedLine = {
-    wbs: '1.7', description: 'Pek. ' + lines[0].description,
+    wbs: '1.7',
+    description: tag + ' Penguatan Sambungan Pelat Baja Tebal 12 mm',
     qty: 2, expectedUnit: '200000.00', expectedTotal: '400000.00',
   };
   const description = lines[0].description;
@@ -359,6 +361,59 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       });
     }
 
+    // Distinct eligible AHSP method for the new BOQ with NO source code.
+    // Reuses existing AHSP/Resource/Price engines, not test-only matching.
+    const uncodedLeaf = await prisma.constructionClassificationNode.create({
+      data: {
+        level: 'JENIS_PEKERJAAN',
+        name: uncodedLine.description,
+        normalizedName: uncodedLine.description.toLowerCase(),
+        parentId: rootLeaf.parentId,
+        workspaceId,
+        isActive: true,
+      },
+    });
+    nodeIds.push(uncodedLeaf.id);
+    const uncodedAhsp = await prisma.aHSP.create({
+      data: {
+        workspaceId,
+        code: 'UC-70',
+        workType: uncodedLine.description,
+        methodName: uncodedLine.description,
+        methodType: 'MANUAL',
+        locationType: 'GENERAL',
+        ownershipType: 'USER_ASSET',
+      },
+    });
+    ahspIds.push(uncodedAhsp.id);
+    const uncodedVersion = await prisma.aHSPVersion.create({
+      data: {
+        ahspId: uncodedAhsp.id,
+        workspaceId,
+        versionNumber: 1,
+        status: 'DRAFT',
+        effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
+        outputUnit: 'Kg',
+        resources: {
+          create: [{
+            resourceId: resourceName,
+            resourceType: 'MATERIAL',
+            coefficient: '2.000000',
+            baseUnit: 'Kg',
+          }],
+        },
+      },
+    });
+    versionIds.push(uncodedVersion.id);
+    await prisma.ahspClassificationAssignment.create({
+      data: {
+        ahspId: uncodedAhsp.id,
+        leafNodeId: uncodedLeaf.id,
+        provenance: 'HUMAN_ADDED',
+        isActive: true,
+      },
+    });
+
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('RAB');
     sheet.addRow(['No', 'Uraian Pekerjaan', 'Volume', 'Satuan', 'Kode AHSP']);
@@ -515,7 +570,7 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
     }
   }, 90000);
 
-  it('completes all six jobs, verifies project total from persisted RAB after fresh app and prevents duplicate writes', async () => {
+  it('completes 6 coded and one independent uncoded job, verifies complete persisted RAB after fresh app', async () => {
     const preview = await upload('preview')
       .field('selectedSheet', 'RAB')
       .expect(201);
@@ -599,6 +654,137 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       await prisma.region.delete({ where: { id: extraRegion.id } });
     }
 
+
+    // Regression of the independent Architect finding: even an identical
+    // method in another category MUST count as a competing identity.
+    // Query ONLY page 7/limit 1: no coded BOQ can be mutated by this probe.
+    const selectedCategory = await prisma.projectClassificationSelection.findFirstOrThrow({
+      where: { projectId },
+      include: { classificationNode: true },
+    });
+    const alternateCategory = await prisma.constructionClassificationNode.create({
+      data: {
+        level: 'KATEGORI',
+        name: tag + ' Kategori Alternatif',
+        normalizedName: (tag + ' Kategori Alternatif').toLowerCase(),
+        parentId: selectedCategory.classificationNode.parentId,
+        workspaceId, isActive: true,
+      },
+    });
+    nodeIds.push(alternateCategory.id);
+    const alternateSub = await prisma.constructionClassificationNode.create({
+      data: {
+        level: 'SUBKATEGORI',
+        name: tag + ' Subkategori Alternatif',
+        normalizedName: (tag + ' Subkategori Alternatif').toLowerCase(),
+        parentId: alternateCategory.id,
+        workspaceId, isActive: true,
+      },
+    });
+    nodeIds.push(alternateSub.id);
+    const alternateLeaf = await prisma.constructionClassificationNode.create({
+      data: {
+        level: 'JENIS_PEKERJAAN',
+        name: uncodedLine.description,
+        normalizedName: uncodedLine.description.toLowerCase(),
+        parentId: alternateSub.id,
+        workspaceId, isActive: true,
+      },
+    });
+    nodeIds.push(alternateLeaf.id);
+    const competingAhsp = await prisma.aHSP.create({
+      data: {
+        workspaceId,
+        workType: tag + ' Metode Alternatif',
+        methodName: uncodedLine.description,
+        methodType: 'MANUAL',
+        locationType: 'GENERAL',
+        ownershipType: 'USER_ASSET',
+      },
+    });
+    ahspIds.push(competingAhsp.id);
+    await prisma.aHSPVersion.create({
+      data: {
+        ahspId: competingAhsp.id, workspaceId, versionNumber: 1,
+        status: 'DRAFT',
+        effectiveDate: new Date('2026-08-01T00:00:00.000Z'),
+        outputUnit: 'Kg',
+        resources: {
+          create: [{
+            resourceId: resourceName, resourceType: 'MATERIAL',
+            coefficient: '2.000000', baseUnit: 'Kg',
+          }],
+        },
+      },
+    });
+    await prisma.ahspClassificationAssignment.create({
+      data: {
+        ahspId: competingAhsp.id, leafNodeId: alternateLeaf.id,
+        provenance: 'HUMAN_ADDED', isActive: true,
+      },
+    });
+    try {
+      const conflict = await request(app.getHttpServer())
+        .post('/projects/' + projectId +
+          '/ahsp-occurrences/boq-items/working-draft/auto-bind-explicit-references?page=7&limit=1')
+        .set('Authorization', 'Bearer ' + editorToken)
+        .send({ businessPricingAsOfDate: asOfDate })
+        .expect(201);
+      expect(conflict.body.summary.UNCODED_EXACT_WORK_AMBIGUOUS).toBe(1);
+      expect(conflict.body.automaticBindingPerformed).toBe(false);
+      expect(conflict.body.results[0].boqItemId).toBe(newUncoded!.id);
+      expect(await prisma.projectAhspOccurrence.count({
+        where: { projectId },
+      })).toBe(0);
+    } finally {
+      await prisma.ahspClassificationAssignment.deleteMany({
+        where: { ahspId: competingAhsp.id },
+      });
+      await prisma.aHSPResource.deleteMany({
+        where: { ahspVersion: { ahspId: competingAhsp.id } },
+      });
+      await prisma.aHSPVersion.deleteMany({
+        where: { ahspId: competingAhsp.id },
+      });
+      await prisma.aHSP.delete({ where: { id: competingAhsp.id } });
+    }
+
+    // Same selected Kategorie but a conflicting explicit Subkategori must
+    // block automatic authority; a PREFERRED_KATEGORI rank is insufficient.
+    const wrongSubcategory = await prisma.constructionClassificationNode.create({
+      data: {
+        level: 'SUBKATEGORI',
+        name: tag + ' Subkategori Pilihan Berbeda',
+        normalizedName: (tag + ' Subkategori Pilihan Berbeda').toLowerCase(),
+        parentId: selectedCategory.classificationNodeId,
+        workspaceId, isActive: true,
+      },
+    });
+    nodeIds.push(wrongSubcategory.id);
+    await prisma.projectClassificationSelection.create({
+      data: { projectId, classificationNodeId: wrongSubcategory.id },
+    });
+    try {
+      const wrongSub = await request(app.getHttpServer())
+        .post('/projects/' + projectId +
+          '/ahsp-occurrences/boq-items/working-draft/auto-bind-explicit-references?page=7&limit=1')
+        .set('Authorization', 'Bearer ' + editorToken)
+        .send({ businessPricingAsOfDate: asOfDate })
+        .expect(201);
+      expect(wrongSub.body.summary.UNCODED_EXACT_WORK_NOT_PROVEN).toBe(1);
+      expect(wrongSub.body.automaticBindingPerformed).toBe(false);
+      expect(await prisma.projectAhspOccurrence.count({
+        where: { projectId },
+      })).toBe(0);
+    } finally {
+      await prisma.projectClassificationSelection.deleteMany({
+        where: {
+          projectId,
+          classificationNodeId: wrongSubcategory.id,
+        },
+      });
+    }
+
     const chosen = await request(app.getHttpServer())
       .post(
         `/projects/${projectId}/ahsp-occurrences/boq-items/working-draft/auto-bind-explicit-references`,
@@ -645,14 +831,14 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       row.name === uncodedLine.description);
     expect(uncodedSaved).toBeDefined();
     expect(uncodedSaved?.sourceAhspCode).toBeNull();
-    expect(uncodedSaved?.ahspVersionId).toBe(versionIds[0]);
+    expect(uncodedSaved?.ahspVersionId).toBe(versionIds[lines.length]);
     expect(uncodedSaved?.priceOrigin).toBe('SERVER_COST_KERNEL');
     expect(uncodedSaved?.unitPrice?.toFixed(2)).toBe(uncodedLine.expectedUnit);
     expect(uncodedSaved?.lineTotal?.toFixed(2)).toBe(uncodedLine.expectedTotal);
     storedTotal += Number(uncodedSaved?.lineTotal?.toFixed(2));
     expect(storedTotal.toFixed(2)).toBe(expectedProjectTotal);
     expect(await prisma.aHSP.count({ where: { id: { in: ahspIds } } })).toBe(
-      lines.length,
+      lines.length + 1,
     );
 
     // Recreate the ACTUAL NestJS application; re-read and independently

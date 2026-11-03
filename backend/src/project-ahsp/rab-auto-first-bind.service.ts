@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { parseDateOnlyUtc } from '../common/date-only.util';
 import { WORKING_DRAFT_STRUCTURE_NAME } from '../project/rab-lifecycle-policy.service';
 import { ProjectAhspService } from './project-ahsp.service';
-import { exactUncodedFirstCandidateProven, exactUncodedSearchAnchor, explicitAhspSourceProof } from './rab-auto-first-source-reference';
+import { exactUncodedFirstCandidateProven, exactUncodedSearchAnchor, exactUncodedWorkFact, explicitAhspSourceProof } from './rab-auto-first-source-reference';
 import { createHash } from 'crypto';
 
 /**
@@ -151,6 +151,22 @@ export class RabAutoFirstBindService {
           results.push({
             boqItemId: row.id,
             kind: 'CANDIDATE_UNIVERSE_INCOMPLETE',
+          });
+          continue;
+        }
+        // Whole-catalog ambiguity is decided BEFORE preferences/units.
+        // A different category or method condition cannot hide a competing
+        // AHSP with the exact same work description.
+        const exactWork = uncoded
+          ? catalog.items.filter((candidate) =>
+              exactUncodedWorkFact(row, candidate.ahsp))
+          : [];
+        if (uncoded && exactWork.length !== 1) {
+          results.push({
+            boqItemId: row.id,
+            kind: exactWork.length > 1
+              ? 'UNCODED_EXACT_WORK_AMBIGUOUS'
+              : 'UNCODED_EXACT_WORK_NOT_PROVEN',
           });
           continue;
         }
