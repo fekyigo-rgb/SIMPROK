@@ -27,11 +27,18 @@ describe('RAB-AUTO-04 governed unindexed legacy reuse', () => {
     ahspVersionId: null, workingOccurrenceId: null,
     calculationOccurrenceId: null, priceOrigin: null,
   };
+  const priorPayloadHash = createHash('sha256').update(JSON.stringify({
+    boqItemId: sourceId, ahspVersionId: version,
+    businessPricingAsOfDate: input.businessPricingAsOfDate,
+    referenceRegionId: region, resolutionPolicyVersion: 'E1A_TEST',
+  })).digest('hex');
   const prior = {
     ahspVersionId: version, createdByAccountId: input.accountId,
     idempotencyKey: 'e1a-original-approved-choice',
-    requestPayloadHash: 'prior-original-payload',
+    requestPayloadHash: priorPayloadHash,
     resolutionPolicyVersion: 'E1A_TEST',
+    businessPricingAsOfDate: new Date('2026-11-03T00:00:00.000Z'),
+    referenceRegionId: region,
   };
   const occurrence = () => {
     const date = input.businessPricingAsOfDate;
@@ -110,6 +117,14 @@ describe('RAB-AUTO-04 governed unindexed legacy reuse', () => {
 
   it('verifies cryptographic context refresh lineage to an earlier human decision', () => {
     expect(hasGovernedUnindexedSource(sourceId, occurrence(), input.projectId)).toBe(true);
+    // Another generation of the same AHSP is not a different BOQ decision.
+    expect(hasGovernedUnindexedSource(sourceId, {
+      ...prior, previousOccurrenceId: priorId, previousOccurrence: null,
+    }, input.projectId)).toBe(true);
+    expect(hasGovernedUnindexedSource(sourceId, {
+      ...prior, previousOccurrenceId: priorId,
+      requestPayloadHash: 'not-the-writer-hash', previousOccurrence: null,
+    }, input.projectId)).toBe(false);
     const o = occurrence();
     expect(hasGovernedUnindexedSource(sourceId, {
       ...o, requestPayloadHash: 'forged-hash',

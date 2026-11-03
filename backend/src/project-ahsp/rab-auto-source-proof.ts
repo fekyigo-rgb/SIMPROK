@@ -148,6 +148,43 @@ export function unindexedWorkSearchTerm(name: string): string {
     .trim();
 }
 
+
+/**
+ * Proves that this persisted selection was made FOR THIS source BOQ row by
+ * the already-existing canonical selection writer. A generation predecessor
+ * is merely shared AHSP-version history; it is not evidence against the
+ * manual choice. The immutable request hash, not a prefix, proves identity.
+ */
+function originalHumanSelectionPayloadMatches(
+  sourceBoqItemId: string,
+  origin: {
+    ahspVersionId: string;
+    createdByAccountId: string | null;
+    idempotencyKey: string;
+    requestPayloadHash: string | null;
+    resolutionPolicyVersion: string | null;
+    businessPricingAsOfDate: Date | null;
+    referenceRegionId: string | null;
+  },
+): boolean {
+  if (!origin.createdByAccountId ||
+      !origin.requestPayloadHash ||
+      !origin.resolutionPolicyVersion ||
+      !origin.businessPricingAsOfDate ||
+      !origin.referenceRegionId ||
+      origin.idempotencyKey.startsWith('rab-auto-')) {
+    return false;
+  }
+  return origin.requestPayloadHash === digest(JSON.stringify({
+    boqItemId: sourceBoqItemId,
+    ahspVersionId: origin.ahspVersionId,
+    businessPricingAsOfDate:
+      origin.businessPricingAsOfDate.toISOString().slice(0, 10),
+    referenceRegionId: origin.referenceRegionId,
+    resolutionPolicyVersion: origin.resolutionPolicyVersion,
+  }));
+}
+
 /**
  * Requires positive persisted provenance, not the user-editable idempotency
  * prefix alone. A refreshed occurrence must prove the existing canonical
@@ -170,6 +207,8 @@ export function hasGovernedUnindexedSource(
       idempotencyKey: string;
       requestPayloadHash: string | null;
       resolutionPolicyVersion: string | null;
+      businessPricingAsOfDate: Date | null;
+      referenceRegionId: string | null;
     } | null;
   },
   projectId: string,
@@ -178,10 +217,9 @@ export function hasGovernedUnindexedSource(
       !occurrence.resolutionPolicyVersion) return false;
   if (occurrence.idempotencyKey.startsWith('rab-auto-context-')) {
     const prior = occurrence.previousOccurrence;
-    if (!prior || !prior.createdByAccountId || !prior.requestPayloadHash ||
-        !prior.resolutionPolicyVersion ||
+    if (!prior ||
+        !originalHumanSelectionPayloadMatches(sourceBoqItemId, prior) ||
         prior.ahspVersionId !== occurrence.ahspVersionId ||
-        prior.idempotencyKey.startsWith('rab-auto-') ||
         !occurrence.businessPricingAsOfDate || !occurrence.referenceRegionId) {
       return false;
     }
@@ -198,6 +236,5 @@ export function hasGovernedUnindexedSource(
       requestPayloadHash: occurrence.requestPayloadHash,
     });
   }
-  return !occurrence.idempotencyKey.startsWith('rab-auto-') &&
-    occurrence.previousOccurrenceId === null;
+  return originalHumanSelectionPayloadMatches(sourceBoqItemId, occurrence);
 }
