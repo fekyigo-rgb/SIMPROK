@@ -2523,8 +2523,10 @@ export class ProjectService {
           row.unit !== undefined && row.unit !== existing.unit;
         const itemTypeChanged = row.itemType !== existing.itemType;
         const workFactChanged =
-          row.name !== existing.name ||
-          (row.wbsCode ?? '') !== existing.wbsCode;
+          (typeof existing.name === 'string' &&
+            row.name !== existing.name) ||
+          (typeof existing.wbsCode === 'string' &&
+            (row.wbsCode ?? '') !== existing.wbsCode);
         if (quantityChanged || unitChanged || itemTypeChanged ||
             workFactChanged) {
           throw new ConflictException(
@@ -2594,9 +2596,11 @@ export class ProjectService {
         // The ordinary draft-save path invalidates unpriced associations;
         // priced server rows are protected by the preflight above.
         const sourceChanged = existing != null && (
-          row.name !== existing.name ||
+          (typeof existing.name === 'string' &&
+            row.name !== existing.name) ||
           (row.unit ?? '') !== existing.unit ||
-          (row.wbsCode ?? '') !== existing.wbsCode ||
+          (typeof existing.wbsCode === 'string' &&
+            (row.wbsCode ?? '') !== existing.wbsCode) ||
           row.itemType !== existing.itemType
         );
         const preserveAssociation = !sourceChanged && !isFolder && !isNote;

@@ -875,6 +875,62 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
     expect(data.unitPrice.toString()).toBe('200000');
   });
 
+
+  it('refuses a real server-priced work-description change without losing the stored calculation', async () => {
+    const { prisma, boqItemDeleteMany } = createPrismaMock([
+      buildServerRow({ name: 'Pekerjaan Server', wbsCode: '1.1' }),
+    ]);
+    await expect(save(buildService(prisma), [{
+      tempId: SERVER_ROW_ID,
+      itemType: 'WORK_ITEM',
+      name: 'Pekerjaan Server Tipe B',
+      wbsCode: '1.1',
+      quantity: 5, unit: 'M1',
+    }])).rejects.toMatchObject({
+      message: 'SERVER_ROW_INPUT_CHANGED_REQUIRES_RECALCULATION',
+    });
+    expect(boqItemDeleteMany).not.toHaveBeenCalled();
+  });
+
+  it('invalidates an UNPRICED occurrence on real BOQ work/spec change, preserving the ability to edit draft', async () => {
+    const { prisma, boqItemCreate } = createPrismaMock([
+      buildServerRow({
+        name: 'Pekerjaan Tipe A', wbsCode: '1.1',
+        priceOrigin: null, unitPrice: null, lineTotal: null,
+        calculationOccurrenceId: null, workingOccurrenceId: 'old-occurrence',
+      }),
+    ]);
+    await save(buildService(prisma), [{
+      tempId: SERVER_ROW_ID, itemType: 'WORK_ITEM',
+      name: 'Pekerjaan Tipe B', wbsCode: '1.1',
+      quantity: 5, unit: 'M1',
+    }]);
+    const data = boqItemCreate.mock.calls[0][0].data as Record<string, any>;
+    expect(data.ahspVersionId).toBeNull();
+    expect(data.ahspSnapshotId).toBeNull();
+    expect(data.workingOccurrenceId).toBeNull();
+    expect(data.unitPrice).toBeNull();
+    expect(data.lineTotal).toBeNull();
+  });
+
+  it('preserves an UNPRICED occurrence when the complete BOQ source fact is unchanged', async () => {
+    const { prisma, boqItemCreate } = createPrismaMock([
+      buildServerRow({
+        name: 'Pekerjaan Tipe A', wbsCode: '1.1',
+        priceOrigin: null, unitPrice: null, lineTotal: null,
+        calculationOccurrenceId: null, workingOccurrenceId: 'old-occurrence',
+      }),
+    ]);
+    await save(buildService(prisma), [{
+      tempId: SERVER_ROW_ID, itemType: 'WORK_ITEM',
+      name: 'Pekerjaan Tipe A', wbsCode: '1.1',
+      quantity: 5, unit: 'M1',
+    }]);
+    const data = boqItemCreate.mock.calls[0][0].data as Record<string, any>;
+    expect(data.ahspVersionId).toBe('ahsp-version-1');
+    expect(data.workingOccurrenceId).toBe('old-occurrence');
+  });
+
   it('rejects a quantity change for an existing server-authored row, requiring explicit recalculation', async () => {
     const { prisma } = createPrismaMock([buildServerRow()]);
     const service = buildService(prisma);
