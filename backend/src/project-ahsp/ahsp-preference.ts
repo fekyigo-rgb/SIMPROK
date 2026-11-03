@@ -67,10 +67,17 @@ const TOKEN_STOP = new Set([
   'and',
 ]);
 
+/** The already-existing AHSP recommendation vocabulary: leading Pek. means
+ * Pekerjaan, regardless of letter case or spacing. This is evidence-only and
+ * never grants AHSP identity, selection, money, or WBS source authority. */
+export function normalizeWorkHeadingForEvidence(value: string): string {
+  return value.normalize('NFC').replace(/^\s*pek\s*\.\s*/iu, 'Pekerjaan ').replace(/\s+/gu, ' ').trim();
+}
+
 function evidenceTokens(value: string): Set<string> {
   // Short dimensions and unit symbols are evidence too (10 vs 20, cm vs mm).
   // Preserve decimal tokens literally; this is not numeric/unit normalization.
-  const found = value.toLowerCase().match(/[a-z0-9]+(?:[.,][0-9]+)?/g) ?? [];
+  const found = normalizeWorkHeadingForEvidence(value).toLowerCase().match(/[a-z0-9]+(?:[.,][0-9]+)?/g) ?? [];
   return new Set(found.filter((token) => !TOKEN_STOP.has(token)));
 }
 

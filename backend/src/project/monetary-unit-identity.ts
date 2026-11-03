@@ -52,9 +52,19 @@ export type MonetaryUnitIdentityVerdict =
   | { admissible: true; outputUnit: string }
   | { admissible: false; refusal: MonetaryUnitIdentityRefusal };
 
+/** Existing Unit Kernel's same-canonical-unit conclusion frozen by the
+ * official AHSP occurrence writer. Cost Kernel never calls Unit Kernel: it
+ * consumes only these immutable facts, and legacy rows remain strict. */
+export interface FrozenMonetaryUnitProof {
+  boqUnitAtSelection: string | null;
+  ahspOutputUnitAtSelection: string | null;
+  canonicalOutputUnitDefinitionId: string | null;
+}
+
 export function monetaryUnitIdentity(
   boqUnit: string,
   outputUnit: string | null,
+  frozen?: FrozenMonetaryUnitProof | null,
 ): MonetaryUnitIdentityVerdict {
   if (!outputUnit?.trim()) {
     return {
@@ -63,6 +73,16 @@ export function monetaryUnitIdentity(
     };
   }
   if (exactUnit(boqUnit) !== exactUnit(outputUnit)) {
+    // Never widen by a copied alias table or by a string heuristic.
+    // Only the previous canonical AHSP selection may have frozen this
+    // equality after BOTH source spellings resolved to ONE UnitDefinition id.
+    if (
+      frozen?.canonicalOutputUnitDefinitionId &&
+      frozen.boqUnitAtSelection === boqUnit &&
+      frozen.ahspOutputUnitAtSelection === outputUnit
+    ) {
+      return { admissible: true, outputUnit };
+    }
     return {
       admissible: false,
       refusal: COST_CALCULATION_REASON.BOQ_AHSP_UNIT_MISMATCH,

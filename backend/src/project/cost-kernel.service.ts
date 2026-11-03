@@ -155,6 +155,13 @@ export class CostKernelService {
       volume: item.quantity.toString(),
       boqUnit: item.unit,
       outputUnit: item.ahspVersion?.outputUnit ?? null,
+      // Grade A: consumes the frozen output-unit proof only. No Unit Kernel,
+      // conversion, Basic Price or alias re-resolution in the Cost Kernel.
+      frozenOutputUnitProof: occurrence ? {
+        boqUnitAtSelection: occurrence.boqUnitAtSelection,
+        ahspOutputUnitAtSelection: occurrence.ahspOutputUnitAtSelection,
+        canonicalOutputUnitDefinitionId: occurrence.canonicalOutputUnitDefinitionId,
+      } : null,
       // Occurrence rows are loaded exclusively through BoqItem.workingOccurrenceId
       // and tenant ownership, so a present occurrence can never
       // belong to another tenant — checking its fields here again only misfires when

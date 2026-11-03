@@ -32,7 +32,7 @@ describe('ProjectAhspService E1A', () => {
   const workspaceId = '20000000-0000-4000-8000-000000000001';
   let prisma: any;
   let service: ProjectAhspService;
-  let units: { resolve: jest.Mock };
+  let units: { resolve: jest.Mock; resolveCanonicalUnitIdentities: jest.Mock };
   let lifecycle: { evaluateInTransaction: jest.Mock };
 
   const selectionInput = {
@@ -202,6 +202,9 @@ describe('ProjectAhspService E1A', () => {
       $transaction: jest.fn(),
     };
     units = {
+      // Unproven aliases remain refused, even when an older compatibility
+      // mock reports same dimension. The ONE Unit Kernel must prove the ID.
+      resolveCanonicalUnitIdentities: jest.fn().mockResolvedValue([]),
       resolve: jest.fn().mockResolvedValue({
         status: 'RESOLVED',
         sourceUnitDefinition: { id: 'unit-1', code: 'PERSON_DAY' },
@@ -499,6 +502,19 @@ describe('ProjectAhspService E1A', () => {
       row('unit-v', 'ahsp-unit', 'Pasangan batu kali', 'm3'),
       row('bare-v', 'ahsp-bare', 'Pasangan batu', 'm2'),
     ]);
+    // The real Unit Kernel differentiates AREA m2 from VOLUME m3, while
+    // still allowing differently spelled aliases of one canonical identity.
+    // Keep this preference mock faithful to the actual authority.
+    units.resolve.mockImplementation(async (source: string, target: string) => ({
+      status: source.toLowerCase() === target.toLowerCase()
+        ? 'RESOLVED' : 'NOT_CONVERTIBLE',
+      sourceUnitDefinition: { id: source.toLowerCase() },
+      targetUnitDefinition: { id: target.toLowerCase() },
+      conversionRuleId: null,
+      quantityFactor: source.toLowerCase() === target.toLowerCase() ? '1' : null,
+      reasonCodes: source.toLowerCase() === target.toLowerCase()
+        ? [] : ['CONVERSION_RULE_NOT_FOUND'],
+    }));
 
     const unscoped = await service.listEligibleVersions(workspaceId, '2026-08-04');
     expect(unscoped.map((item: { id: string }) => item.id)).toEqual([
@@ -1466,6 +1482,22 @@ describe('ProjectAhspService E1A', () => {
       const tx = arrange('M1', 'M1');
       await service.selectForBoqItem(selectionInput);
       expect(tx.projectAhspOccurrence.create).toHaveBeenCalled();
+      expect(tx.boqItem.update).toHaveBeenCalled();
+    });
+
+    it('D+1: writes only the SAME frozen canonical Unit Kernel identity for unit aliases', async () => {
+      const tx = arrange('OH', 'Orang/Hari');
+      units.resolveCanonicalUnitIdentities.mockImplementation(async (rawUnits: string[]) =>
+        rawUnits.map((rawUnit) => ({
+          rawUnit, status: 'RESOLVED',
+          unitDefinition: { id: 'person-day', code: 'PERSON_DAY', dimension: 'PERSON_TIME' },
+        })),
+      );
+      await service.selectForBoqItem(selectionInput);
+      const data = tx.projectAhspOccurrence.create.mock.calls[0][0].data;
+      expect(data.boqUnitAtSelection).toBe('OH');
+      expect(data.ahspOutputUnitAtSelection).toBe('Orang/Hari');
+      expect(data.canonicalOutputUnitDefinitionId).toBe('person-day');
       expect(tx.boqItem.update).toHaveBeenCalled();
     });
 

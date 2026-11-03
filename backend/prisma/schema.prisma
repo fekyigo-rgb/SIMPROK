@@ -730,6 +730,7 @@ model UnitDefinition {
   ahspSnapshots             AHSPSnapshot[]                       @relation("AHSPSnapshotOutputUnit")
   resolutionSourceUnits     ProjectAhspResourceResolution[]      @relation("ResolutionSourceUnit")
   resolutionTargetUnits     ProjectAhspResourceResolution[]      @relation("ResolutionTargetUnit")
+  occurrenceCanonicalOutputUnits ProjectAhspOccurrence[]          @relation("OccurrenceCanonicalOutputUnit")
   basicPriceImportRows      BasicPriceImportRow[]
   importRowResourceMappings BasicPriceImportRowResourceMapping[]
   importUnitDecisions       AhspImportUnitDecision[]
@@ -3664,6 +3665,12 @@ model ProjectAhspOccurrence {
   referenceRegionId            String?        @db.Uuid
   resolutionPolicyVersion      String?
   requestPayloadHash           String?
+  /// Existing Unit Kernel's proven zero-conversion output identity, frozen
+  /// with the AHSP occurrence. NULL for legacy occurrences: old strict
+  /// monetary matching remains lawful and unchanged, never backfilled.
+  boqUnitAtSelection           String?
+  ahspOutputUnitAtSelection    String?
+  canonicalOutputUnitDefinitionId String? @db.Uuid
   generation                   Int            @default(1)
   previousOccurrenceId         String?        @db.Uuid
   resolutionContentFingerprint String?
@@ -3695,6 +3702,7 @@ model ProjectAhspOccurrence {
   workspace                Workspace                       @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
   project                  Project                         @relation(fields: [projectId], references: [id], onDelete: Cascade)
   ahspVersion              AHSPVersion                     @relation(fields: [ahspVersionId], references: [id], onDelete: Restrict)
+  canonicalOutputUnitDefinition UnitDefinition? @relation("OccurrenceCanonicalOutputUnit", fields: [canonicalOutputUnitDefinitionId], references: [id], onDelete: Restrict, map: "fk_project_ahsp_occurrences_canonical_output_unit")
   resourceResolutions      ProjectAhspResourceResolution[]
   referenceRegion          Region?                         @relation(fields: [referenceRegionId], references: [id], onDelete: Restrict)
   contextCapturedByAccount Account?                        @relation("ProjectAhspOccurrenceContextCapturedBy", fields: [contextCapturedByAccountId], references: [id], onDelete: Restrict)
@@ -3710,6 +3718,7 @@ model ProjectAhspOccurrence {
   @@index([projectId])
   @@index([ahspVersionId])
   @@index([referenceRegionId])
+  @@index([canonicalOutputUnitDefinitionId], map: "project_ahsp_occurrences_canonical_output_unit_idx")
   @@index([previousOccurrenceId])
   @@index([workspaceId, projectId, ahspVersionId, businessPricingAsOfDate, referenceRegionId, resolutionPolicyVersion, generation])
   @@map("project_ahsp_occurrences")

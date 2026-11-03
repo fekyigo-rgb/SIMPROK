@@ -134,7 +134,9 @@ export function calculateCostKernel(
   // same two refusals, same codes, same order, same position in the gate
   // sequence. The BOQ/AHSP bind boundary now asks this identical function, so a
   // bind can never be admitted on a unit relationship this calculation refuses.
-  const unitIdentity = monetaryUnitIdentity(input.boqUnit, input.outputUnit);
+  const unitIdentity = monetaryUnitIdentity(
+    input.boqUnit, input.outputUnit, input.frozenOutputUnitProof,
+  );
   if (!unitIdentity.admissible)
     return fail(input.boqItemId, unitIdentity.refusal);
   if (input.occurrenceCount === 0 || !input.occurrenceId)

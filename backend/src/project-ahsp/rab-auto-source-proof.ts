@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { normalizeWorkHeadingForEvidence } from './ahsp-preference';
 
 /**
  * RAB-AUTO-04 — same canonical BOQ SOURCE fact, not a lexical AHSP matcher.
@@ -15,7 +16,7 @@ export interface BoqSourceFact {
   unit: string;
 }
 const sourceText = (v: string): string =>
-  v.normalize('NFC').replace(/\s+/g, ' ').trim();
+  normalizeWorkHeadingForEvidence(v).toLocaleLowerCase('id-ID');
 export function sameProvenBoqSourceFact(
   a: BoqSourceFact,
   b: BoqSourceFact,

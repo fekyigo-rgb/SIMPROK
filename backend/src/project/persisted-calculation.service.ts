@@ -139,6 +139,14 @@ export class PersistedCalculationService {
       volume: item.quantity.toString(),
       boqUnit: item.unit,
       outputUnit: item.ahspVersion?.outputUnit ?? null,
+      // Reuse the exact frozen Unit Kernel output identity that the canonical
+      // writer and Grade A Cost Kernel already used for this saved money.
+      // This read-only verifier never opens a second unit resolver.
+      frozenOutputUnitProof: {
+        boqUnitAtSelection: occurrence.boqUnitAtSelection,
+        ahspOutputUnitAtSelection: occurrence.ahspOutputUnitAtSelection,
+        canonicalOutputUnitDefinitionId: occurrence.canonicalOutputUnitDefinitionId,
+      },
       ownershipMatches:
         item.boqStructure.projectId === projectId &&
         item.boqStructure.project?.workspaceId === workspaceId,
