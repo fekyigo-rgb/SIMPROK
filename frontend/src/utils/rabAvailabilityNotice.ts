@@ -82,8 +82,13 @@ export interface RabAhspAvailabilityNotice {
 export const ahspDiscoveryAnchor = (boqName: string): string | null => {
   const normalized = boqName.trim();
   const explicitTypeCode = normalized.match(/\b[A-Z]{1,5}[ -]?\d{1,4}[A-Z]?\b/);
+  // 'Pek.' and 'Pekerjaan' are interchangeable BOQ headings, but the
+  // existing server does a literal substring search against each AHSP field.
+  // Remove only that leading heading for candidate recall (not identity
+  // proof). Keep type codes, specifications, and server eligibility unchanged.
+  const workTerms = normalized.replace(/^(?:pek\s*\.\s*|pekerjaan\s+)/iu, '').trim();
   const query = (explicitTypeCode?.[0] ??
-    normalized.split(/\s+/).slice(0, 3).join(' ')).slice(0, 120).trim();
+    workTerms.split(/\s+/).slice(0, 3).join(' ')).slice(0, 120).trim();
   return query.length >= 2 ? query : null;
 };
 

@@ -76,7 +76,18 @@ test('automatic discovery uses a bounded lexical anchor, not an identity/specifi
   );
   assert.equal(ahspDiscoveryAnchor('Saluran U Pracetak Tipe DS 9'), 'DS 9');
   assert.equal(ahspDiscoveryAnchor('Beton mutu K-250'), 'K-250');
-  assert.equal(ahspDiscoveryAnchor(' Pekerjaan Pembersihan '), 'Pekerjaan Pembersihan');
+  // Prefixes name the BOQ heading, not an AHSP work type. The catalog may
+  // store the same work without either prefix, as J.75 does in production.
+  assert.equal(ahspDiscoveryAnchor(' Pekerjaan Pembersihan '), 'Pembersihan');
+  assert.equal(ahspDiscoveryAnchor('Pek. Pengecatan Dinding Beton Sandaran'), 'Pengecatan Dinding Beton');
+  assert.equal(ahspDiscoveryAnchor('PEK . Pengecatan Dinding Beton Sandaran'), 'Pengecatan Dinding Beton');
+  assert.equal(ahspDiscoveryAnchor('Pek.Pengecatan Dinding Beton Sandaran'), 'Pengecatan Dinding Beton');
+  assert.equal(ahspDiscoveryAnchor('pekerjaan Pengecatan Dinding Beton Sandaran'), 'Pengecatan Dinding Beton');
+  assert.ok('Pengecatan Dinding Beton Sandaran'.includes(
+    ahspDiscoveryAnchor('Pek. Pengecatan Dinding Beton Sandaran') ?? 'NON_MATCHING_ANCHOR',
+  ));
+  assert.equal(ahspDiscoveryAnchor('Pekerjaan Beton mutu K-250'), 'K-250');
+  assert.equal(ahspDiscoveryAnchor('Pek.'), null);
   assert.equal(ahspDiscoveryAnchor(''), null);
   assert.equal(ahspDiscoveryAnchor('U'), null);
   assert.ok((ahspDiscoveryAnchor('x '.repeat(200))?.length ?? 0) <= 120);
