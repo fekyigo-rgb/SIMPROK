@@ -502,6 +502,19 @@ describe('ProjectAhspService E1A', () => {
       row('unit-v', 'ahsp-unit', 'Pasangan batu kali', 'm3'),
       row('bare-v', 'ahsp-bare', 'Pasangan batu', 'm2'),
     ]);
+    // The real Unit Kernel differentiates AREA m2 from VOLUME m3, while
+    // still allowing differently spelled aliases of one canonical identity.
+    // Keep this preference mock faithful to the actual authority.
+    units.resolve.mockImplementation(async (source: string, target: string) => ({
+      status: source.toLowerCase() === target.toLowerCase()
+        ? 'RESOLVED' : 'NOT_CONVERTIBLE',
+      sourceUnitDefinition: { id: source.toLowerCase() },
+      targetUnitDefinition: { id: target.toLowerCase() },
+      conversionRuleId: null,
+      quantityFactor: source.toLowerCase() === target.toLowerCase() ? '1' : null,
+      reasonCodes: source.toLowerCase() === target.toLowerCase()
+        ? [] : ['CONVERSION_RULE_NOT_FOUND'],
+    }));
 
     const unscoped = await service.listEligibleVersions(workspaceId, '2026-08-04');
     expect(unscoped.map((item: { id: string }) => item.id)).toEqual([

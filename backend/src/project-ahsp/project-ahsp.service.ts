@@ -326,15 +326,19 @@ export class ProjectAhspService {
           version.outputUnit,
           item.unit,
         );
-        const monetary = monetaryUnitIdentity(item.unit, version.outputUnit);
         return {
           ...version,
           sourceVersion: version,
           workType: version.ahsp.workType,
           methodName: version.ahsp.methodName,
+          // A recommendation is never a monetary authorization. The ONE
+          // Unit Kernel's exact canonical identity can nominate the source
+          // candidate; the official selection writer must still independently
+          // freeze proven identity before the Cost Kernel admits any money.
+          // Otherwise this early string-only filter hides lawful M vs M1
+          // candidates before they can reach the authoritative writer.
           unitCompatible:
-            compatibility.status === BOQ_UNIT_COMPATIBILITY.COMPATIBLE_EXACT &&
-            monetary.admissible,
+            compatibility.status === BOQ_UNIT_COMPATIBILITY.COMPATIBLE_EXACT,
           paths: classificationPathsFromLeaves(leavesByAhsp.get(version.ahsp.id) ?? []),
         };
       }),
