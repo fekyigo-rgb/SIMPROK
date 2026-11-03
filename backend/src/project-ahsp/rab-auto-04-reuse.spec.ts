@@ -202,3 +202,125 @@ describe('RAB-AUTO-04 — reuse only a proven SAME source identity', () => {
     ).toEqual([PERMISSIONS.AHSP_VIEW, PERMISSIONS.RAB_DRAFT_EDIT]);
   });
 });
+
+
+describe('RAB-AUTO existing selection context refresh — same canonical writer, no first-match engine', () => {
+  const input = {
+    projectId: '10000000-0000-4000-8000-000000000001',
+    workspaceId: '20000000-0000-4000-8000-000000000001',
+    accountId: '30000000-0000-4000-8000-000000000001',
+    businessPricingAsOfDate: '2026-11-03',
+  };
+  const versionId = '50000000-0000-4000-8000-000000000001';
+  const rowId = '60000000-0000-4000-8000-000000000001';
+  const oldOccurrenceId = '70000000-0000-4000-8000-000000000001';
+  const newRegion = '80000000-0000-4000-8000-000000000001';
+  const oldRegion = '90000000-0000-4000-8000-000000000001';
+  const modifiedAt = new Date('2026-10-29T10:00:00.000Z');
+
+  const prepare = (overrides: {
+    regions?: string[];
+    oldRegion?: string;
+    oldDate?: string;
+    createdByAccountId?: string | null;
+    ahspVersionId?: string;
+    priceOrigin?: string | null;
+    workingOccurrenceId?: string | null;
+    refreshedId?: string;
+    reject?: boolean;
+  } = {}) => {
+    const row = {
+      id: rowId, wbsNodeId: null, wbsCode: '1.1',
+      name: 'Pekerjaan beton', unit: 'm3',
+      ahspVersionId: versionId,
+      workingOccurrenceId: overrides.workingOccurrenceId === undefined
+        ? oldOccurrenceId : overrides.workingOccurrenceId,
+      calculationOccurrenceId: null,
+      priceOrigin: overrides.priceOrigin ?? null,
+      updatedAt: modifiedAt,
+    };
+    const occ = {
+      id: oldOccurrenceId, ahspVersionId: overrides.ahspVersionId ?? versionId,
+      createdByAccountId: overrides.createdByAccountId === undefined
+        ? input.accountId : overrides.createdByAccountId,
+      referenceRegionId: overrides.oldRegion ?? oldRegion,
+      businessPricingAsOfDate: new Date(overrides.oldDate ?? '2026-10-29T00:00:00.000Z'),
+    };
+    const prisma = {
+      boqItem: { findMany: jest.fn().mockResolvedValue([row]) },
+      projectRegionSelection: {
+        findMany: jest.fn().mockResolvedValue(
+          (overrides.regions ?? [newRegion]).map((regionId) => ({ regionId })),
+        ),
+      },
+      projectAhspOccurrence: {
+        findMany: jest.fn().mockResolvedValue([occ]),
+      },
+    };
+    const ahsp = {
+      selectForBoqItem: jest.fn().mockImplementation(async () => {
+        if (overrides.reject) throw new Error('STALE_CONCURRENT_SELECTION');
+        return { id: overrides.refreshedId ?? 'a0000000-0000-4000-8000-000000000001' };
+      }),
+    };
+    const service = new RabAutoProvenReuseService(
+      prisma as unknown as PrismaService,
+      ahsp as unknown as ProjectAhspService,
+    );
+    return { prisma, ahsp, service };
+  };
+
+  it('refreshes the proven original selection by the official writer and preserves the old pointer as proof', async () => {
+    const { prisma, ahsp, service } = prepare();
+    const result = await service.execute(input);
+    expect(result.summary).toEqual({ PROVEN_CONTEXT_REFRESHED: 1 });
+    expect(result.automaticBindingPerformed).toBe(true);
+    expect(prisma.projectAhspOccurrence.findMany).toHaveBeenCalledTimes(1);
+    expect(ahsp.selectForBoqItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ...input, boqItemId: rowId, ahspVersionId: versionId,
+        referenceRegionId: newRegion,
+        refreshSourceOccurrenceId: oldOccurrenceId,
+        refreshExpectedBoqUpdatedAt: modifiedAt.toISOString(),
+      }),
+    );
+    expect(ahsp.selectForBoqItem.mock.calls[0][0]).not.toHaveProperty('reuseSourceBoqItemId');
+  });
+
+  it('does not create a new occurrence when the old one is already current', async () => {
+    const { ahsp, service } = prepare({
+      oldRegion: newRegion,
+      oldDate: '2026-11-03T00:00:00.000Z',
+    });
+    expect((await service.execute(input)).summary).toEqual({ ALREADY_DECIDED: 1 });
+    expect(ahsp.selectForBoqItem).not.toHaveBeenCalled();
+  });
+
+  it('fails closed for multiple selected project regions, missing original actor, and mismatched version', async () => {
+    for (const setup of [
+      { regions: [newRegion, oldRegion] },
+      { createdByAccountId: null },
+      { ahspVersionId: 'different-version' },
+    ]) {
+      const { ahsp, service } = prepare(setup);
+      const result = await service.execute(input);
+      expect(result.automaticBindingPerformed).toBe(false);
+      expect(ahsp.selectForBoqItem).not.toHaveBeenCalled();
+    }
+  });
+
+  it('preserves previously persisted money and never reevaluates an already calculated row', async () => {
+    const { ahsp, prisma, service } = prepare({ priceOrigin: 'SERVER_COST_KERNEL' });
+    const result = await service.execute(input);
+    expect(result.summary).toEqual({ ALREADY_DECIDED: 1 });
+    expect(prisma.projectAhspOccurrence.findMany).not.toHaveBeenCalled();
+    expect(ahsp.selectForBoqItem).not.toHaveBeenCalled();
+  });
+
+  it('a rejected official transaction never counts as successful context refresh', async () => {
+    const { service } = prepare({ reject: true });
+    const result = await service.execute(input);
+    expect(result.summary).toEqual({ CONTEXT_REFRESH_REVALIDATION_REQUIRED: 1 });
+    expect(result.automaticBindingPerformed).toBe(false);
+  });
+});

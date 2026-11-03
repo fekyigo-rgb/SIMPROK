@@ -61,6 +61,10 @@ export interface SelectAhspForBoqItemInput {
   reuseSourceBoqItemId?: string;
   /** Exact, approved BOQ document's source AHSP code (not WBS). */
   firstSourceAhspCode?: string;
+  /** Previously authorized working occurrence being refreshed, never overwritten. */
+  refreshSourceOccurrenceId?: string;
+  /** Compare the BOQ revision under the project lock to prohibit stale refresh. */
+  refreshExpectedBoqUpdatedAt?: string;
 }
 
 type ResolutionCreate =
@@ -366,6 +370,10 @@ export class ProjectAhspService {
       resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
       ...(input.reuseSourceBoqItemId ? { reuseSourceBoqItemId: input.reuseSourceBoqItemId } : {}),
       ...(input.firstSourceAhspCode ? { firstSourceAhspCode: input.firstSourceAhspCode } : {}),
+      ...(input.refreshSourceOccurrenceId ? {
+        refreshSourceOccurrenceId: input.refreshSourceOccurrenceId,
+        refreshExpectedBoqUpdatedAt: input.refreshExpectedBoqUpdatedAt,
+      } : {}),
     });
 
     try {
@@ -417,6 +425,96 @@ export class ProjectAhspService {
       if (!item) throw new NotFoundException('BOQ_ITEM_NOT_FOUND');
       if (item.itemType !== 'WORK_ITEM') {
         throw new ConflictException('BOQ_ITEM_NOT_WORK_ITEM');
+      }
+
+      // Existing selection → new current-context occurrence. The old
+      // occurrence is immutable; this is a guarded re-evaluation of the SAME
+      // AHSP identity, not a new similarity-based first association. All
+      // checks occur after the existing project row lock and before writing.
+      if (input.refreshSourceOccurrenceId) {
+        if (
+          !input.refreshExpectedBoqUpdatedAt ||
+          item.updatedAt.toISOString() !== input.refreshExpectedBoqUpdatedAt ||
+          item.priceOrigin || item.calculationOccurrenceId ||
+          item.workingOccurrenceId !== input.refreshSourceOccurrenceId ||
+          item.ahspVersionId !== input.ahspVersionId
+        ) {
+          throw new ConflictException('RAB_AUTO_REFRESH_SOURCE_CHANGED');
+        }
+        const former = await tx.projectAhspOccurrence.findFirst({
+          where: {
+            id: input.refreshSourceOccurrenceId,
+            projectId: input.projectId,
+            workspaceId: input.workspaceId,
+            ahspVersionId: input.ahspVersionId,
+          },
+          select: {
+            createdByAccountId: true,
+            referenceRegionId: true,
+            businessPricingAsOfDate: true,
+            idempotencyKey: true,
+            resolutionPolicyVersion: true,
+            requestPayloadHash: true,
+          },
+        });
+        if (
+          !former || !former.createdByAccountId ||
+          !former.referenceRegionId || !former.businessPricingAsOfDate ||
+          (former.referenceRegionId === input.referenceRegionId &&
+            former.businessPricingAsOfDate?.getTime() === asOf.getTime())
+        ) {
+          throw new ConflictException('RAB_AUTO_REFRESH_NOT_PROVEN_OR_NOT_STALE');
+        }
+        // Preserve the *original BOQ row identity*, not merely an attached
+        // working-occurrence pointer. Saving a draft can recreate BOQ rows and
+        // carry references forward: that MUST NOT reauthorize an old AHSP
+        // selection for a different work description.
+        let originalBoqIdentityProven = false;
+        if (former.idempotencyKey.startsWith('rab-auto-context-')) {
+          // Prior refresh was written only by this guarded path and explicitly
+          // carries its canonical BOQ ID in the idempotency key.
+          originalBoqIdentityProven = former.idempotencyKey.startsWith(
+            'rab-auto-context-' + item.id + '-',
+          );
+        } else if (
+          !former.idempotencyKey.startsWith('rab-auto-04-') &&
+          former.requestPayloadHash && former.resolutionPolicyVersion
+        ) {
+          // The original manual or approved explicit-code source selection
+          // encoded its exact BOQ ID in the existing immutable payload hash.
+          // Do not reverse engineer prior WBS reuse: without its source ref,
+          // reauthorization needs review rather than a fabricated proof.
+          const sourceIsExplicit = former.idempotencyKey.startsWith('rab-auto-05-');
+          if (!sourceIsExplicit || item.sourceAhspCode) {
+            originalBoqIdentityProven = former.requestPayloadHash === sha256({
+              boqItemId: item.id,
+              ahspVersionId: input.ahspVersionId,
+              businessPricingAsOfDate:
+                former.businessPricingAsOfDate.toISOString().slice(0, 10),
+              referenceRegionId: former.referenceRegionId,
+              resolutionPolicyVersion: former.resolutionPolicyVersion,
+              ...(sourceIsExplicit
+                ? { firstSourceAhspCode: item.sourceAhspCode }
+                : {}),
+            });
+          }
+        }
+        if (!originalBoqIdentityProven) {
+          throw new ConflictException(
+            'RAB_AUTO_REFRESH_SOURCE_IDENTITY_NOT_PROVEN',
+          );
+        }
+        const selectedRegions = await tx.projectRegionSelection.findMany({
+          where: { projectId: input.projectId },
+          select: { regionId: true },
+          take: 2,
+        });
+        if (
+          selectedRegions.length !== 1 ||
+          selectedRegions[0].regionId !== input.referenceRegionId
+        ) {
+          throw new ConflictException('RAB_AUTO_REFRESH_REGION_NOT_UNIQUE');
+        }
       }
 
       // RAB-AUTO-04: a prior human-governed decision can be inherited only
@@ -673,7 +771,7 @@ export class ProjectAhspService {
           resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
           requestPayloadHash,
           generation: (previous?.generation ?? 0) + 1,
-          previousOccurrenceId: previous?.id ?? null,
+          previousOccurrenceId: input.refreshSourceOccurrenceId ?? previous?.id ?? null,
           resolutionContentFingerprint: fingerprint,
           resolutionEvaluatedAt,
           contextCapturedByAccountId: input.accountId,
