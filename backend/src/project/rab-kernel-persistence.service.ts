@@ -208,6 +208,23 @@ export class RabKernelPersistenceService {
       if (!occurrence.referenceRegionId) {
         throw new ConflictException('REFERENCE_REGION_REQUIRED');
       }
+      // Preparation is the current authority for the occurrence's REFERENCE region.
+      // A Basic Price from a proven ancestor may still apply to that reference
+      // region below; it does not authorize an old/different occurrence region.
+      // Reuse the ProjectRegionSelection truth and the existing Project row lock,
+      // rather than constructing a second geographic hierarchy or price engine.
+      const currentRegionSelection = await tx.projectRegionSelection.findFirst({
+        where: {
+          projectId: params.projectId,
+          regionId: occurrence.referenceRegionId,
+        },
+        select: { id: true },
+      });
+      if (!currentRegionSelection) {
+        throw new ConflictException(
+          RAB_KERNEL_PERSISTENCE_REASON.PROJECT_REGION_CONTEXT_MISMATCH,
+        );
+      }
       if (
         !occurrence.businessPricingAsOfDate ||
         occurrence.businessPricingAsOfDate.getTime() !==
