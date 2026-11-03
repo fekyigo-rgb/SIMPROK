@@ -108,3 +108,96 @@ export function isProvenContextRefreshOccurrence(input: {
   }));
   return originalPayloadHash === input.requestPayloadHash;
 }
+
+
+/**
+ * Narrow RAB-AUTO-04 adjunct for legacy BOQ rows with no WBS node.
+ * NOT a text matcher or a first-association inference: both rows must live in
+ * the same server-scoped Working Draft (enforced by the caller), retain the
+ * same source WBS code and entire meaning-bearing description/specification,
+ * share the exact source unit, and have one governed prior occurrence.
+ *
+ * Unlike sameProvenBoqSourceFact, this helper MUST NOT be used without
+ * transactionally checking the unique, human-originated source decision.
+ */
+export function samePreviouslyDecidedUnindexedWorkFact(
+  a: BoqSourceFact,
+  b: BoqSourceFact,
+): boolean {
+  const exactWork = (text: string): string =>
+    normalizeWorkHeadingForEvidence(text)
+      .replace(/^Pekerjaan\s+/iu, '')
+      .trim()
+      .toLocaleLowerCase('id-ID');
+  return Boolean(
+    a.wbsNodeId === null &&
+    b.wbsNodeId === null &&
+    a.wbsCode.trim() &&
+    b.wbsCode.trim() &&
+    a.wbsCode.trim() === b.wbsCode.trim() &&
+    exactWork(a.name) &&
+    exactWork(a.name) === exactWork(b.name) &&
+    a.unit.trim() &&
+    a.unit === b.unit,
+  );
+}
+
+export function unindexedWorkSearchTerm(name: string): string {
+  return normalizeWorkHeadingForEvidence(name)
+    .replace(/^Pekerjaan\s+/iu, '')
+    .trim();
+}
+
+/**
+ * Requires positive persisted provenance, not the user-editable idempotency
+ * prefix alone. A refreshed occurrence must prove the existing canonical
+ * context-refresh hash AND trace back to one human-governed original choice.
+ */
+export function hasGovernedUnindexedSource(
+  sourceBoqItemId: string,
+  occurrence: {
+    ahspVersionId: string;
+    createdByAccountId: string | null;
+    idempotencyKey: string;
+    requestPayloadHash: string | null;
+    resolutionPolicyVersion: string | null;
+    previousOccurrenceId: string | null;
+    businessPricingAsOfDate: Date | null;
+    referenceRegionId: string | null;
+    previousOccurrence?: {
+      ahspVersionId: string;
+      createdByAccountId: string | null;
+      idempotencyKey: string;
+      requestPayloadHash: string | null;
+      resolutionPolicyVersion: string | null;
+    } | null;
+  },
+  projectId: string,
+): boolean {
+  if (!occurrence.createdByAccountId || !occurrence.requestPayloadHash ||
+      !occurrence.resolutionPolicyVersion) return false;
+  if (occurrence.idempotencyKey.startsWith('rab-auto-context-')) {
+    const prior = occurrence.previousOccurrence;
+    if (!prior || !prior.createdByAccountId || !prior.requestPayloadHash ||
+        !prior.resolutionPolicyVersion ||
+        prior.ahspVersionId !== occurrence.ahspVersionId ||
+        prior.idempotencyKey.startsWith('rab-auto-') ||
+        !occurrence.businessPricingAsOfDate || !occurrence.referenceRegionId) {
+      return false;
+    }
+    return isProvenContextRefreshOccurrence({
+      projectId,
+      boqItemId: sourceBoqItemId,
+      ahspVersionId: occurrence.ahspVersionId,
+      referenceRegionId: occurrence.referenceRegionId,
+      businessPricingAsOfDate:
+        occurrence.businessPricingAsOfDate.toISOString().slice(0, 10),
+      previousOccurrenceId: occurrence.previousOccurrenceId,
+      resolutionPolicyVersion: occurrence.resolutionPolicyVersion,
+      idempotencyKey: occurrence.idempotencyKey,
+      requestPayloadHash: occurrence.requestPayloadHash,
+    });
+  }
+  return !occurrence.idempotencyKey.startsWith('rab-auto-') &&
+    occurrence.previousOccurrenceId === null;
+}

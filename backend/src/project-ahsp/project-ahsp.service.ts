@@ -31,7 +31,7 @@ import {
 import { UNIT_REASON } from '../unit-kernel/unit-kernel.contracts';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
-import { isProvenContextRefreshOccurrence, sameProvenBoqSourceFact } from './rab-auto-source-proof';
+import { hasGovernedUnindexedSource, isProvenContextRefreshOccurrence, samePreviouslyDecidedUnindexedWorkFact, sameProvenBoqSourceFact, unindexedWorkSearchTerm } from './rab-auto-source-proof';
 import { explicitAhspSourceProof } from './rab-auto-first-source-reference';
 import {
   AhspResourceResolutionOrchestrator,
@@ -559,14 +559,18 @@ export class ProjectAhspService {
                 itemType: 'WORK_ITEM',
               },
               include: {
-                workingOccurrence: true,
-                calculationOccurrence: true,
+                workingOccurrence: { include: { previousOccurrence: true } },
+                calculationOccurrence: { include: { previousOccurrence: true } },
               },
             });
+            const canonicalWbsReuse = source
+              ? sameProvenBoqSourceFact(source, item) : false;
+            const governedUnindexedReuse = source && !canonicalWbsReuse
+              ? samePreviouslyDecidedUnindexedWorkFact(source, item) : false;
             if (
               !source ||
               source.id === item.id ||
-              !sameProvenBoqSourceFact(source, item) ||
+              (!canonicalWbsReuse && !governedUnindexedReuse) ||
               source.ahspVersionId !== input.ahspVersionId ||
               source.priceOrigin === 'MANUAL_CLIENT'
             ) {
@@ -586,6 +590,40 @@ export class ProjectAhspService {
                 asOf.getTime()
             ) {
               throw new ConflictException('RAB_AUTO_SOURCE_CONTEXT_NOT_PROVEN');
+            }
+            // RAB-AUTO-04 legacy adjunct: only one governed same-project,
+            // same-code, entire-description, same-unit decision may be reused.
+            // Recheck uniqueness and original lineage AFTER the project lock.
+            if (governedUnindexedReuse) {
+              if (!hasGovernedUnindexedSource(
+                source.id, provenOccurrence, input.projectId,
+              )) {
+                throw new ConflictException('RAB_AUTO_UNINDEXED_ORIGIN_NOT_PROVEN');
+              }
+              const searchTerm = unindexedWorkSearchTerm(item.name);
+              if (searchTerm.length < 2) {
+                throw new ConflictException('RAB_AUTO_UNINDEXED_SOURCE_NOT_SEARCHABLE');
+              }
+              const competitors = await tx.boqItem.findMany({
+                where: {
+                  id: { not: item.id },
+                  boqStructureId: structure.id,
+                  itemType: 'WORK_ITEM',
+                  wbsNodeId: null,
+                  wbsCode: item.wbsCode,
+                  unit: item.unit,
+                  name: { contains: searchTerm, mode: 'insensitive' },
+                  OR: [
+                    { workingOccurrenceId: { not: null } },
+                    { calculationOccurrenceId: { not: null } },
+                  ],
+                },
+                select: { id: true },
+                take: 2,
+              });
+              if (competitors.length !== 1 || competitors[0].id !== source.id) {
+                throw new ConflictException('RAB_AUTO_UNINDEXED_SOURCE_AMBIGUOUS');
+              }
             }
             // Project's own selected region, not geolocation or AI inference.
             const regionSelection = await tx.projectRegionSelection.findFirst({
