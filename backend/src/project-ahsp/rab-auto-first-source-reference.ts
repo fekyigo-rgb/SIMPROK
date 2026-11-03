@@ -52,7 +52,7 @@ export function explicitAhspSourceProof(
  * preferred canonical classification, Unit Kernel identity and a current
  * approved BOQ source. The canonical transaction writer repeats these gates.
  */
-const fullWorkFact = (raw: string): string =>
+export const normalizedExactUncodedWorkFact = (raw: string): string =>
   normalizeWorkHeadingForEvidence(raw)
     .replace(/^Pekerjaan\s+/iu, '')
     .toLocaleLowerCase('id-ID');
@@ -64,8 +64,9 @@ export function exactUncodedWorkFact(
   if (boq.sourceAhspCode || !boq.name.trim() || !ahsp.methodName.trim()) {
     return false;
   }
-  return Boolean(fullWorkFact(boq.name)) &&
-    fullWorkFact(boq.name) === fullWorkFact(ahsp.methodName);
+  return Boolean(normalizedExactUncodedWorkFact(boq.name)) &&
+    normalizedExactUncodedWorkFact(boq.name) ===
+      normalizedExactUncodedWorkFact(ahsp.methodName);
 }
 
 /**

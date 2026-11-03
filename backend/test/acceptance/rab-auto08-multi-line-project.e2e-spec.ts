@@ -696,7 +696,7 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       data: {
         workspaceId,
         workType: tag + ' Metode Alternatif',
-        methodName: uncodedLine.description,
+        methodName: uncodedLine.description.replace(' ', '   '),
         methodType: 'MANUAL',
         locationType: 'GENERAL',
         ownershipType: 'USER_ASSET',
@@ -915,6 +915,37 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
     });
     verifiedTotal += Number(persistedUncoded.body.stored.lineTotal);
     expect(verifiedTotal.toFixed(2)).toBe(expectedProjectTotal);
+
+    // Full-replace draft save must not preserve an already-priced AHSP when
+    // the work description/specification changes. No protected row may
+    // silently inherit the old amount or occurrence.
+    const renamedAttempt = await request(app.getHttpServer())
+      .put('/projects/' + projectId + '/boq/draft')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .send({
+        rows: officialDraft.body.items.map((row: {
+          id: string; itemType: string; name: string; wbsCode: string;
+          quantity: string; unit: string; sortOrder: number;
+        }) => ({
+          tempId: row.id, itemType: row.itemType,
+          name: row.id === uncodedSaved!.id
+            ? uncodedLine.description + ' Tipe Khusus'
+            : row.name,
+          wbsCode: row.wbsCode, quantity: Number(row.quantity),
+          unit: row.unit, sortOrder: row.sortOrder,
+        })),
+      })
+      .expect(409);
+    expect(renamedAttempt.body.message).toBe(
+      'SERVER_ROW_INPUT_CHANGED_REQUIRES_RECALCULATION',
+    );
+    const protectedUncoded = await prisma.boqItem.findUniqueOrThrow({
+      where: { id: uncodedSaved!.id },
+    });
+    expect(protectedUncoded.name).toBe(uncodedLine.description);
+    expect(protectedUncoded.priceOrigin).toBe('SERVER_COST_KERNEL');
+    expect(protectedUncoded.lineTotal?.toFixed(2)).toBe('400000.00');
+
     const repeated = await request(app.getHttpServer())
       .post(`/projects/${projectId}/rab/auto-price-ready?page=1&limit=25`)
       .set('Authorization', `Bearer ${editorToken}`)
@@ -1029,5 +1060,69 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       .expect(201);
     expect(repeated.body.counts.calculatedAndPersisted).toBe(0);
     expect(repeated.body.counts.alreadyCalculated).toBe(9);
+  }, 120000);
+
+  it('drops an UNPRICED stale AHSP occurrence after a work-spec edit while keeping completed RAB prices', async () => {
+    const pending = await prisma.boqItem.create({
+      data: {
+        boqStructureId: structureId, wbsNodeId: null, wbsCode: '9.10',
+        name: tag + ' Sambungan Pelat Baru Tipe A',
+        quantity: '1', unit: 'Kg', sortOrder: 902,
+        itemType: 'WORK_ITEM', sourceAhspCode: null,
+      },
+    });
+    await request(app.getHttpServer())
+      .post('/projects/' + projectId + '/ahsp-occurrences/boq-items/' +
+        pending.id + '/select-ahsp')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .send({
+        ahspVersionId: versionIds[0],
+        businessPricingAsOfDate: asOfDate, referenceRegionId: regionId,
+        idempotencyKey: tag + '-unpriced-to-edit',
+      })
+      .expect(201);
+    const before = await prisma.boqItem.findUniqueOrThrow({
+      where: { id: pending.id },
+    });
+    expect(before.workingOccurrenceId).not.toBeNull();
+    expect(before.ahspVersionId).toBe(versionIds[0]);
+    expect(before.priceOrigin).toBeNull();
+
+    const draft = await request(app.getHttpServer())
+      .get('/projects/' + projectId + '/boq/draft')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .expect(200);
+    const changedName = pending.name + ' Tebal 20 mm';
+    const saved = await request(app.getHttpServer())
+      .put('/projects/' + projectId + '/boq/draft')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .send({
+        rows: draft.body.items.map((row: {
+          id: string; itemType: string; name: string; wbsCode: string;
+          quantity: string; unit: string; sortOrder: number;
+        }) => ({
+          tempId: row.id, itemType: row.itemType,
+          name: row.id === pending.id ? changedName : row.name,
+          wbsCode: row.wbsCode, quantity: Number(row.quantity),
+          unit: row.unit, sortOrder: row.sortOrder,
+        })),
+      })
+      .expect(200);
+    const changed = saved.body.items.find(
+      (row: { name: string }) => row.name === changedName,
+    );
+    expect(changed).toBeTruthy();
+    expect(changed).toMatchObject({
+      ahspVersionId: null, workingOccurrenceId: null,
+      priceOrigin: null, unitPrice: null, lineTotal: null,
+    });
+    const preserved = saved.body.items.filter(
+      (row: { priceOrigin: string | null }) =>
+        row.priceOrigin === 'SERVER_COST_KERNEL',
+    );
+    expect(preserved).toHaveLength(lines.length + 3);
+    expect(preserved.every((row: {
+      ahspVersionId: string | null; lineTotal: string | null;
+    }) => row.ahspVersionId && row.lineTotal !== null)).toBe(true);
   }, 120000);
 });

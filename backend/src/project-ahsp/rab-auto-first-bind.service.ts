@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { parseDateOnlyUtc } from '../common/date-only.util';
 import { WORKING_DRAFT_STRUCTURE_NAME } from '../project/rab-lifecycle-policy.service';
 import { ProjectAhspService } from './project-ahsp.service';
-import { exactUncodedFirstCandidateProven, exactUncodedSearchAnchor, exactUncodedWorkFact, explicitAhspSourceProof } from './rab-auto-first-source-reference';
+import { exactUncodedFirstCandidateProven, exactUncodedWorkFact, normalizedExactUncodedWorkFact, explicitAhspSourceProof } from './rab-auto-first-source-reference';
 import { createHash } from 'crypto';
 
 /**
@@ -90,6 +90,7 @@ export class RabAutoFirstBindService {
         select: {
           id: true,
           name: true,
+          unit: true,
           sourceAhspCode: true,
           updatedAt: true,
           ahspVersionId: true,
@@ -130,9 +131,9 @@ export class RabAutoFirstBindService {
       }
       const uncoded = !row.sourceAhspCode;
       const searchTerm = uncoded
-        ? exactUncodedSearchAnchor(row.name)
+        ? normalizedExactUncodedWorkFact(row.name)
         : row.sourceAhspCode!.trim();
-      if (searchTerm.length < 2 || searchTerm.length > 120) {
+      if (searchTerm.length < 2 || searchTerm.length > (uncoded ? 1000 : 120)) {
         results.push({
           boqItemId: row.id,
           kind: 'SOURCE_REFERENCE_NOT_SEARCHABLE',
@@ -141,12 +142,16 @@ export class RabAutoFirstBindService {
       }
 
       try {
-        const catalog = await this.ahsp.searchEligibleVersions(
-          input.workspaceId,
-          input.businessPricingAsOfDate,
-          { projectId: input.projectId, boqItemId: row.id },
-          { q: searchTerm, page: '1', limit: '50' },
-        );
+        const catalog = uncoded
+          ? await this.ahsp.searchExactUncodedEligibleVersions(
+              input.workspaceId, input.businessPricingAsOfDate,
+              input.projectId, { name: row.name, unit: row.unit },
+            )
+          : await this.ahsp.searchEligibleVersions(
+              input.workspaceId, input.businessPricingAsOfDate,
+              { projectId: input.projectId, boqItemId: row.id },
+              { q: searchTerm, page: '1', limit: '50' },
+            );
         if (catalog.hasNext) {
           results.push({
             boqItemId: row.id,

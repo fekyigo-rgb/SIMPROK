@@ -18,6 +18,7 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
     id: '40000000-0000-4000-8000-000000000001',
     sourceAhspCode: 'B.64',
     name: 'Saluran U Pracetak Tipe DS 10A (140 cm x 140 cm dengan tutup)',
+    unit: 'Kg',
     updatedAt: new Date('2026-10-28T11:00:00Z'),
     ahspVersionId: null,
     workingOccurrenceId: null,
@@ -45,7 +46,11 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
     projectRegionSelection: { findMany: jest.Mock };
     boqItem: { findMany: jest.Mock };
   };
-  let ahsp: { searchEligibleVersions: jest.Mock; selectForBoqItem: jest.Mock };
+  let ahsp: {
+    searchEligibleVersions: jest.Mock;
+    searchExactUncodedEligibleVersions: jest.Mock;
+    selectForBoqItem: jest.Mock;
+  };
   let service: RabAutoFirstBindService;
   beforeEach(() => {
     prisma = {
@@ -70,6 +75,9 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
       searchEligibleVersions: jest.fn().mockResolvedValue({
         items: [candidate()],
         hasNext: false,
+      }),
+      searchExactUncodedEligibleVersions: jest.fn().mockResolvedValue({
+        items: [], hasNext: false,
       }),
       selectForBoqItem: jest.fn().mockResolvedValue({ id: 'persisted' }),
     };
@@ -126,7 +134,7 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
     expect((await service.execute(input)).summary).toEqual({
       UNCODED_EXACT_WORK_NOT_PROVEN: 1,
     });
-    expect(ahsp.searchEligibleVersions).toHaveBeenCalled();
+    expect(ahsp.searchExactUncodedEligibleVersions).toHaveBeenCalled();
     expect(ahsp.selectForBoqItem).not.toHaveBeenCalled();
   });
 
@@ -143,7 +151,7 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
       },
     });
     prisma.boqItem.findMany.mockResolvedValue([uncoded]);
-    ahsp.searchEligibleVersions.mockResolvedValue({
+    ahsp.searchExactUncodedEligibleVersions.mockResolvedValue({
       hasNext: false, items: [exact],
     });
     expect(exactUncodedSearchAnchor(uncoded.name))
@@ -199,13 +207,13 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
         ...good.ahsp, methodName: good.ahsp.methodName.replace('10A', '10B'),
       } },
     ]) {
-      ahsp.searchEligibleVersions.mockResolvedValue({
+      ahsp.searchExactUncodedEligibleVersions.mockResolvedValue({
         hasNext: false, items: [changed],
       });
       expect((await service.execute(input)).summary)
         .toEqual({ UNCODED_EXACT_WORK_NOT_PROVEN: 1 });
     }
-    ahsp.searchEligibleVersions.mockResolvedValue({
+    ahsp.searchExactUncodedEligibleVersions.mockResolvedValue({
       hasNext: false,
       items: [good, { ...good, id: 'another-approved-version' }],
     });
@@ -213,7 +221,7 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
       .toEqual({ UNCODED_EXACT_WORK_AMBIGUOUS: 1 });
     // Another exact AHSP cannot disappear just because the project's
     // preference ranks its classification as a fallback.
-    ahsp.searchEligibleVersions.mockResolvedValue({
+    ahsp.searchExactUncodedEligibleVersions.mockResolvedValue({
       hasNext: false,
       items: [
         good,
@@ -230,7 +238,7 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
     });
     expect((await service.execute(input)).summary)
       .toEqual({ UNCODED_EXACT_WORK_AMBIGUOUS: 1 });
-    ahsp.searchEligibleVersions.mockResolvedValue({
+    ahsp.searchExactUncodedEligibleVersions.mockResolvedValue({
       hasNext: true, items: [good],
     });
     expect((await service.execute(input)).summary)

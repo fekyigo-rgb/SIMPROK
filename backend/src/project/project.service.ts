@@ -2522,7 +2522,11 @@ export class ProjectService {
         const unitChanged =
           row.unit !== undefined && row.unit !== existing.unit;
         const itemTypeChanged = row.itemType !== existing.itemType;
-        if (quantityChanged || unitChanged || itemTypeChanged) {
+        const workFactChanged =
+          row.name !== existing.name ||
+          (row.wbsCode ?? '') !== existing.wbsCode;
+        if (quantityChanged || unitChanged || itemTypeChanged ||
+            workFactChanged) {
           throw new ConflictException(
             SERVER_ROW_PROTECTION_REASON.SERVER_ROW_INPUT_CHANGED_REQUIRES_RECALCULATION,
           );
@@ -2585,6 +2589,17 @@ export class ProjectService {
             : new Prisma.Decimal(0);
 
         const existing = existingById.get(row.tempId);
+        // Editing a source work fact may not silently carry a different
+        // AHSP or its old resource/price resolutions into the new work.
+        // The ordinary draft-save path invalidates unpriced associations;
+        // priced server rows are protected by the preflight above.
+        const sourceChanged = existing != null && (
+          row.name !== existing.name ||
+          (row.unit ?? '') !== existing.unit ||
+          (row.wbsCode ?? '') !== existing.wbsCode ||
+          row.itemType !== existing.itemType
+        );
+        const preserveAssociation = !sourceChanged && !isFolder && !isNote;
         const isServerRow =
           !isFolder &&
           !isNote &&
@@ -2641,9 +2656,12 @@ export class ProjectService {
              * one derivation now, and it happens in the preflight.
              */
             sortOrder: effectiveSortOrder,
-            ahspVersionId: existing?.ahspVersionId ?? null,
-            ahspSnapshotId: existing?.ahspSnapshotId ?? null,
-            workingOccurrenceId: existing?.workingOccurrenceId ?? null,
+            ahspVersionId: preserveAssociation
+              ? existing?.ahspVersionId ?? null : null,
+            ahspSnapshotId: preserveAssociation
+              ? existing?.ahspSnapshotId ?? null : null,
+            workingOccurrenceId: preserveAssociation
+              ? existing?.workingOccurrenceId ?? null : null,
             priceOrigin: isServerRow
               ? 'SERVER_COST_KERNEL'
               : unitPrice !== null

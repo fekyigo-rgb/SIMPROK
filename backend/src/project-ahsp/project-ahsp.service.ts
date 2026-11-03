@@ -32,7 +32,7 @@ import { UNIT_REASON } from '../unit-kernel/unit-kernel.contracts';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
 import { hasGovernedUnindexedSource, isProvenContextRefreshOccurrence, samePreviouslyDecidedUnindexedWorkFact, sameProvenBoqSourceFact, unindexedWorkSearchTerm } from './rab-auto-source-proof';
-import { exactUncodedFirstCandidateProven, exactUncodedSearchAnchor, exactUncodedWorkFact, explicitAhspSourceProof } from './rab-auto-first-source-reference';
+import { exactUncodedFirstCandidateProven, exactUncodedWorkFact, normalizedExactUncodedWorkFact, explicitAhspSourceProof } from './rab-auto-first-source-reference';
 import {
   AhspResourceResolutionOrchestrator,
   E1A_RESOLUTION_POLICY_VERSION,
@@ -253,6 +253,76 @@ export class ProjectAhspService {
       ? await this.attachProjectPreference(context.projectId, preferenceItem, items)
       : items;
     return { items: ranked, page, limit, hasNext, query: q };
+  }
+
+
+  /**
+   * Uncoded first association only: exact NORMALIZED work identity, not a
+   * ranking/search token. PostgreSQL NFC/whitespace/heading normalization
+   * happens BEFORE the result limit. Both discovery and transactional writer
+   * use this same read path. A bounded overflow fails closed.
+   */
+  async searchExactUncodedEligibleVersions(
+    workspaceId: string,
+    asOfRaw: string,
+    projectId: string,
+    boq: { name: string; unit: string },
+    store: Prisma.TransactionClient = this.prisma,
+  ) {
+    const normalized = normalizedExactUncodedWorkFact(boq.name);
+    if (normalized.length < 2 || normalized.length > 1000) {
+      return { items: [], hasNext: true };
+    }
+    const ids = await store.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT "id" FROM "ahsps"
+      WHERE ("workspaceId" IS NULL OR "workspaceId" = ${workspaceId}::uuid)
+        AND btrim(regexp_replace(
+          regexp_replace(lower(normalize("methodName", NFC)),
+            '^[[:space:]]*(pek[[:space:]]*[.][[:space:]]*|pekerjaan[[:space:]]+)',
+            '', 'i'),
+          '[[:space:]]+', ' ', 'g')) = ${normalized}
+      ORDER BY "id" LIMIT 101
+    `);
+    if (ids.length > 100) return { items: [], hasNext: true };
+    if (ids.length === 0) return { items: [], hasNext: false };
+    const asOf = parseDateOnlyUtc(asOfRaw, 'businessPricingAsOfDate');
+    const eligibility = buildEligibleAhspVersionWhere(workspaceId, asOf);
+    const parents = await store.aHSP.findMany({
+      where: {
+        id: { in: ids.map((row) => row.id) },
+        versions: { some: eligibility },
+      },
+      select: {
+        id: true, code: true, workType: true, methodName: true,
+        methodType: true, locationType: true, keterangan: true,
+        versions: {
+          where: eligibility,
+          orderBy: [{ versionNumber: 'desc' }, { id: 'asc' }],
+          take: 1,
+          select: {
+            id: true, outputUnit: true, versionNumber: true,
+            _count: { select: { resources: true } },
+          },
+        },
+      },
+      orderBy: [{ workType: 'asc' }, { methodName: 'asc' }, { id: 'asc' }],
+    });
+    const candidates = parents.flatMap(({ versions, ...parent }) => {
+      const version = versions[0];
+      return version ? [{
+        ...version,
+        ahsp: {
+          id: parent.id, code: parent.code,
+          workType: parent.workType, methodName: parent.methodName,
+          methodType: parent.methodType, locationType: parent.locationType,
+          keterangan: parent.keterangan,
+        },
+      }] : [];
+    });
+    const items = await this.attachProjectPreference(
+      projectId, boq, candidates, store,
+    );
+    return { items, hasNext: false };
   }
 
   private async loadPreferenceBoqItem(
@@ -738,60 +808,14 @@ export class ProjectAhspService {
       // complete eligible catalog, current version, classification and Unit
       // Kernel preference under the project lock. No rank-only authorization.
       if (input.firstUncodedExactWork) {
-        const anchor = exactUncodedSearchAnchor(item.name);
-        if (anchor.length < 2) {
-          throw new ConflictException('FIRST_UNCODED_WORK_UNSEARCHABLE');
-        }
-        const eligibility = buildEligibleAhspVersionWhere(
-          input.workspaceId, asOf,
+        const catalog = await this.searchExactUncodedEligibleVersions(
+          input.workspaceId, input.businessPricingAsOfDate,
+          input.projectId, item, tx,
         );
-        const parents = await tx.aHSP.findMany({
-          where: {
-            versions: { some: eligibility },
-            OR: [
-              { code: { contains: anchor, mode: 'insensitive' } },
-              { workType: { contains: anchor, mode: 'insensitive' } },
-              { methodName: { contains: anchor, mode: 'insensitive' } },
-            ],
-          },
-          select: {
-            id: true, workType: true, methodName: true,
-            methodType: true, locationType: true, keterangan: true,
-            versions: {
-              where: eligibility,
-              orderBy: [{ versionNumber: 'desc' }, { id: 'asc' }],
-              take: 1,
-              select: {
-                id: true, outputUnit: true,
-                _count: { select: { resources: true } },
-              },
-            },
-          },
-          orderBy: [
-            { workType: 'asc' }, { methodName: 'asc' }, { id: 'asc' },
-          ],
-          take: 51,
-        });
-        if (parents.length > 50) {
+        if (catalog.hasNext) {
           throw new ConflictException('FIRST_UNCODED_UNIVERSE_INCOMPLETE');
         }
-        const candidates = parents.flatMap((parent) => {
-          const newest = parent.versions[0];
-          return newest ? [{
-            ...newest,
-            ahsp: {
-              id: parent.id,
-              workType: parent.workType,
-              methodName: parent.methodName,
-              methodType: parent.methodType,
-              locationType: parent.locationType,
-              keterangan: parent.keterangan,
-            },
-          }] : [];
-        });
-        const ranked = await this.attachProjectPreference(
-          input.projectId, item, candidates, tx,
-        );
+        const ranked = catalog.items;
         // Count all exact eligible method labels BEFORE applying category,
         // resource or unit gates. Another method with the same words is
         // genuine source ambiguity even if the preference would reject it.

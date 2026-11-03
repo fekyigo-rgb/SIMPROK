@@ -61,6 +61,7 @@ describe('RAB-AUTO-07 contract: SOURCE FACT → AHSP → COST → CANONICAL RAB 
   let nativeCost: { calculateBoqItem: jest.Mock };
   let selection: {
     searchEligibleVersions: jest.Mock;
+    searchExactUncodedEligibleVersions: jest.Mock;
     selectForBoqItem: jest.Mock;
   };
 
@@ -88,6 +89,9 @@ describe('RAB-AUTO-07 contract: SOURCE FACT → AHSP → COST → CANONICAL RAB 
             preference: { recommended: true },
           },
         ],
+      }),
+      searchExactUncodedEligibleVersions: jest.fn().mockResolvedValue({
+        items: [], hasNext: false,
       }),
       selectForBoqItem: jest.fn().mockImplementation(() => {
         state.ahspVersionId = ahspVersionId;
