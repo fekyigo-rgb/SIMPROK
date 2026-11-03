@@ -1,10 +1,9 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { createHash } from 'crypto';
 import { PrismaService } from '../prisma/prisma.service';
 import { parseDateOnlyUtc } from '../common/date-only.util';
 import { WORKING_DRAFT_STRUCTURE_NAME } from '../project/rab-lifecycle-policy.service';
 import { ProjectAhspService } from './project-ahsp.service';
-import { sameProvenBoqSourceFact } from './rab-auto-source-proof';
+import { buildProvenContextRefreshKey, sameProvenBoqSourceFact } from './rab-auto-source-proof';
 
 /**
  * RAB-AUTO-04. Reuses one already-human-proven AHSP association for an
@@ -127,15 +126,17 @@ export class RabAutoProvenReuseService {
           continue;
         }
         const currentRegionId = selectedRegions[0].regionId;
-        // Expose the exact canonical BOQ row ID in lineage, so a later
-        // BOQ draft recreation cannot borrow this auto-refresh proof.
-        const idempotencyKey = 'rab-auto-context-' + item.id + '-' + createHash('sha256')
-          .update([
-            input.projectId, item.id, item.workingOccurrenceId,
-            item.ahspVersionId, currentRegionId,
-            input.businessPricingAsOfDate, item.updatedAt.toISOString(),
-          ].join('|'))
-          .digest('hex');
+        // The existing canonical source-proof helper binds the item, its
+        // prior occurrence and BOQ revision to this internal-only action.
+        const idempotencyKey = buildProvenContextRefreshKey({
+          projectId: input.projectId,
+          boqItemId: item.id,
+          previousOccurrenceId: item.workingOccurrenceId,
+          ahspVersionId: item.ahspVersionId,
+          referenceRegionId: currentRegionId,
+          businessPricingAsOfDate: input.businessPricingAsOfDate,
+          boqUpdatedAt: item.updatedAt.toISOString(),
+        });
         try {
           // The official writer re-locks and rechecks exact BOQ revision,
           // original occurrence identity, selected region, current AHSP

@@ -31,7 +31,7 @@ import {
 import { UNIT_REASON } from '../unit-kernel/unit-kernel.contracts';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
-import { sameProvenBoqSourceFact } from './rab-auto-source-proof';
+import { isProvenContextRefreshOccurrence, sameProvenBoqSourceFact } from './rab-auto-source-proof';
 import { explicitAhspSourceProof } from './rab-auto-first-source-reference';
 import {
   AhspResourceResolutionOrchestrator,
@@ -397,6 +397,13 @@ export class ProjectAhspService {
         if (replay.requestPayloadHash !== requestPayloadHash) {
           throw new ConflictException('IDEMPOTENCY_PAYLOAD_CONFLICT');
         }
+        // A refresh replay is never proof that the BOQ is still the same
+        // revision or that this occurrence remains the working one. A repeat
+        // must reread canonical state; do not return a stale success receipt.
+        // Existing manual/explicit-source idempotent behavior is unchanged.
+        if (input.refreshSourceOccurrenceId) {
+          throw new ConflictException('RAB_AUTO_REFRESH_REPLAY_REQUIRES_FRESH_READ');
+        }
         return replay;
       }
 
@@ -455,6 +462,7 @@ export class ProjectAhspService {
             idempotencyKey: true,
             resolutionPolicyVersion: true,
             requestPayloadHash: true,
+            previousOccurrenceId: true,
           },
         });
         if (
@@ -471,11 +479,22 @@ export class ProjectAhspService {
         // selection for a different work description.
         let originalBoqIdentityProven = false;
         if (former.idempotencyKey.startsWith('rab-auto-context-')) {
-          // Prior refresh was written only by this guarded path and explicitly
-          // carries its canonical BOQ ID in the idempotency key.
-          originalBoqIdentityProven = former.idempotencyKey.startsWith(
-            'rab-auto-context-' + item.id + '-',
-          );
+          // A client can choose this same prefix in MANUAL selection. Prove
+          // the complete internally generated key AND its immutable payload
+          // hash, including internal-only refresh source + BOQ revision. A
+          // prefix by itself can never authenticate decision provenance.
+          originalBoqIdentityProven = isProvenContextRefreshOccurrence({
+            projectId: input.projectId,
+            boqItemId: item.id,
+            ahspVersionId: input.ahspVersionId,
+            referenceRegionId: former.referenceRegionId,
+            businessPricingAsOfDate:
+              former.businessPricingAsOfDate.toISOString().slice(0, 10),
+            previousOccurrenceId: former.previousOccurrenceId,
+            resolutionPolicyVersion: former.resolutionPolicyVersion,
+            idempotencyKey: former.idempotencyKey,
+            requestPayloadHash: former.requestPayloadHash,
+          });
         } else if (
           !former.idempotencyKey.startsWith('rab-auto-04-') &&
           former.requestPayloadHash && former.resolutionPolicyVersion

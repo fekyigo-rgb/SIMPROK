@@ -6,6 +6,7 @@ import * as kernel from '../ahsp/price-resolution/ahsp-resource-price-resolution
 import { BasicPriceEligibilityPolicy } from '../basic-price/basic-price-eligibility.policy';
 import { basicPriceRegionApplicabilityWhere } from '../basic-price/basic-price-region-applicability';
 import { ProjectAhspService } from './project-ahsp.service';
+import { buildProvenContextRefreshKey, isProvenContextRefreshOccurrence } from './rab-auto-source-proof';
 import {
   AhspResourceResolutionOrchestrator,
   E1A_RESOLUTION_POLICY_VERSION,
@@ -782,6 +783,145 @@ describe('ProjectAhspService E1A', () => {
     })).rejects.toThrow('RAB_AUTO_REFRESH_SOURCE_IDENTITY_NOT_PROVEN');
     expect(tx.projectAhspOccurrence.create).not.toHaveBeenCalled();
     expect(tx.boqItem.update).not.toHaveBeenCalled();
+  });
+
+  it('REVIEW-01: a manual selection cannot forge the internal context-refresh origin even with the exact reserved key', async () => {
+    const oldOccurrenceId = '70000000-0000-4000-8000-000000000007';
+    const originalSourceId = '71000000-0000-4000-8000-000000000007';
+    const updatedAt = new Date('2026-10-29T10:00:00.000Z');
+    const originalRevision = '2026-10-25T10:00:00.000Z';
+    const originalDate = '2026-08-03';
+    const originalRegion = 'old-reference-region';
+    const forgedKey = buildProvenContextRefreshKey({
+      projectId: selectionInput.projectId,
+      boqItemId: selectionInput.boqItemId,
+      previousOccurrenceId: originalSourceId,
+      ahspVersionId: selectionInput.ahspVersionId,
+      referenceRegionId: originalRegion,
+      businessPricingAsOfDate: originalDate,
+      boqUpdatedAt: originalRevision,
+    });
+    const tx = makeSuccessTx().tx;
+    tx.boqItem.findFirst.mockResolvedValue({
+      id: selectionInput.boqItemId, itemType: 'WORK_ITEM',
+      unit: 'M1', ahspVersionId: selectionInput.ahspVersionId,
+      workingOccurrenceId: oldOccurrenceId, calculationOccurrenceId: null,
+      priceOrigin: null, updatedAt,
+    });
+    tx.projectAhspOccurrence.findFirst.mockImplementation(async ({ where }: any) =>
+      where.id === oldOccurrenceId
+        ? {
+            createdByAccountId: selectionInput.accountId,
+            referenceRegionId: originalRegion,
+            businessPricingAsOfDate: new Date(originalDate + 'T00:00:00.000Z'),
+            idempotencyKey: forgedKey,
+            previousOccurrenceId: originalSourceId,
+            resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
+            // This is the HASH the public manual endpoint actually stores:
+            // it does NOT include internal-only refresh fields.
+            requestPayloadHash: originalBoqBindingHash(
+              selectionInput.boqItemId, originalDate, originalRegion),
+          }
+        : null,
+    );
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+    await expect(service.selectForBoqItem({
+      ...selectionInput,
+      idempotencyKey: 'refresh-after-fake-origin',
+      refreshSourceOccurrenceId: oldOccurrenceId,
+      refreshExpectedBoqUpdatedAt: updatedAt.toISOString(),
+    })).rejects.toThrow('RAB_AUTO_REFRESH_SOURCE_IDENTITY_NOT_PROVEN');
+    expect(tx.projectAhspOccurrence.create).not.toHaveBeenCalled();
+    expect(tx.boqItem.update).not.toHaveBeenCalled();
+  });
+
+  it('REVIEW-01: genuine previous internal refresh must prove both its canonical key and immutable payload hash', () => {
+    const previousOccurrenceId = '70000000-0000-4000-8000-000000000007';
+    const originalRevision = '2026-10-29T10:00:00.000Z';
+    const oldDate = '2026-10-29';
+    const oldRegion = 'old-reference-region';
+    const facts = {
+      projectId: selectionInput.projectId,
+      boqItemId: selectionInput.boqItemId,
+      previousOccurrenceId,
+      ahspVersionId: selectionInput.ahspVersionId,
+      referenceRegionId: oldRegion,
+      businessPricingAsOfDate: oldDate,
+      boqUpdatedAt: originalRevision,
+    };
+    const authenticKey = buildProvenContextRefreshKey(facts);
+    const authenticPayloadHash = createHash('sha256').update(JSON.stringify({
+      boqItemId: facts.boqItemId,
+      ahspVersionId: facts.ahspVersionId,
+      businessPricingAsOfDate: facts.businessPricingAsOfDate,
+      referenceRegionId: facts.referenceRegionId,
+      resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
+      refreshSourceOccurrenceId: facts.previousOccurrenceId,
+      refreshExpectedBoqUpdatedAt: facts.boqUpdatedAt,
+    })).digest('hex');
+    const evidence = {
+      projectId: facts.projectId,
+      boqItemId: facts.boqItemId,
+      ahspVersionId: facts.ahspVersionId,
+      referenceRegionId: facts.referenceRegionId,
+      businessPricingAsOfDate: facts.businessPricingAsOfDate,
+      previousOccurrenceId: facts.previousOccurrenceId,
+      resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
+      idempotencyKey: authenticKey,
+      requestPayloadHash: authenticPayloadHash,
+    };
+    expect(isProvenContextRefreshOccurrence(evidence)).toBe(true);
+    expect(isProvenContextRefreshOccurrence({
+      ...evidence,
+      requestPayloadHash: originalBoqBindingHash(
+        facts.boqItemId, facts.businessPricingAsOfDate, facts.referenceRegionId),
+    })).toBe(false);
+    expect(isProvenContextRefreshOccurrence({
+      ...evidence, boqItemId: 'different-boq-row',
+    })).toBe(false);
+    expect(isProvenContextRefreshOccurrence({
+      ...evidence, previousOccurrenceId: 'different-previous-occurrence',
+    })).toBe(false);
+  });
+
+  it('REVIEW-02: matching refresh idempotency replay must not return stale success without a fresh canonical read', async () => {
+    const updatedAt = '2026-10-29T10:00:00.000Z';
+    const originalOccurrenceId = '70000000-0000-4000-8000-000000000007';
+    const refresh = {
+      ...selectionInput,
+      idempotencyKey: 'one-guarded-refresh',
+      refreshSourceOccurrenceId: originalOccurrenceId,
+      refreshExpectedBoqUpdatedAt: updatedAt,
+    };
+    const hash = createHash('sha256').update(JSON.stringify({
+      boqItemId: refresh.boqItemId,
+      ahspVersionId: refresh.ahspVersionId,
+      businessPricingAsOfDate: refresh.businessPricingAsOfDate,
+      referenceRegionId: refresh.referenceRegionId,
+      resolutionPolicyVersion: E1A_RESOLUTION_POLICY_VERSION,
+      refreshSourceOccurrenceId: refresh.refreshSourceOccurrenceId,
+      refreshExpectedBoqUpdatedAt: refresh.refreshExpectedBoqUpdatedAt,
+    })).digest('hex');
+    const tx: any = {
+      $queryRaw: jest.fn().mockResolvedValue([{
+        id: refresh.projectId, status: 'PLANNED', workspaceId,
+      }]),
+      projectAhspOccurrence: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'stale-record-no-longer-current',
+          requestPayloadHash: hash,
+          previousOccurrenceId: originalOccurrenceId,
+        }),
+        create: jest.fn(),
+      },
+      boqItem: { findFirst: jest.fn(), update: jest.fn() },
+    };
+    prisma.$transaction.mockImplementation((callback: any) => callback(tx));
+    await expect(service.selectForBoqItem(refresh)).rejects.toThrow(
+      'RAB_AUTO_REFRESH_REPLAY_REQUIRES_FRESH_READ');
+    // A client has not been told that an obsolete result is current.
+    expect(tx.boqItem.update).not.toHaveBeenCalled();
+    expect(tx.projectAhspOccurrence.create).not.toHaveBeenCalled();
   });
 
   it('findOne is scoped by occurrence, project, and workspace', async () => {
