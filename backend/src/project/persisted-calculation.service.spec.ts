@@ -524,3 +524,104 @@ describe('PersistedCalculationService — RM-03 read-only re-proof', () => {
     });
   });
 });
+
+
+/**
+ * PR264: same frozen canonical Unit Kernel output identity must survive a
+ * persisted RAB hard reload for ALL unit families, not just meter length.
+ * The canonical writer, Cost Kernel and this read-only verifier consume the
+ * same immutable proof. Source spellings are not replaced by display strings.
+ */
+describe('PR264 — frozen Unit Kernel evidence in persisted calculation', () => {
+  const proofFor = (boqUnit: string, ahspOutputUnit: string) => ({
+    boqUnitAtSelection: boqUnit,
+    ahspOutputUnitAtSelection: ahspOutputUnit,
+    canonicalOutputUnitDefinitionId: '10000000-0000-4000-8000-000000000001',
+  });
+  it.each([
+    ['m', 'M1', 'meter panjang'],
+    ['M', 'm1', 'meter panjang huruf besar'],
+    ['m²', 'M2', 'meter persegi'],
+    ['m2', 'M2', 'meter persegi tanpa superscript'],
+    ['m³', 'M3', 'meter kubik'],
+    ['m3', 'M3', 'meter kubik tanpa superscript'],
+    ['L', 'liter', 'liter'],
+    ['Ltr', 'LITER', 'liter singkatan'],
+    ['Kg', 'KG', 'kilogram'],
+    ['Ls', 'LS', 'lump sum'],
+  ])('re-verifies saved money with proven canonical output %s / %s (%s)', async (
+    boqUnit, outputUnit,
+  ) => {
+    const { prisma, accessedModels } = createGuardedPrisma({
+      boqItem: buildPersistedBoqItem({
+        unit: boqUnit,
+        ahspVersion: { outputUnit },
+      }),
+      occurrence: {
+        ...buildOccurrence(),
+        ...proofFor(boqUnit, outputUnit),
+      },
+    });
+    const result = await new PersistedCalculationService(prisma)
+      .getPersistedCalculation(BOQ_ITEM_ID, PROJECT_ID, WORKSPACE_ID);
+    expect(result).toMatchObject({
+      status: PERSISTED_CALCULATION_STATUS.VERIFIED,
+      priceOrigin: 'SERVER_COST_KERNEL',
+      stored: { unitPrice: EXPECTED_UNIT_PRICE, lineTotal: EXPECTED_LINE_TOTAL },
+      recomputed: { unitPrice: EXPECTED_UNIT_PRICE, lineTotal: EXPECTED_LINE_TOTAL },
+      integrity: {
+        unitPriceMatches: true,
+        lineTotalMatches: true,
+        allResourceCostsReproduced: true,
+      },
+    });
+    expect(accessedModels).toEqual(new Set([
+      'boqItem', 'projectAhspOccurrence',
+    ]));
+  });
+
+  it.each([
+    ['m²', 'M3', 'persegi vs kubik'],
+    ['m³', 'M2', 'kubik vs persegi'],
+    ['kg', 'LITER', 'massa vs volume'],
+    ['PERSON_HOUR', 'EQUIPMENT_HOUR', 'tenaga vs peralatan'],
+  ])('refuses different canonical dimensions %s / %s (%s)', async (
+    boqUnit, outputUnit,
+  ) => {
+    // The official writer must NEVER freeze a positive proof for different
+    // UnitDefinition IDs. A legacy row without such proof stays fail-closed.
+    const { prisma } = createGuardedPrisma({
+      boqItem: buildPersistedBoqItem({
+        unit: boqUnit,
+        ahspVersion: { outputUnit },
+      }),
+      occurrence: {
+        ...buildOccurrence(),
+        boqUnitAtSelection: null,
+        ahspOutputUnitAtSelection: null,
+        canonicalOutputUnitDefinitionId: null,
+      },
+    });
+    const result = await new PersistedCalculationService(prisma)
+      .getPersistedCalculation(BOQ_ITEM_ID, PROJECT_ID, WORKSPACE_ID);
+    expect(result).toMatchObject({
+      status: PERSISTED_CALCULATION_STATUS.FAIL_CLOSED,
+      reason: PERSISTED_CALCULATION_REASON.RECOMPUTATION_FAIL_CLOSED,
+      kernelReason: COST_CALCULATION_REASON.BOQ_AHSP_UNIT_MISMATCH,
+    });
+  });
+
+  it('legacy m/M1 without frozen Unit Kernel proof stays fail-closed', async () => {
+    const { prisma } = createGuardedPrisma({
+      boqItem: buildPersistedBoqItem({ unit: 'm' }),
+      occurrence: buildOccurrence(),
+    });
+    const result = await new PersistedCalculationService(prisma)
+      .getPersistedCalculation(BOQ_ITEM_ID, PROJECT_ID, WORKSPACE_ID);
+    expect(result).toMatchObject({
+      status: PERSISTED_CALCULATION_STATUS.FAIL_CLOSED,
+      reason: PERSISTED_CALCULATION_REASON.RECOMPUTATION_FAIL_CLOSED,
+      kernelReason: COST_CALCULATION_REASON.BOQ_AHSP_UNIT_MISMATCH,
+    });
+  });
+});
