@@ -30,6 +30,7 @@ describe('RAB-AUTO-07 — one authentic first-binding Golden Thread (e2e)', () =
   let projectId: string;
   let structureId: string;
   let regionId: string;
+  let contextTestRegionId: string | null = null;
   let resourceId: string;
   let ahspId: string;
   let versionId: string;
@@ -354,7 +355,22 @@ describe('RAB-AUTO-07 — one authentic first-binding Golden Thread (e2e)', () =
         await prisma.projectAhspResourceResolution.deleteMany({
           where: { occurrence: { projectId } },
         });
-        await prisma.projectAhspOccurrence.deleteMany({ where: { projectId } });
+        // Lineage FK is RESTRICT: remove this isolated fixture's descendants
+        // before their ancestors, without rewriting frozen provenance.
+        const occurrenceRows = await prisma.projectAhspOccurrence.findMany({
+          where: { projectId }, select: { id: true, previousOccurrenceId: true },
+        });
+        const remaining = new Map(occurrenceRows.map((row) => [row.id, row]));
+        while (remaining.size > 0) {
+          const ancestors = new Set([...remaining.values()]
+            .map((row) => row.previousOccurrenceId).filter(Boolean));
+          const leaves = [...remaining.values()].filter((row) => !ancestors.has(row.id));
+          if (leaves.length === 0) throw new Error('CYCLIC_TEST_OCCURRENCE_LINEAGE');
+          await prisma.projectAhspOccurrence.deleteMany({
+            where: { id: { in: leaves.map((row) => row.id) } },
+          });
+          for (const row of leaves) remaining.delete(row.id);
+        }
         await prisma.boqStructure.deleteMany({ where: { projectId } });
         await prisma.intakeRequest.deleteMany({ where: { projectId } });
         await prisma.intakeJob.deleteMany({
@@ -452,6 +468,9 @@ describe('RAB-AUTO-07 — one authentic first-binding Golden Thread (e2e)', () =
           where: { id },
         });
       }
+      if (contextTestRegionId) {
+        await prisma.region.deleteMany({ where: { id: contextTestRegionId } });
+      }
       if (regionId) await prisma.region.deleteMany({ where: { id: regionId } });
       if (workspaceId)
         await prisma.workspace.deleteMany({ where: { id: workspaceId } });
@@ -548,6 +567,56 @@ describe('RAB-AUTO-07 — one authentic first-binding Golden Thread (e2e)', () =
       }),
     ).toBe(1);
 
+    // RAB-AUTO existing decision context activation: a user changes the
+    // saved Preparation region AFTER a lawful first-binding. The existing
+    // writer must append a NEW occurrence, not mutate the original or match
+    // the BOQ from its name. Restore the original region and prove a second
+    // current-context occurrence can still price through the same Cost Kernel.
+    const alternate = await prisma.region.create({
+      data: { code: tag + '-REFRESH', name: tag + ' Changed Preparation', isActive: true },
+    });
+    contextTestRegionId = alternate.id;
+    let secondGenerationId = '';
+    await prisma.projectRegionSelection.updateMany({
+      where: { projectId, regionId }, data: { regionId: alternate.id },
+    });
+    try {
+      const firstRefresh = await request(app.getHttpServer())
+        .post(`/projects/${projectId}/ahsp-occurrences/boq-items/working-draft/auto-reuse-proven`)
+        .set('Authorization', `Bearer ${editorToken}`)
+        .send({ businessPricingAsOfDate: asOfDate })
+        .expect(201);
+      expect(firstRefresh.body.summary).toMatchObject({ PROVEN_CONTEXT_REFRESHED: 1 });
+      expect(firstRefresh.body.automaticBindingPerformed).toBe(true);
+      const staleInNewContext = await prisma.boqItem.findUniqueOrThrow({ where: { id: boqItemId } });
+      expect(staleInNewContext.ahspVersionId).toBe(versionId);
+      expect(staleInNewContext.workingOccurrenceId).not.toBe(linked.workingOccurrenceId);
+      expect(staleInNewContext.unitPrice).toBeNull();
+      const secondGeneration = await prisma.projectAhspOccurrence.findUniqueOrThrow({
+        where: { id: staleInNewContext.workingOccurrenceId! },
+      });
+      expect(secondGeneration.previousOccurrenceId).toBe(linked.workingOccurrenceId);
+      expect(secondGeneration.referenceRegionId).toBe(alternate.id);
+      secondGenerationId = secondGeneration.id;
+    } finally {
+      await prisma.projectRegionSelection.updateMany({
+        where: { projectId, regionId: alternate.id }, data: { regionId },
+      });
+    }
+    const backToCurrent = await request(app.getHttpServer())
+      .post(`/projects/${projectId}/ahsp-occurrences/boq-items/working-draft/auto-reuse-proven`)
+      .set('Authorization', `Bearer ${editorToken}`)
+      .send({ businessPricingAsOfDate: asOfDate })
+      .expect(201);
+    expect(backToCurrent.body.summary).toMatchObject({ PROVEN_CONTEXT_REFRESHED: 1 });
+    const readyAgain = await prisma.boqItem.findUniqueOrThrow({ where: { id: boqItemId } });
+    const latest = await prisma.projectAhspOccurrence.findUniqueOrThrow({
+      where: { id: readyAgain.workingOccurrenceId! },
+    });
+    expect(latest.referenceRegionId).toBe(regionId);
+    expect(latest.previousOccurrenceId).toBe(secondGenerationId);
+    expect(await prisma.projectAhspOccurrence.count({ where: { projectId } })).toBe(3);
+
     const calculated = await request(app.getHttpServer())
       .post(`/projects/${projectId}/rab/auto-price-ready?page=1&limit=25`)
       .set('Authorization', `Bearer ${editorToken}`)
@@ -606,6 +675,6 @@ describe('RAB-AUTO-07 — one authentic first-binding Golden Thread (e2e)', () =
       await prisma.projectAhspOccurrence.count({
         where: { projectId, ahspVersionId: versionId },
       }),
-    ).toBe(1);
+    ).toBe(3);
   }, 60000);
 });

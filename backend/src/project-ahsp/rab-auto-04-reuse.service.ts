@@ -3,14 +3,17 @@ import { PrismaService } from '../prisma/prisma.service';
 import { parseDateOnlyUtc } from '../common/date-only.util';
 import { WORKING_DRAFT_STRUCTURE_NAME } from '../project/rab-lifecycle-policy.service';
 import { ProjectAhspService } from './project-ahsp.service';
-import { sameProvenBoqSourceFact } from './rab-auto-source-proof';
+import { buildProvenContextRefreshKey, sameProvenBoqSourceFact } from './rab-auto-source-proof';
 
 /**
  * RAB-AUTO-04. Reuses one already-human-proven AHSP association for an
  * IDENTICAL canonical source row inside the SAME Working Draft and project.
- * Does not construct new associations from AI, codes, lexical similarity or
- * category preference. Authoritative unit/resource/price and lifecycle gates
- * are re-run inside ProjectAhspService.selectForBoqItem's transaction.
+ * Also refreshes an EXISTING, previously authorized working association when
+ * its frozen price region/date became stale; this preserves the original AHSP
+ * identity and appends a NEW occurrence using the SAME official writer.
+ * Does not construct a first association from AI, lexical similarity or
+ * category preference. Unit/resource/price/lifecycle gates are re-run inside
+ * ProjectAhspService.selectForBoqItem's transaction.
  */
 @Injectable()
 export class RabAutoProvenReuseService {
@@ -61,6 +64,7 @@ export class RabAutoProvenReuseService {
         unit: true,
         ahspVersionId: true,
         workingOccurrenceId: true,
+        updatedAt: true,
         calculationOccurrenceId: true,
         priceOrigin: true,
       },
@@ -77,8 +81,88 @@ export class RabAutoProvenReuseService {
     });
     const permittedRegions = new Set(selectedRegions.map((r) => r.regionId));
     const hasNext = current.length > limit;
+    // One bounded read for existing frozen occurrences: avoid per-line N+1.
+    const linkedOccurrenceIds = current.slice(0, limit)
+      .filter((row) => !row.priceOrigin && !row.calculationOccurrenceId &&
+        row.ahspVersionId && row.workingOccurrenceId)
+      .map((row) => row.workingOccurrenceId!);
+    const frozen = linkedOccurrenceIds.length > 0
+      ? await this.prisma.projectAhspOccurrence.findMany({
+          where: {
+            id: { in: linkedOccurrenceIds },
+            projectId: input.projectId,
+            workspaceId: input.workspaceId,
+          },
+          select: {
+            id: true,
+            ahspVersionId: true,
+            createdByAccountId: true,
+            referenceRegionId: true,
+            businessPricingAsOfDate: true,
+          },
+        })
+      : [];
+    const frozenById = new Map(frozen.map((row) => [row.id, row]));
     const results: Array<{ boqItemId: string; kind: string }> = [];
     for (const item of current.slice(0, limit)) {
+      if (
+        !item.priceOrigin && !item.calculationOccurrenceId &&
+        item.ahspVersionId && item.workingOccurrenceId
+      ) {
+        const original = frozenById.get(item.workingOccurrenceId);
+        if (!original || !original.createdByAccountId ||
+            !original.referenceRegionId || !original.businessPricingAsOfDate ||
+            original.ahspVersionId !== item.ahspVersionId) {
+          results.push({ boqItemId: item.id, kind: 'CONTEXT_REFRESH_REQUIRES_REVIEW' });
+          continue;
+        }
+        if (permittedRegions.has(original.referenceRegionId) &&
+            original.businessPricingAsOfDate?.getTime() === asOf.getTime()) {
+          results.push({ boqItemId: item.id, kind: 'ALREADY_DECIDED' });
+          continue;
+        }
+        if (selectedRegions.length !== 1) {
+          results.push({ boqItemId: item.id, kind: 'CONTEXT_REFRESH_REGION_NOT_UNIQUE' });
+          continue;
+        }
+        const currentRegionId = selectedRegions[0].regionId;
+        // The existing canonical source-proof helper binds the item, its
+        // prior occurrence and BOQ revision to this internal-only action.
+        const idempotencyKey = buildProvenContextRefreshKey({
+          projectId: input.projectId,
+          boqItemId: item.id,
+          previousOccurrenceId: item.workingOccurrenceId,
+          ahspVersionId: item.ahspVersionId,
+          referenceRegionId: currentRegionId,
+          businessPricingAsOfDate: input.businessPricingAsOfDate,
+          boqUpdatedAt: item.updatedAt.toISOString(),
+        });
+        try {
+          // The official writer re-locks and rechecks exact BOQ revision,
+          // original occurrence identity, selected region, current AHSP
+          // version, Unit Kernel and Basic Price; never edit old history.
+          const refreshed = await this.ahsp.selectForBoqItem({
+            projectId: input.projectId,
+            workspaceId: input.workspaceId,
+            accountId: input.accountId,
+            boqItemId: item.id,
+            ahspVersionId: item.ahspVersionId,
+            referenceRegionId: currentRegionId,
+            businessPricingAsOfDate: input.businessPricingAsOfDate,
+            idempotencyKey,
+            refreshSourceOccurrenceId: item.workingOccurrenceId,
+            refreshExpectedBoqUpdatedAt: item.updatedAt.toISOString(),
+          });
+          results.push({ boqItemId: item.id, kind:
+            refreshed.id && refreshed.id !== item.workingOccurrenceId
+              ? 'PROVEN_CONTEXT_REFRESHED'
+              : 'CONTEXT_REFRESH_REVALIDATION_REQUIRED' });
+        } catch {
+          results.push({ boqItemId: item.id,
+            kind: 'CONTEXT_REFRESH_REVALIDATION_REQUIRED' });
+        }
+        continue;
+      }
       if (
         item.priceOrigin ||
         item.ahspVersionId ||
@@ -212,7 +296,8 @@ export class RabAutoProvenReuseService {
       results,
       summary,
       automaticBindingPerformed: results.some(
-        (r) => r.kind === 'PROVEN_ASSOCIATION_REUSED',
+        (r) => r.kind === 'PROVEN_ASSOCIATION_REUSED' ||
+          r.kind === 'PROVEN_CONTEXT_REFRESHED',
       ),
       rabApproved: false,
       rabLocked: false,

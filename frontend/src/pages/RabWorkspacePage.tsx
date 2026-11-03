@@ -1806,10 +1806,10 @@ export function RabWorkspacePage() {
   };
 
   /**
-   * One RAB-level, provenance-gated work action. Reuse only an existing human
-   * decision for the SAME canonical WBS source fact; the server revalidates
-   * within the existing selectForBoqItem transaction. Nothing inferred from
-   * lexical AHSP recommendations can enter this path.
+   * One RAB-level provenance-gated work action. Reuse only proven WBS source
+   * decisions or refresh a previously authorized working occurrence in the
+   * current Preparation context. Both reuse the same canonical AHSP writer;
+   * a lexical/AI recommendation can never authorize binding.
    */
   const handleReuseProvenAhsp = async () => {
     if (!projectId || !workingDraftLoaded || !canEditDraft ||
@@ -1820,6 +1820,7 @@ export function RabWorkspacePage() {
     setAutoReuseNotice(null);
     let firstBound = 0;
     let reused = 0;
+    let refreshed = 0;
     let reviewed = 0;
     try {
       // First use the Owner-approved BOQ's EXPLICIT AHSP reference where
@@ -1885,16 +1886,18 @@ export function RabWorkspacePage() {
         reviewed += payload.results.length;
         reused += payload.results.filter((row: { kind: string }) =>
           row.kind === 'PROVEN_ASSOCIATION_REUSED').length;
+        refreshed += payload.results.filter((row: { kind: string }) =>
+          row.kind === 'PROVEN_CONTEXT_REFRESHED').length;
         if (draftRevisionRef.current !== startedRevision ||
             currentProjectIdRef.current !== startedProject) {
           setStatusMessage('Draft berubah selama pemeriksaan otomatis. Muat ulang secara aman setelah menyimpan perubahan lokal.');
           return;
         }
         if (!payload.hasNext) {
-          const totalLinked = firstBound + reused;
+          const totalLinked = firstBound + reused + refreshed;
           const message = totalLinked > 0
-            ? `${firstBound} hubungan AHSP terbukti dari referensi BOQ yang disetujui, ${reused} keputusan terdahulu dipakai ulang. Harga selanjutnya diperiksa oleh Cost Kernel; sisanya tetap menunggu bukti.`
-            : `${reviewed} baris diperiksa. Belum ada referensi AHSP atau keputusan sebelumnya yang cukup terbukti. SIMPROK tidak menebak pasangan atau harga.`;
+            ? `${firstBound} hubungan AHSP terbukti dari referensi BOQ yang disetujui, ${reused} keputusan terdahulu dipakai ulang, ${refreshed} occurrence dievaluasi ulang sesuai konteks Persiapan terbaru. Harga selanjutnya diperiksa oleh Cost Kernel; sisanya tetap menunggu bukti.`
+            : `${reviewed} baris diperiksa. Tidak ada hubungan AHSP atau occurrence baru yang dapat dibuktikan. Yang sudah sah tetap dipertahankan; sisanya menunggu bukti. SIMPROK tidak menebak pasangan atau harga.`;
           setAutoReuseNotice({ projectId: startedProject, date: calculationAsOfDate, message });
           setStatusMessage(message);
           if (totalLinked > 0) {
@@ -3229,12 +3232,13 @@ export function RabWorkspacePage() {
                   to add anything at all. Same function, same row types, same
                   design language; only the door is restored. */}
               {canEditDraft && workingDraftLoaded && draftAssessmentDisplay &&
-                draftAssessmentDisplay.checked > draftAssessmentDisplay.linked +
-                  draftAssessmentDisplay.persisted + draftAssessmentDisplay.manual ? (
+                (draftAssessmentDisplay.checked > draftAssessmentDisplay.linked +
+                  draftAssessmentDisplay.persisted + draftAssessmentDisplay.manual ||
+                  draftAssessmentDisplay.linked > 0) ? (
                 <button type="button" className="simprok-rab-add-item"
                   disabled={draftDirty || isReusingProven || isAutoPricing}
                   onClick={() => { void handleReuseProvenAhsp(); }}
-                  title="Gunakan kembali keputusan AHSP yang sudah terbukti untuk identitas WBS dan sumber BOQ yang sama; kandidat belum terbukti tidak dihubungkan"
+                  title="Gunakan keputusan AHSP yang sudah terbukti dan evaluasi ulang occurrence lama sesuai konteks Persiapan; kandidat belum terbukti tidak dihubungkan"
                   aria-label="Lengkapi otomatis hubungan AHSP yang sudah terbukti">
                   {isReusingProven ? 'Memeriksa bukti...' : 'Lengkapi Otomatis'}
                 </button>
