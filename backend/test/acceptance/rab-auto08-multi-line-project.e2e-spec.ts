@@ -706,4 +706,104 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       await prisma.projectAhspOccurrence.count({ where: { projectId } }),
     ).toBe(lines.length);
   }, 120000);
+
+  it('reuses a previously governed AHSP decision for a NO-CODE legacy BOQ and persists RAB via real HTTP and PostgreSQL', async () => {
+    const source = await prisma.boqItem.create({
+      data: {
+        boqStructureId: structureId, wbsNodeId: null, wbsCode: '9.9',
+        name: lines[0].description, quantity: '1', unit: 'Kg',
+        sortOrder: 900, itemType: 'WORK_ITEM', sourceAhspCode: null,
+      },
+    });
+    const target = await prisma.boqItem.create({
+      data: {
+        boqStructureId: structureId, wbsNodeId: null, wbsCode: '9.9',
+        name: 'Pek. ' + lines[0].description, quantity: '2', unit: 'Kg',
+        sortOrder: 901, itemType: 'WORK_ITEM', sourceAhspCode: null,
+      },
+    });
+    // Only the source is selected once by an authorized actor.
+    const chosen = await request(app.getHttpServer())
+      .post('/projects/' + projectId + '/ahsp-occurrences/boq-items/' +
+        source.id + '/select-ahsp')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .send({
+        ahspVersionId: versionIds[0],
+        businessPricingAsOfDate: asOfDate,
+        referenceRegionId: regionId,
+        idempotencyKey: tag + '-legacy-human-source',
+      })
+      .expect(201);
+    expect(chosen.body.id).toBeTruthy();
+    const untouched = await prisma.boqItem.findUniqueOrThrow({
+      where: { id: target.id },
+    });
+    expect(untouched).toMatchObject({
+      ahspVersionId: null, workingOccurrenceId: null, sourceAhspCode: null,
+    });
+
+    // Existing "Lengkapi Otomatis" route; no manual selection on target.
+    const reused = await request(app.getHttpServer())
+      .post('/projects/' + projectId +
+        '/ahsp-occurrences/boq-items/working-draft/auto-reuse-proven?page=1&limit=25')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .send({ businessPricingAsOfDate: asOfDate })
+      .expect(201);
+    expect(reused.body.summary.PROVEN_ASSOCIATION_REUSED).toBe(1);
+    expect(reused.body.automaticBindingPerformed).toBe(true);
+    const joined = await prisma.boqItem.findUniqueOrThrow({
+      where: { id: target.id },
+    });
+    expect(joined.ahspVersionId).toBe(versionIds[0]);
+    expect(joined.workingOccurrenceId).not.toBeNull();
+    expect(joined.sourceAhspCode).toBeNull();
+
+    // Existing Cost Kernel + RAB writer, no standalone price calculator.
+    const priced = await request(app.getHttpServer())
+      .post('/projects/' + projectId + '/rab/auto-price-ready?page=1&limit=25')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .send({ calculationAsOfDate: asOfDate })
+      .expect(201);
+    expect(priced.body.counts.calculatedAndPersisted).toBe(2);
+    const rows = await prisma.boqItem.findMany({
+      where: { id: { in: [source.id, target.id] } },
+    });
+    expect(rows).toHaveLength(2);
+    expect(rows.find((row) => row.id === source.id)?.lineTotal?.toFixed(2))
+      .toBe('200000.00');
+    expect(rows.find((row) => row.id === target.id)?.unitPrice?.toFixed(2))
+      .toBe('200000.00');
+    expect(rows.find((row) => row.id === target.id)?.lineTotal?.toFixed(2))
+      .toBe('400000.00');
+    expect(rows.every((row) => row.priceOrigin === 'SERVER_COST_KERNEL'))
+      .toBe(true);
+
+    // Fresh Nest app, official persisted readback and idempotency proof.
+    await app.close();
+    app = (
+      await Test.createTestingModule({ imports: [AppModule] }).compile()
+    ).createNestApplication();
+    await app.init();
+    const verified = await request(app.getHttpServer())
+      .get('/projects/' + projectId + '/boq/items/' + target.id +
+        '/persisted-calculation')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .expect(200);
+    expect(verified.body).toMatchObject({
+      status: 'VERIFIED', priceOrigin: 'SERVER_COST_KERNEL',
+      stored: { unitPrice: '200000.00', lineTotal: '400000.00' },
+      recomputed: { unitPrice: '200000.00', lineTotal: '400000.00' },
+      integrity: {
+        unitPriceMatches: true, lineTotalMatches: true,
+        allResourceCostsReproduced: true,
+      },
+    });
+    const repeated = await request(app.getHttpServer())
+      .post('/projects/' + projectId + '/rab/auto-price-ready?page=1&limit=25')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .send({ calculationAsOfDate: asOfDate })
+      .expect(201);
+    expect(repeated.body.counts.calculatedAndPersisted).toBe(0);
+    expect(repeated.body.counts.alreadyCalculated).toBe(8);
+  }, 120000);
 });
