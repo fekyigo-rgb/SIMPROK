@@ -23,6 +23,22 @@ test('Source values and previous human decisions are preserved by supplement', (
   });
 });
 
+test('Supplier dimensional facts prefill existing editor while legacy size remains unchanged', () => {
+  const source = [
+    { label: 'Merk', value: 'Conch' },
+    { label: 'Panjang', value: '12 m' },
+    { label: 'Berat', value: '50 kg' },
+  ];
+  const previous = { facts: { ukuran: '5/7 cm' }, decisionKind: 'SUPPLEMENT', resultingVersion: 1 };
+  const initial = specificationInitialFields(source, previous);
+  assert.deepEqual(initial, { merek: 'Conch', panjang: '12 m', berat: '50 kg', ukuran: '5/7 cm' });
+  assert.deepEqual(specificationFormDecision(initial, source, previous, 'SUPPLEMENT', ''), {
+    ok: true,
+    confirmedSpecifications: { merek: 'Conch', ukuran: '5/7 cm', panjang: '12 m', berat: '50 kg' },
+  });
+  assert.equal(specificationFormDecision({ ...initial, berat: '40 kg' }, source, previous, 'SUPPLEMENT', '').ok, false);
+});
+
 test('Invalid/empty/ambiguous fields fail closed without inventing identity', () => {
   assert.equal(specificationFormDecision({}, [], null, 'SUPPLEMENT', '').ok, false);
   assert.equal(specificationFormDecision({ merek: 'X'.repeat(241) }, [], null, 'SUPPLEMENT', '').ok, false);

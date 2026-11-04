@@ -483,7 +483,7 @@ export function BasicPriceImportPage() {
   };
 
   return (
-    <div className="bp-room">
+    <div className="bp-room" data-bp-flow="private">
       {/*
         BACK TO THE BASIC PRICE ROOM, NOT TO THE DASHBOARD (§19). This used to
         land on `/`, which meant leaving the import flow dropped a person two

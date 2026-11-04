@@ -4,7 +4,6 @@ import {
   RawResourceReference,
   ResourceIdentityResolution,
   isAdmissibleAfterExamination,
-  normalizeResourceName,
 } from './resource-identity-resolution.kernel';
 import { ResourceIdentityResolutionService } from './resource-identity-resolution.service';
 import { candidateContextDigest } from './ghx-candidate-context';
@@ -318,16 +317,13 @@ export class ResourceAdmissionService {
       examination: input.examination,
     });
 
-    // Identity has already refused to bind this name to an existing row.
-    // ResourceCatalog.code is unique per workspace, and one source code can
-    // name several different resources. The code stays on the new row only
-    // when no other row holds it. A different name that already holds it is
-    // not reused and is not overwritten; this row is minted without that code.
-    // The same normalized name of the same type is the same resource, so the
-    // existing row is returned and no second insert is attempted. A different
-    // type is a different resource even when the words match.
+    // Resource Identity has already proved this is a lawful NEW item.
+    // A catalog code is a source label, not an identity: even the SAME name,
+    // type and code may belong to a distinct specified resource. Occupied
+    // codes are omitted on the new canonical row, never used to reuse the
+    // holder or overwrite its identity. This law is identical for manual
+    // and document-born admission.
     const placement = await this.catalogCodePlacement(tx, input, catalogCode);
-    if (placement.sameResource) return placement.sameResource;
 
     return tx.resourceCatalog.create({
       data: {
@@ -420,7 +416,7 @@ export class ResourceAdmissionService {
       });
     }
     const placement = await this.catalogCodePlacement(
-      tx, { ...input, rawName: canonicalName }, catalogCode,
+      tx, input, catalogCode,
     );
 
     const catalog = await tx.resourceCatalog.create({
@@ -432,8 +428,7 @@ export class ResourceAdmissionService {
         ...(specs ? { specifications: specs } : {}),
         // Source code is provenance, not identity. Only a free canonical slot
         // receives the trimmed spelling; an occupied slot yields NULL here.
-        // `sameResource` is deliberately not an observed-admission authority:
-        // the live Resource Identity Kernel proof above is the sole gate.
+        // An occupied source code cannot override the identity proof.
         code: placement.code,
       },
     });
@@ -471,49 +466,23 @@ export class ResourceAdmissionService {
   }
 
   /**
-   * Catalog `code` is unique per workspace. A source code is not. When another
-   * row already holds this code under a different name, the new resource is
-   * still minted and the occupied code is left where it is. When the holder
-   * is this same name and the same type, that row is the resource and no
-   * insert is made.
+   * Catalog `code` is unique per workspace. A source code is NOT an identity
+   * and may denote distinct specifications even when name/type/unit agree.
+   * This helper only decides whether the code slot is free; Resource Identity
+   * has already determined admissibility under the shared transaction lock.
+   * Never equate a code holder with the new resource here.
    */
   private async catalogCodePlacement(
     tx: Prisma.TransactionClient,
-    input: Pick<
-      AdmitHumanDeclaredResourceInput,
-      'workspaceId' | 'rawName' | 'resourceType'
-    >,
+    input: Pick<AdmitHumanDeclaredResourceInput, 'workspaceId'>,
     code: string | null,
-  ): Promise<{
-    code: string | null;
-    sameResource: {
-      id: string;
-      name: string;
-      code: string | null;
-      type: ResourceType;
-      baseUnit: string;
-      workspaceId: string | null;
-    } | null;
-  }> {
-    if (code === null) return { code: null, sameResource: null };
+  ): Promise<{ code: string | null }> {
+    if (code === null) return { code: null };
     const existing = await tx.resourceCatalog.findFirst({
       where: { workspaceId: input.workspaceId, code },
-      select: {
-        id: true,
-        name: true,
-        code: true,
-        type: true,
-        baseUnit: true,
-        workspaceId: true,
-      },
+      select: { id: true },
     });
-    if (!existing) return { code, sameResource: null };
-    if (
-      existing.type === input.resourceType &&
-      normalizeResourceName(existing.name) === normalizeResourceName(input.rawName)
-    ) {
-      return { code: null, sameResource: existing };
-    }
-    return { code: null, sameResource: null };
+    if (!existing) return { code };
+    return { code: null };
   }
 }
