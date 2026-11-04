@@ -43,6 +43,12 @@ import {
   describeRabAutoItemReadiness,
   type RabAutoDraftLine,
 } from '../utils/rabAutoDraftReadiness';
+import {
+  accumulateRabAutoPriceOutcome,
+  describeRabAutoPriceOutcome,
+  emptyRabAutoPriceOutcome,
+  parseRabAutoPricePage,
+} from '../utils/rabAutoPriceOutcome';
 import { appendBoqImportApprovalIdentity, dismissBoqImportPreview, requiresBoqImportConfirmation, type BoqImportDraftImpact } from '../utils/boqImportApproval';
 import {
   projectFieldContextView,
@@ -1759,8 +1765,7 @@ export function RabWorkspacePage() {
     // some rows; ask for an explicit reconciliation instead.
     const startedRevision = draftRevisionRef.current;
     const startedProject = projectId;
-    let priced = 0;
-    let unpriced = 0;
+    let outcome = emptyRabAutoPriceOutcome();
     try {
       for (let page = 1; page <= 20; page++) {
         const query = new URLSearchParams({ page: String(page), limit: '25' });
@@ -1771,23 +1776,15 @@ export function RabWorkspacePage() {
         );
         if (!response.ok) throw new Error('AUTO_PRICE_REQUEST_FAILED');
         const payload: unknown = await response.json();
-        if (!payload || typeof payload !== 'object' ||
-          !('projectId' in payload) || payload.projectId !== projectId ||
-          !('hasNext' in payload) || typeof payload.hasNext !== 'boolean' ||
-          !('counts' in payload) || !payload.counts || typeof payload.counts !== 'object' ||
-          !('calculatedAndPersisted' in payload.counts) ||
-          typeof payload.counts.calculatedAndPersisted !== 'number' ||
-          !('unpriced' in payload.counts) || typeof payload.counts.unpriced !== 'number') {
-          throw new Error('AUTO_PRICE_INVALID_RESULT');
-        }
-        priced += payload.counts.calculatedAndPersisted;
-        unpriced += payload.counts.unpriced;
-        if (!payload.hasNext) {
+        const pageResult = parseRabAutoPricePage(payload, projectId);
+        if (!pageResult) throw new Error('AUTO_PRICE_INVALID_RESULT');
+        outcome = accumulateRabAutoPriceOutcome(outcome, pageResult.counts);
+        if (!pageResult.hasNext) {
           if (draftRevisionRef.current !== startedRevision || currentProjectIdRef.current !== startedProject) {
             setStatusMessage('Perhitungan selesai pada server, tetapi draft berubah selama proses. Simpan perubahan lokal sebelum memuat ulang hasil.');
             return;
           }
-          setStatusMessage(`${priced} baris dihitung dan disimpan otomatis. ${unpriced} baris belum memenuhi syarat harga. Pemeriksaan tetap menggunakan Cost Kernel.`);
+          setStatusMessage(describeRabAutoPriceOutcome(outcome));
           setRetryToken((value) => value + 1);
           return;
         }

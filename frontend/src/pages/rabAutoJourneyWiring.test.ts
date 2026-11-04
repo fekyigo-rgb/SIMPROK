@@ -7,6 +7,21 @@ const start = source.indexOf('const handleReuseProvenAhsp = async () => {');
 const end = source.indexOf('const handlePickAhsp = () => {', start);
 const journey = start < 0 || end < start ? '' : source.slice(start, end);
 
+
+const priceStart = source.indexOf('const handleAutoPriceReady = async () => {');
+const priceEnd = source.indexOf('const handleReuseProvenAhsp = async () => {', priceStart);
+const priceJourney = priceStart < 0 || priceEnd < priceStart
+  ? '' : source.slice(priceStart, priceEnd);
+
+test('RAB auto-price UI consumes and accumulates official revalidation counts before reporting completion', () => {
+  assert.ok(priceJourney.length > 0);
+  assert.match(priceJourney, /parseRabAutoPricePage\(payload, projectId\)/);
+  assert.match(priceJourney, /outcome = accumulateRabAutoPriceOutcome\(outcome, pageResult\.counts\)/);
+  assert.match(priceJourney, /if \(!pageResult\.hasNext\)/);
+  assert.match(priceJourney, /setStatusMessage\(describeRabAutoPriceOutcome\(outcome\)\)/);
+  assert.match(priceJourney, /AUTO_PRICE_INCOMPLETE_PAGINATION/);
+});
+
 test('RAB-level automation connects first-source proof before proven-reuse then official Cost Kernel action', () => {
   assert.ok(journey.length > 0);
   const first = journey.indexOf('/auto-bind-explicit-references?');
