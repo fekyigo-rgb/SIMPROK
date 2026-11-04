@@ -7,6 +7,7 @@ import * as bcrypt from 'bcrypt';
 import request from 'supertest';
 import { AppModule } from '../../src/app.module';
 import { StorageService } from '../../src/reality-intake/storage.service';
+import { ProjectAhspService } from '../../src/project-ahsp/project-ahsp.service';
 
 /**
  * RAB-AUTO-08: COMPLETE SIX-LINE PROJECT WITH REAL HTTP+DB, not mocks or test-only
@@ -1119,6 +1120,51 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
     expect(joined.ahspVersionId).toBe(versionIds[0]);
     expect(joined.workingOccurrenceId).not.toBeNull();
     expect(joined.sourceAhspCode).toBeNull();
+
+    // A second, structurally valid Sub Judul is NOT the same BOQ source
+    // context as the root row, even with identical WBS/name/unit.
+    const otherFolder = await prisma.boqItem.create({ data: {
+      boqStructureId: structureId, wbsNodeId: null, wbsCode: '9',
+      name: tag + ' Sub Judul Lantai Berbeda', itemType: 'FOLDER',
+      parentId: null, quantity: '0', unit: '', sortOrder: 930,
+    } });
+    const crossParentTarget = await prisma.boqItem.create({ data: {
+      boqStructureId: structureId, wbsNodeId: null, wbsCode: '9.9',
+      name: 'Pek. ' + lines[0].description, itemType: 'WORK_ITEM',
+      parentId: otherFolder.id, quantity: '1', unit: 'Kg', sortOrder: 0,
+      sourceAhspCode: null,
+    } });
+    try {
+      const crossParentReuse = await request(app.getHttpServer())
+        .post('/projects/' + projectId +
+          '/ahsp-occurrences/boq-items/working-draft/auto-reuse-proven?page=1&limit=25')
+        .set('Authorization', 'Bearer ' + editorToken)
+        .send({ businessPricingAsOfDate: asOfDate }).expect(201);
+      expect(crossParentReuse.body.automaticBindingPerformed).toBe(false);
+      expect(crossParentReuse.body.results.find(
+        (row: { boqItemId: string }) => row.boqItemId === crossParentTarget.id,
+      )?.kind).toBe('NO_PROVEN_ASSOCIATION');
+      expect((await prisma.boqItem.findUniqueOrThrow({
+        where: { id: crossParentTarget.id },
+      })).workingOccurrenceId).toBeNull();
+
+      // A direct attempt to reuse the root source must also fail INSIDE
+      // the official locked writer, not only in the preview SQL query.
+      await expect(app.get(ProjectAhspService).selectForBoqItem({
+        projectId, workspaceId, accountId: accountIds[0],
+        boqItemId: crossParentTarget.id,
+        ahspVersionId: versionIds[0], referenceRegionId: regionId,
+        businessPricingAsOfDate: asOfDate,
+        idempotencyKey: tag + '-cross-parent-reuse-forbidden',
+        reuseSourceBoqItemId: source.id,
+      })).rejects.toThrow('RAB_AUTO_SOURCE_FACT_NOT_PROVEN');
+      expect((await prisma.boqItem.findUniqueOrThrow({
+        where: { id: crossParentTarget.id },
+      })).ahspVersionId).toBeNull();
+    } finally {
+      await prisma.boqItem.delete({ where: { id: crossParentTarget.id } });
+      await prisma.boqItem.delete({ where: { id: otherFolder.id } });
+    }
 
     // Existing Cost Kernel + RAB writer, no standalone price calculator.
     const priced = await request(app.getHttpServer())

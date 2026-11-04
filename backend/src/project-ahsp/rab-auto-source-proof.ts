@@ -121,9 +121,11 @@ export function isProvenContextRefreshOccurrence(input: {
  * Unlike sameProvenBoqSourceFact, this helper MUST NOT be used without
  * transactionally checking the unique, human-originated source decision.
  */
+type UnindexedBoqSourceFact = BoqSourceFact & { parentId: string | null };
+
 export function samePreviouslyDecidedUnindexedWorkFact(
-  a: BoqSourceFact,
-  b: BoqSourceFact,
+  a: UnindexedBoqSourceFact,
+  b: UnindexedBoqSourceFact,
 ): boolean {
   const exactWork = (text: string): string =>
     normalizeWorkHeadingForEvidence(text)
@@ -133,6 +135,12 @@ export function samePreviouslyDecidedUnindexedWorkFact(
   return Boolean(
     a.wbsNodeId === null &&
     b.wbsNodeId === null &&
+    // The same persisted parent also proves the same parent-to-root path.
+    // Reject missing parent fields rather than treating undefined == undefined
+    // as a root match. Two genuine null parents are both root work items.
+    (a.parentId === null || (typeof a.parentId === 'string' && a.parentId.trim().length > 0)) &&
+    (b.parentId === null || (typeof b.parentId === 'string' && b.parentId.trim().length > 0)) &&
+    a.parentId === b.parentId &&
     a.wbsCode.trim() &&
     b.wbsCode.trim() &&
     a.wbsCode.trim() === b.wbsCode.trim() &&
@@ -159,13 +167,16 @@ export function unindexedWorkSearchTerm(name: string): string {
  */
 export async function findGovernedUnindexedSourceIds(
   store: Prisma.TransactionClient,
-  target: BoqSourceFact & { id: string; boqStructureId: string },
+  target: UnindexedBoqSourceFact & { id: string; boqStructureId: string },
 ): Promise<string[]> {
   const normalized = unindexedWorkSearchTerm(target.name).toLocaleLowerCase('id-ID');
-  if (!normalized || !target.wbsCode.trim() || !target.unit.trim()) return [];
+  if (!normalized || !target.wbsCode.trim() || !target.unit.trim() ||
+      (target.parentId !== null &&
+        (typeof target.parentId !== 'string' || !target.parentId.trim()))) return [];
   const rows = await store.$queryRaw<Array<{ id: string }>>(Prisma.sql`
     SELECT "id" FROM "boq_items"
     WHERE "boqStructureId" = ${target.boqStructureId}::uuid
+      AND "parentId" IS NOT DISTINCT FROM ${target.parentId}::uuid
       AND "id" <> ${target.id}::uuid
       AND "itemType" = 'WORK_ITEM'
       AND "wbsNodeId" IS NULL

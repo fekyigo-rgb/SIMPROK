@@ -22,7 +22,8 @@ describe('RAB-AUTO-04 governed unindexed legacy reuse', () => {
   const priorId = '80000000-0000-4000-8000-000000000001';
   const text = 'Pengecatan Dinding Beton Sandaran';
   const target = {
-    id: targetId, boqStructureId: '90000000-0000-4000-8000-000000000001', wbsNodeId: null, wbsCode: '1.',
+    id: targetId, boqStructureId: '90000000-0000-4000-8000-000000000001',
+    parentId: null, wbsNodeId: null, wbsCode: '1.',
     name: 'Pek. Pengecatan Dinding Beton Sandaran', unit: 'm2',
     ahspVersionId: null, workingOccurrenceId: null,
     calculationOccurrenceId: null, priceOrigin: null,
@@ -69,7 +70,7 @@ describe('RAB-AUTO-04 governed unindexed legacy reuse', () => {
     };
   };
   const source = (patch: Record<string, unknown> = {}) => ({
-    id: sourceId, wbsNodeId: null, wbsCode: '1.',
+    id: sourceId, parentId: null, wbsNodeId: null, wbsCode: '1.',
     name: text, unit: 'm2', ahspVersionId: version,
     workingOccurrenceId: '90000000-0000-4000-8000-000000000001',
     calculationOccurrenceId: null, priceOrigin: null,
@@ -107,12 +108,22 @@ describe('RAB-AUTO-04 governed unindexed legacy reuse', () => {
       { name: 'Pek. Pengecatan Dinding Baja Sandaran' },
       { name: 'Pek. Pengecatan Dinding Beton Sandaran 30 cm' },
       { unit: 'm3' }, { wbsCode: '2.' },
+      { parentId: 'folder-different' }, { parentId: undefined },
       { wbsNodeId: 'existing-canonical-node' },
     ]) {
       expect(samePreviouslyDecidedUnindexedWorkFact({ ...target, ...t }, source())).toBe(false);
     }
     expect(samePreviouslyDecidedUnindexedWorkFact(
       { ...target, name: 'Pek. Pengecatan Beton' }, source(),
+    )).toBe(false);
+    // The same nested parent proves the same current ancestor-to-root path.
+    expect(samePreviouslyDecidedUnindexedWorkFact(
+      { ...target, parentId: 'folder-one' },
+      { ...source(), parentId: 'folder-one' },
+    )).toBe(true);
+    expect(samePreviouslyDecidedUnindexedWorkFact(
+      { ...target, parentId: 'folder-one' },
+      { ...source(), parentId: 'folder-two' },
     )).toBe(false);
   });
 
@@ -150,6 +161,11 @@ describe('RAB-AUTO-04 governed unindexed legacy reuse', () => {
       }),
     );
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
+    // SQL discovery must use the same null-safe parent identity as the
+    // official transaction writer. Two nulls mean root, not missing truth.
+    const sql = prisma.$queryRaw.mock.calls[0][0];
+    expect(sql.strings.join('')).toMatch(/"parentId" IS NOT DISTINCT FROM/);
+    expect(sql.values).toContain(null);
     const query = prisma.boqItem.findMany.mock.calls[1][0];
     expect(query.where).toMatchObject({
       id: { in: [sourceId] },
@@ -162,6 +178,10 @@ describe('RAB-AUTO-04 governed unindexed legacy reuse', () => {
       { rows: [] as Array<ReturnType<typeof source>>, kind: 'NO_PROVEN_ASSOCIATION' },
       { rows: [source(), source({ id: 'competing-source', name: 'Pengecatan   Dinding Beton Sandaran' })], kind: 'MULTIPLE_SOURCE_DECISIONS' },
       { rows: [source({ name: 'Pengecatan Dinding Baja Sandaran' })], kind: 'SOURCE_CONTEXT_NOT_AUTHORIZED' },
+      // A stubbed candidate query returning a cross-parent row must still
+      // be rejected by the second fact gate before the official writer.
+      { rows: [source({ parentId: 'other-subjudul' })], kind: 'SOURCE_CONTEXT_NOT_AUTHORIZED' },
+      { rows: [source({ parentId: undefined })], kind: 'SOURCE_CONTEXT_NOT_AUTHORIZED' },
       { rows: [source({ workingOccurrence: { ...occurrence(), requestPayloadHash: null } })], kind: 'SOURCE_CONTEXT_NOT_AUTHORIZED' },
       { rows: [source({ workingOccurrence: { ...occurrence(), referenceRegionId: 'other-region' } })], kind: 'SOURCE_CONTEXT_NOT_AUTHORIZED' },
       { rows: [source({ priceOrigin: 'MANUAL_CLIENT' })], kind: 'SOURCE_CONTEXT_NOT_AUTHORIZED' },

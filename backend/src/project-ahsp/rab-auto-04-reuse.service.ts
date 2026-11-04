@@ -59,6 +59,7 @@ export class RabAutoProvenReuseService {
       select: {
         id: true,
         boqStructureId: true,
+        parentId: true,
         wbsNodeId: true,
         wbsCode: true,
         name: true,
@@ -322,6 +323,7 @@ export class RabAutoProvenReuseService {
     item: {
       id: string;
       boqStructureId: string;
+      parentId: string | null;
       wbsNodeId: string | null;
       wbsCode: string;
       name: string;
