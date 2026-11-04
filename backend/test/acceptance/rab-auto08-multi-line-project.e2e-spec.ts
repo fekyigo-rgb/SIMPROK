@@ -1050,14 +1050,14 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
     expect(postSaveBind.body.automaticBindingPerformed).toBe(false);
   }, 120000);
   it('reuses a previously governed AHSP decision for a NO-CODE legacy BOQ and persists RAB via real HTTP and PostgreSQL', async () => {
-    const source = await prisma.boqItem.create({
+    let source = await prisma.boqItem.create({
       data: {
         boqStructureId: structureId, wbsNodeId: null, wbsCode: '9.9',
         name: lines[0].description, quantity: '1', unit: 'Kg',
         sortOrder: 900, itemType: 'WORK_ITEM', sourceAhspCode: null,
       },
     });
-    const target = await prisma.boqItem.create({
+    let target = await prisma.boqItem.create({
       data: {
         boqStructureId: structureId, wbsNodeId: null, wbsCode: '9.9',
         name: 'Pek. ' + lines[0].description, quantity: '2', unit: 'Kg',
@@ -1083,6 +1083,45 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
     expect(untouched).toMatchObject({
       ahspVersionId: null, workingOccurrenceId: null, sourceAhspCode: null,
     });
+
+    // Actual user journey: a previously HUMAN-authorized source is saved
+    // unchanged through the canonical BOQ draft writer BEFORE reuse.
+    // Its immutable selection hash binds to source.id; replacing that ID
+    // used to strand lawful provenance and prevent the existing writer call.
+    const originalHumanChoice = await prisma.projectAhspOccurrence.findUniqueOrThrow({
+      where: { id: chosen.body.id },
+    });
+    const draftBeforeSave = await request(app.getHttpServer())
+      .get('/projects/' + projectId + '/boq/draft')
+      .set('Authorization', 'Bearer ' + editorToken).expect(200);
+    await request(app.getHttpServer())
+      .put('/projects/' + projectId + '/boq/draft')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .send({ rows: draftBeforeSave.body.items.map((row: {
+        id: string; parentId: string | null; itemType: string;
+        name: string; wbsCode: string; quantity: string;
+        unit: string; sortOrder: number;
+      }) => ({
+        tempId: row.id, parentTempId: row.parentId,
+        itemType: row.itemType, name: row.name, wbsCode: row.wbsCode,
+        quantity: Number(row.quantity), unit: row.unit, sortOrder: row.sortOrder,
+      })) }).expect(200);
+    source = await prisma.boqItem.findUniqueOrThrow({ where: { id: source.id } });
+    expect(source.workingOccurrenceId).toBe(chosen.body.id);
+    expect(source.ahspVersionId).toBe(versionIds[0]);
+    const afterNoOpHumanChoice = await prisma.projectAhspOccurrence.findUniqueOrThrow({
+      where: { id: chosen.body.id },
+    });
+    expect(afterNoOpHumanChoice.idempotencyKey).toBe(originalHumanChoice.idempotencyKey);
+    expect(afterNoOpHumanChoice.requestPayloadHash).toBe(originalHumanChoice.requestPayloadHash);
+    const oldTargetId = target.id;
+    target = await prisma.boqItem.findFirstOrThrow({ where: {
+      boqStructureId: structureId, wbsCode: '9.9',
+      name: 'Pek. ' + lines[0].description,
+    } });
+    // Undecided rows still follow the existing full-replace/new-ID law.
+    expect(target.id).not.toBe(oldTargetId);
+    expect(target.workingOccurrenceId).toBeNull();
 
     // A second prior decision whose description differs ONLY by spaces
     // MUST be counted, not hidden by a raw substring search.
@@ -1213,6 +1252,147 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       .expect(201);
     expect(repeated.body.counts.calculatedAndPersisted).toBe(0);
     expect(repeated.body.counts.alreadyCalculated).toBe(9);
+  }, 120000);
+
+  it('proves governed reuse within a shared non-null Sub Judul and revokes it on ancestor rename', async () => {
+    const folderCode = '9.11';
+    const workCode = '9.11.1';
+    const parent = await prisma.boqItem.create({ data: {
+      boqStructureId: structureId, itemType: 'FOLDER', wbsNodeId: null,
+      parentId: null, wbsCode: folderCode,
+      name: tag + ' Sub Judul Khusus', quantity: '0', unit: '',
+      sortOrder: 980,
+    } });
+    let source = await prisma.boqItem.create({ data: {
+      boqStructureId: structureId, itemType: 'WORK_ITEM', wbsNodeId: null,
+      parentId: parent.id, wbsCode: workCode,
+      name: lines[0].description, quantity: '1', unit: 'Kg',
+      sortOrder: 99, sourceAhspCode: null,
+    } });
+    let target = await prisma.boqItem.create({ data: {
+      boqStructureId: structureId, itemType: 'WORK_ITEM', wbsNodeId: null,
+      parentId: parent.id, wbsCode: workCode,
+      name: 'Pek. ' + lines[0].description, quantity: '2', unit: 'Kg',
+      sortOrder: 1, sourceAhspCode: null,
+    } });
+    try {
+      const chosen = await request(app.getHttpServer())
+        .post('/projects/' + projectId + '/ahsp-occurrences/boq-items/' +
+          source.id + '/select-ahsp')
+        .set('Authorization', 'Bearer ' + editorToken)
+        .send({
+          ahspVersionId: versionIds[0],
+          businessPricingAsOfDate: asOfDate,
+          referenceRegionId: regionId,
+          idempotencyKey: tag + '-nested-manual-source',
+        }).expect(201);
+      expect(chosen.body.id).toBeTruthy();
+
+      // No-op save remints the undecided target and folder but MUST retain
+      // the source ID used by the human-governed occurrence payload hash.
+      const savePayload = async (renameParent = false) => {
+        const draft = await request(app.getHttpServer())
+          .get('/projects/' + projectId + '/boq/draft')
+          .set('Authorization', 'Bearer ' + editorToken).expect(200);
+        return request(app.getHttpServer())
+          .put('/projects/' + projectId + '/boq/draft')
+          .set('Authorization', 'Bearer ' + editorToken)
+          .send({ rows: draft.body.items.map((row: {
+            id: string; parentId: string | null; itemType: string;
+            name: string; wbsCode: string; quantity: string;
+            unit: string; sortOrder: number;
+          }) => ({
+            tempId: row.id, parentTempId: row.parentId,
+            itemType: row.itemType,
+            name: renameParent && row.wbsCode === folderCode
+              ? tag + ' Sub Judul Berubah' : row.name,
+            wbsCode: row.wbsCode, quantity: Number(row.quantity),
+            unit: row.unit, sortOrder: row.sortOrder,
+          })) }).expect(200);
+      };
+      await savePayload();
+      source = await prisma.boqItem.findUniqueOrThrow({
+        where: { id: source.id },
+      });
+      expect(source.workingOccurrenceId).toBe(chosen.body.id);
+      target = await prisma.boqItem.findFirstOrThrow({ where: {
+        boqStructureId: structureId, wbsCode: workCode,
+        name: 'Pek. ' + lines[0].description,
+      } });
+      expect(target.workingOccurrenceId).toBeNull();
+
+      // The target is on the requested ONE-row page, while its governed
+      // source is on a later page. Candidate discovery must be project-wide.
+      const bySortOrder = await prisma.boqItem.findMany({
+        where: { boqStructureId: structureId, itemType: 'WORK_ITEM' },
+        select: { id: true },
+        orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+      });
+      const targetPage = bySortOrder.findIndex((item) => item.id === target.id) + 1;
+      const sourcePage = bySortOrder.findIndex((item) => item.id === source.id) + 1;
+      expect(targetPage).toBeGreaterThan(0);
+      expect(sourcePage).toBeGreaterThan(targetPage);
+
+      const reused = await request(app.getHttpServer())
+        .post('/projects/' + projectId +
+          '/ahsp-occurrences/boq-items/working-draft/auto-reuse-proven?page=' +
+          targetPage + '&limit=1')
+        .set('Authorization', 'Bearer ' + editorToken)
+        .send({ businessPricingAsOfDate: asOfDate }).expect(201);
+      expect(reused.body.results.find(
+        (row: { boqItemId: string }) => row.boqItemId === target.id,
+      )?.kind).toBe('PROVEN_ASSOCIATION_REUSED');
+      expect((await prisma.boqItem.findUniqueOrThrow({
+        where: { id: target.id },
+      })).workingOccurrenceId).not.toBeNull();
+
+      // Repeat the exact same limited page: a decided target is skipped,
+      // never reminted into another AHSP occurrence or a false success.
+      const occurrenceCount = await prisma.projectAhspOccurrence.count({
+        where: { projectId },
+      });
+      const replay = await request(app.getHttpServer())
+        .post('/projects/' + projectId +
+          '/ahsp-occurrences/boq-items/working-draft/auto-reuse-proven?page=' +
+          targetPage + '&limit=1')
+        .set('Authorization', 'Bearer ' + editorToken)
+        .send({ businessPricingAsOfDate: asOfDate }).expect(201);
+      expect(replay.body.automaticBindingPerformed).toBe(false);
+      expect(replay.body.results[0]).toMatchObject({
+        boqItemId: target.id, kind: 'ALREADY_DECIDED',
+      });
+      expect(await prisma.projectAhspOccurrence.count({
+        where: { projectId },
+      })).toBe(occurrenceCount);
+
+      // A new no-op save must preserve both existing AHSP selections.
+      await savePayload();
+      expect((await prisma.boqItem.findUniqueOrThrow({
+        where: { id: source.id },
+      })).workingOccurrenceId).toBe(chosen.body.id);
+      expect((await prisma.boqItem.findUniqueOrThrow({
+        where: { id: target.id },
+      })).workingOccurrenceId).not.toBeNull();
+
+      // A changed ancestor is a changed work context, not a no-op.
+      await savePayload(true);
+      const invalidated = await prisma.boqItem.findMany({
+        where: { boqStructureId: structureId, wbsCode: workCode },
+      });
+      expect(invalidated).toHaveLength(2);
+      expect(invalidated.every((row) => (
+        row.workingOccurrenceId === null &&
+        row.ahspVersionId === null &&
+        row.priceOrigin === null
+      ))).toBe(true);
+    } finally {
+      await prisma.boqItem.deleteMany({
+        where: { boqStructureId: structureId, wbsCode: workCode },
+      });
+      await prisma.boqItem.deleteMany({
+        where: { boqStructureId: structureId, wbsCode: folderCode },
+      });
+    }
   }, 120000);
 
   it('drops an UNPRICED stale AHSP occurrence after a work-spec edit while keeping completed RAB prices', async () => {

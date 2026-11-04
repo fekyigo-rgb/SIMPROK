@@ -998,6 +998,90 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
     });
   }
 
+  it('keeps the original immutable human-selected BOQ identity across a no-op draft save', async () => {
+    const linked = {
+      ...sourceBeforeSave(), sourceAhspCode: null,
+      ahspVersionId: 'approved-ahsp-version',
+      workingOccurrenceId: 'original-human-occurrence',
+    };
+    const { prisma, boqItemCreate } = createPrismaMock([linked]);
+    await save(buildService(prisma), [unchangedSourceDraftRow()]);
+    const persisted = boqItemCreate.mock.calls[0][0].data as Record<string, unknown>;
+    expect(persisted.id).toBe(SERVER_ROW_ID);
+    expect(persisted.ahspVersionId).toBe('approved-ahsp-version');
+    expect(persisted.workingOccurrenceId).toBe('original-human-occurrence');
+    expect(persisted.sourceAhspCode).toBeNull();
+  });
+
+  it('does not retain human-selected identity when the BOQ work specification changes', async () => {
+    const linked = {
+      ...sourceBeforeSave(), sourceAhspCode: null,
+      ahspVersionId: 'approved-ahsp-version',
+      workingOccurrenceId: 'original-human-occurrence',
+    };
+    const { prisma, boqItemCreate } = createPrismaMock([linked]);
+    await save(buildService(prisma), [
+      { ...unchangedSourceDraftRow(), name: 'Pekerjaan Sumber Terbukti Tebal 20 mm' },
+    ]);
+    const persisted = boqItemCreate.mock.calls[0][0].data as Record<string, unknown>;
+    expect(persisted.id).toBeUndefined();
+    expect(persisted.ahspVersionId).toBeNull();
+    expect(persisted.workingOccurrenceId).toBeNull();
+  });
+
+  it('keeps the source BOQ id across a genuine no-op save under a two-level Sub Judul', async () => {
+    const linked = {
+      ...nestedOriginalWork(), sourceAhspCode: null,
+      ahspVersionId: 'approved-ahsp-version',
+      workingOccurrenceId: 'original-human-occurrence',
+    };
+    const { prisma, boqItemCreate } = createPrismaMock([
+      ...nestedFolders(), linked,
+    ]);
+    await save(buildService(prisma), nestedIncoming());
+    const persisted = boqItemCreate.mock.calls.map(
+      (call) => call[0].data as Record<string, unknown>,
+    ).find((data) => data.name === 'Pekerjaan Sumber Terbukti');
+    expect(persisted?.id).toBe(SERVER_ROW_ID);
+    expect(persisted?.parentId).toBe('new-row-1');
+    expect(persisted?.workingOccurrenceId).toBe('original-human-occurrence');
+  });
+
+  it('invalidates old occurrence identity when an ancestor Sub Judul changes', async () => {
+    const linked = {
+      ...nestedOriginalWork(), sourceAhspCode: null,
+      ahspVersionId: 'approved-ahsp-version',
+      workingOccurrenceId: 'original-human-occurrence',
+    };
+    const { prisma, boqItemCreate } = createPrismaMock([
+      ...nestedFolders(), linked,
+    ]);
+    await save(buildService(prisma), nestedIncoming({
+      rootName: 'Pekerjaan Galian',
+    }));
+    const persisted = boqItemCreate.mock.calls.map(
+      (call) => call[0].data as Record<string, unknown>,
+    ).find((data) => data.name === 'Pekerjaan Sumber Terbukti');
+    expect(persisted?.id).toBeUndefined();
+    expect(persisted?.workingOccurrenceId).toBeNull();
+    expect(persisted?.ahspVersionId).toBeNull();
+  });
+
+  it('retains the BOQ id for unchanged kernel-priced occurrence without modifying its money', async () => {
+    const linked = buildServerRow({
+      name: 'Pekerjaan Sumber Terbukti',
+      wbsCode: '1.1', sortOrder: 0, parentId: null, wbsNodeId: null,
+      workingOccurrenceId: 'human-working-occurrence',
+    });
+    const { prisma, boqItemCreate } = createPrismaMock([linked]);
+    await save(buildService(prisma), [unchangedSourceDraftRow()]);
+    const persisted = boqItemCreate.mock.calls[0][0].data as Record<string, unknown>;
+    expect(persisted.id).toBe(SERVER_ROW_ID);
+    expect(persisted.priceOrigin).toBe('SERVER_COST_KERNEL');
+    expect(persisted.calculationOccurrenceId).toBe('occurrence-1');
+    expect((persisted.unitPrice as Prisma.Decimal).toFixed(2)).toBe('200000.00');
+  });
+
   it('clears an unpriced existing AHSP working occurrence after ancestor rename', async () => {
     const linked = {
       ...nestedOriginalWork(),

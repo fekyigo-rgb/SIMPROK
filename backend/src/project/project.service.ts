@@ -2424,10 +2424,11 @@ export class ProjectService {
         });
       }
 
-      // GATE-2A protection: read the current rows BEFORE the full-replace so a
-      // SERVER_COST_KERNEL row's authority can be validated and its frozen
-      // values carried forward. A row survives a save by VALUE, not by id —
-      // the full-replace below always mints new ids, kernel or manual alike.
+      // GATE-2A protection: read current rows BEFORE full-replace so
+      // authoritative values can be carried forward after source verification.
+      // Unlinked rows still receive new IDs. Only unchanged source facts
+      // already carrying a governed AHSP occurrence retain their old row ID,
+      // because the immutable human selection hash is bound to that ID.
       const existingItems = await tx.boqItem.findMany({
         where: { boqStructureId: structure.id },
       });
@@ -2664,6 +2665,19 @@ export class ProjectService {
           row.itemType !== existing.itemType
         );
         const preserveAssociation = !sourceChanged && !isFolder && !isNote;
+        // A human AHSP selection's immutable payload hash binds to the
+        // ORIGINAL BOQ item ID. Reminting that ID during a no-op draft save
+        // would strand valid proof and force repeat human decisions. Keep the
+        // existing ID only while the guarded work/ancestor fact is unchanged
+        // and an existing working/calculation occurrence survives. This does
+        // not grant authority: the existing occurrence hash and lineage must
+        // still pass the canonical RAB-AUTO-04 source verifier at reuse time.
+        // New, changed, and undecided rows retain existing remint behavior.
+        const preserveOccurrenceSourceId = Boolean(
+          existing && preserveAssociation &&
+          (existing.workingOccurrenceId || existing.calculationOccurrenceId) &&
+          (existing.priceOrigin === null || existing.priceOrigin === 'SERVER_COST_KERNEL'),
+        );
         // Immutable import approval is NOT renewed by a draft save.
         // Only an exact unchanged, previously approved and UNDECIDED work
         // may retain its logical creation/revision times across the existing
@@ -2735,6 +2749,8 @@ export class ProjectService {
         // calculatedAt, calculationPolicyVersion) across an unrelated save.
         const created = await tx.boqItem.create({
           data: {
+            // A preserved ID is identity continuity, not an approval event.
+            ...(preserveOccurrenceSourceId ? { id: existing!.id } : {}),
             boqStructureId: structure.id,
             // Copy the original LOGICAL source revision, not a fresh
             // approval or an invented timestamp. Preserve BOTH timestamps
