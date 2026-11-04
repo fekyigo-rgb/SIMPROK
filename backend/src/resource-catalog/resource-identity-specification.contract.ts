@@ -71,18 +71,26 @@ export function compareConfirmedSpecifications(
   const reviewed = withoutGenericBrandScope(source);
   const known = withoutGenericBrandScope(knownRaw);
   if (Object.keys(reviewed).length === 0) return 'UNKNOWN';
+  // UNKNOWN is not a terminal verdict: another reviewed typed fact may still
+  // prove a definite CONFLICT. Visit every fact before granting equivalence.
+  let hasUncertainty = false;
   for (const [key, value] of Object.entries(reviewed)) {
-    if (!Object.hasOwn(known, key) || known[key].toLocaleLowerCase('id-ID') === value.toLocaleLowerCase('id-ID')) continue;
+    if (!Object.hasOwn(known, key)) { hasUncertainty = true; continue; }
+    if (known[key].toLocaleLowerCase('id-ID') === value.toLocaleLowerCase('id-ID')) continue;
     // A size in cm and one in mm MAY be equivalent. A dash can be a range.
     // Only same-unit, unambiguous numerical dimensions establish difference.
     if (key === 'ukuran' || key === 'dimensi') {
       const pattern = /^(\d+(?:[.,]\d+)?)\s*[/x×]\s*(\d+(?:[.,]\d+)?)\s*(mm|cm|m)$/iu;
       const a = pattern.exec(value);
       const b = pattern.exec(known[key]);
-      if (!a || !b || a[3].toLowerCase() !== b[3].toLowerCase()) return 'UNKNOWN';
+      if (!a || !b || a[3].toLowerCase() !== b[3].toLowerCase()) {
+        hasUncertainty = true;
+        continue;
+      }
       if (Number(a[1].replace(',', '.')) !== Number(b[1].replace(',', '.')) ||
           Number(a[2].replace(',', '.')) !== Number(b[2].replace(',', '.'))) return 'CONFLICT';
-      return 'UNKNOWN';
+      hasUncertainty = true;
+      continue;
     }
     // Two REVIEWED physical measurements with the same literal unit
     // cannot describe an identical product variant when their values differ.
@@ -94,27 +102,42 @@ export function compareConfirmedSpecifications(
       const measure = /^(\d+(?:[.,]\d+)?)\s*(mm|cm|m|m2|m3|kg|g|ton|t|liter|l|ml|cc)$/iu;
       const a = measure.exec(value);
       const b = measure.exec(known[key]);
-      if (!a || !b || a[2].toLowerCase() !== b[2].toLowerCase()) return 'UNKNOWN';
+      if (!a || !b || a[2].toLowerCase() !== b[2].toLowerCase()) {
+        hasUncertainty = true;
+        continue;
+      }
       // A period/comma followed by three digits may be a thousands separator
       // in supplier data, so never interpret that spelling as a decimal here.
-      if ([a[1], b[1]].some(number => /[.,]\d{3}$/u.test(number))) return 'UNKNOWN';
+      if ([a[1], b[1]].some(number => /[.,]\d{3}$/u.test(number))) {
+        hasUncertainty = true;
+        continue;
+      }
       const first = Number(a[1].replace(',', '.'));
       const second = Number(b[1].replace(',', '.'));
-      return first !== second ? 'CONFLICT' : 'UNKNOWN';
+      if (first !== second) return 'CONFLICT';
+      hasUncertainty = true;
+      continue;
     }
     if (key === 'spesifikasi' || key === 'mutu_dan_standar_sumber' ||
         key === 'jenis_kegunaan_sumber' || key === 'kapasitas' ||
         key === 'lingkungan' || key === 'kondisi' ||
         key === 'penggunaan' || key === 'peruntukan' ||
         key === 'fungsi' || key === 'metode' || key === 'kompetensi' ||
-        key === 'penempatan' || key === 'ketahanan') return 'UNKNOWN';
+        key === 'penempatan' || key === 'ketahanan') {
+      hasUncertainty = true;
+      continue;
+    }
     return 'CONFLICT';
   }
-  // A free-text specification note may be useful evidence, but equal notes
-  // cannot by themselves establish identical product variants. Only the
-  // pre-existing typed identity comparison can return MATCH.
+  // No unresolved detail may be promoted into a canonical MATCH.
+  if (hasUncertainty) return 'UNKNOWN';
+  // Source-only supplier attributes are unverified evidence, not certified
+  // grades. Missing such evidence on EITHER side cannot prove equivalence;
+  // different wording remains UNKNOWN, while typed conflicts still win above.
   const isSupplierOnly = (key: string) => key === 'spesifikasi' ||
     key === 'mutu_dan_standar_sumber' || key === 'jenis_kegunaan_sumber';
+  if (['spesifikasi', 'mutu_dan_standar_sumber', 'jenis_kegunaan_sumber'].some(
+    key => Object.hasOwn(reviewed, key) !== Object.hasOwn(known, key))) return 'UNKNOWN';
   const identityKeys = Object.keys(reviewed).filter(key => !isSupplierOnly(key));
   const knownIdentityKeys = Object.keys(known).filter(key => !isSupplierOnly(key));
   // Equal capacity alone is not a sufficient identity proof for equipment:

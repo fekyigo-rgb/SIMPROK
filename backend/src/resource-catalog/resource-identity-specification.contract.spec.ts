@@ -172,3 +172,61 @@ describe('PR205 specification authority contract — optional, symmetric and fai
     expect(confirmedSpecifications({ merek: 'A', brand: 'B' })).toBeNull();
   });
 });
+
+describe('G123 independent pre-merge guards: evaluate all facts and keep unverified source qualifiers fail-closed', () => {
+  it.each([
+    {
+      label: 'equivalent numeric spelling must not hide different technical model',
+      source: { panjang: '1.0 m', tipe: 'PCC' },
+      candidate: { panjang: '1 m', tipe: 'OPC' },
+    },
+    {
+      label: 'ambiguous thousands notation must not hide different brand',
+      source: { berat: '1.000 kg', merek: 'Conch' },
+      candidate: { berat: '1000 kg', merek: 'Nippon' },
+    },
+    {
+      label: 'unit-spacing uncertainty must not hide a different model',
+      source: { berat: '40kg', tipe: 'PCC' },
+      candidate: { berat: '40 kg', tipe: 'OPC' },
+    },
+    {
+      label: 'missing first attribute must not hide a later brand contradiction',
+      source: { berat: '40 kg', merek: 'Conch' },
+      candidate: { merek: 'Nippon' },
+    },
+  ])('$label', ({ source, candidate }) => {
+    expect(compareConfirmedSpecifications(source, candidate)).toBe('CONFLICT');
+  });
+
+  it('unverified source quality without a corresponding catalog fact cannot authorize MATCH', () => {
+    const source = { merek: 'Conch', berat: '40 kg', mutu_dan_standar_sumber: 'Premium' };
+    const catalog = { merek: 'Conch', berat: '40 kg' };
+    expect(compareConfirmedSpecifications(source, catalog)).toBe('UNKNOWN');
+    expect(compareConfirmedSpecifications(catalog, source)).toBe('UNKNOWN');
+    expect(compareConfirmedSpecifications(source, {
+      ...catalog, mutu_dan_standar_sumber: 'Economy',
+    })).toBe('UNKNOWN');
+  });
+
+  it('source-only free text is never independent identity proof', () => {
+    expect(compareConfirmedSpecifications(
+      { spesifikasi: 'cat dinding', jenis_kegunaan_sumber: 'interior' },
+      { spesifikasi: 'cat dinding', jenis_kegunaan_sumber: 'interior' },
+    )).toBe('UNKNOWN');
+  });
+
+  it('keeps exact typed identity with equal supplier qualifiers and preserves proven 40 vs 50 kg conflict', () => {
+    const forty = { merek: 'Conch', tipe: 'PCC', berat: '40 kg', mutu_dan_standar_sumber: 'Standar' };
+    expect(compareConfirmedSpecifications(forty, {
+      tipe: 'pcc', merek: 'CONCH', berat: '40 kg', mutu_dan_standar_sumber: 'standar',
+    })).toBe('MATCH');
+    expect(compareConfirmedSpecifications(forty, {
+      merek: 'Conch', tipe: 'PCC', berat: '50 kg', mutu_dan_standar_sumber: 'Standar',
+    })).toBe('CONFLICT');
+    expect(compareConfirmedSpecifications(
+      { merek: 'semua merk', tipe: 'Tronton' },
+      { merek: 'Mitsubishi', tipe: 'Tronton' },
+    )).toBe('UNKNOWN');
+  });
+});
