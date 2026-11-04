@@ -5,6 +5,7 @@ import {
   describeRabAutoPriceOutcome,
   emptyRabAutoPriceOutcome,
   isRabAutoPriceNoticeCurrent,
+  isRabAutoPriceRunScopeCurrent,
   parseRabAutoPricePage,
   type RabAutoPriceOutcome,
 } from './rabAutoPriceOutcome.ts';
@@ -149,4 +150,27 @@ test('failed-write alert never leaks into changed BOQ, project or date contexts'
     ...context, draftDirty: true,
   }), false);
   assert.equal(isRabAutoPriceNoticeCurrent(null, context), false);
+});
+
+test('in-flight auto-price result cannot revive after calculation date A → B → A', () => {
+  const started = {
+    projectId, draftRevision: 7, calculationDate: '2026-11-04',
+    calculationDateRevision: 10,
+  };
+  assert.equal(isRabAutoPriceRunScopeCurrent(started, { ...started }), true);
+  assert.equal(isRabAutoPriceRunScopeCurrent(started, {
+    ...started, calculationDate: '2026-11-05', calculationDateRevision: 11,
+  }), false);
+  // Even after the same date is restored, the old request remains obsolete.
+  assert.equal(isRabAutoPriceRunScopeCurrent(started, {
+    ...started, calculationDate: '2026-11-04', calculationDateRevision: 12,
+  }), false);
+  assert.equal(isRabAutoPriceRunScopeCurrent(started, {
+    ...started, projectId: 'other-project',
+  }), false);
+  assert.equal(isRabAutoPriceRunScopeCurrent(started, {
+    ...started, draftRevision: 8,
+  }), false);
+  // Selection of another item is not part of source/date scope.
+  assert.equal(isRabAutoPriceRunScopeCurrent(started, { ...started }), true);
 });

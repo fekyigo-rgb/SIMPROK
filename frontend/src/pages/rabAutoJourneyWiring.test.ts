@@ -49,6 +49,20 @@ test('RAB failed-write notice remains visible after retryToken draft reload in n
     'shared RAB sheet must remain present even when normal header is hidden');
 });
 
+test('in-flight auto-price checks date-only epoch before further pages, warning and reload', () => {
+  assert.match(priceJourney, /isRabAutoPriceRunScopeCurrent\(runScope/);
+  assert.match(priceJourney, /calculationDate: currentAutoPriceDateRef\.current/);
+  assert.match(priceJourney, /calculationDateRevision: autoPriceDateRevisionRef\.current/);
+  assert.match(priceJourney, /for \(let page = 1; page <= 20; page\+\+\) \{\s*if \(stopOnChangedContext\(\)\) return/);
+  assert.match(priceJourney, /const payload: unknown = await response\.json\(\);\s*if \(stopOnChangedContext\(\)\) return/);
+  assert.match(priceJourney, /if \(!pageResult\.hasNext\) \{\s*if \(stopOnChangedContext\(\)\) return/);
+  assert.match(priceJourney, /\} catch \{[\s\S]*?if \(stopOnChangedContext\(\)\) return/);
+  assert.match(source, /const handleCalculationAsOfDateChange = \(value: string\) => \{\s*if \(value !== currentAutoPriceDateRef\.current\) \{[\s\S]*?autoPriceDateRevisionRef\.current \+= 1/);
+  // Selecting a row changes persistContextRevisionRef but not the auto-price date epoch.
+  const rowSelection = source.slice(source.indexOf('const activateRow = ('), source.indexOf('const handleRowClick = ('));
+  assert.doesNotMatch(rowSelection, /autoPriceDateRevisionRef\.current/);
+});
+
 test('RAB failed-write notice clears on fresh calculation, user BOQ edit and date change', () => {
   assert.match(priceJourney, /setIsAutoPricing\(true\);\s*setAutoPriceNotice\(null\)/);
   assert.match(source, /const markDraftMutated = \(\) => \{\s*setAutoPriceNotice\(null\)/);

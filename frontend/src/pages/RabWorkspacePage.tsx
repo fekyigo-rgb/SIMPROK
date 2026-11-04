@@ -48,6 +48,7 @@ import {
   describeRabAutoPriceOutcome,
   emptyRabAutoPriceOutcome,
   isRabAutoPriceNoticeCurrent,
+  isRabAutoPriceRunScopeCurrent,
   parseRabAutoPricePage,
   type RabAutoPriceNotice,
 } from '../utils/rabAutoPriceOutcome';
@@ -627,6 +628,10 @@ export function RabWorkspacePage() {
     return () => window.removeEventListener('beforeunload', warn);
   }, [draftDirty, isSaving]);
   const [calculationAsOfDate, setCalculationAsOfDate] = useState(() => toLocalDateOnlyString(new Date()));
+  // Date-only generation: an in-flight request for A stays stale after A → B → A.
+  // Unlike persistContextRevisionRef, row selection does not increment this.
+  const autoPriceDateRevisionRef = useRef(0);
+  const currentAutoPriceDateRef = useRef(calculationAsOfDate);
   const [persistState, setPersistState] = useState<PersistUiState>({ kind: 'idle' });
   /**
    * RM-03B: `origin` distinguishes a workspace's OWN AHSP from the curated
@@ -1772,9 +1777,30 @@ export function RabWorkspacePage() {
     // some rows; ask for an explicit reconciliation instead.
     const startedRevision = draftRevisionRef.current;
     const startedProject = projectId;
+    const runScope = {
+      projectId: startedProject, draftRevision: startedRevision,
+      calculationDate: calculationAsOfDate,
+      calculationDateRevision: autoPriceDateRevisionRef.current,
+    };
+    const runStillCurrent = () => isRabAutoPriceRunScopeCurrent(runScope, {
+      projectId: currentProjectIdRef.current,
+      draftRevision: draftRevisionRef.current,
+      calculationDate: currentAutoPriceDateRef.current,
+      calculationDateRevision: autoPriceDateRevisionRef.current,
+    });
+    // A prior server page may have committed. Do not attribute its outcome
+    // to a newer date/project/BOQ; ask the user to inspect canonical results.
+    const stopOnChangedContext = () => {
+      if (runStillCurrent()) return false;
+      if (currentProjectIdRef.current === startedProject) {
+        setStatusMessage('Konteks RAB berubah selama perhitungan. Sebagian hasil mungkin telah tersimpan di server; periksa data RAB sebelum mencoba lagi.');
+      }
+      return true;
+    };
     let outcome = emptyRabAutoPriceOutcome();
     try {
       for (let page = 1; page <= 20; page++) {
+        if (stopOnChangedContext()) return;
         const query = new URLSearchParams({ page: String(page), limit: '25' });
         const response = await apiFetch(
           `/projects/${projectId}/rab/auto-price-ready?${query}`,
@@ -1783,14 +1809,12 @@ export function RabWorkspacePage() {
         );
         if (!response.ok) throw new Error('AUTO_PRICE_REQUEST_FAILED');
         const payload: unknown = await response.json();
+        if (stopOnChangedContext()) return; // no subsequent old-date page
         const pageResult = parseRabAutoPricePage(payload, projectId);
         if (!pageResult) throw new Error('AUTO_PRICE_INVALID_RESULT');
         outcome = accumulateRabAutoPriceOutcome(outcome, pageResult.counts);
         if (!pageResult.hasNext) {
-          if (draftRevisionRef.current !== startedRevision || currentProjectIdRef.current !== startedProject) {
-            setStatusMessage('Perhitungan selesai pada server, tetapi draft berubah selama proses. Simpan perubahan lokal sebelum memuat ulang hasil.');
-            return;
-          }
+          if (stopOnChangedContext()) return;
           const message = describeRabAutoPriceOutcome(outcome);
           setStatusMessage(message);
           if (outcome.requiresRevalidation > 0) {
@@ -1807,6 +1831,7 @@ export function RabWorkspacePage() {
     } catch {
       // Some pages may have committed before a later failure. Never announce
       // full success or retry without reloading the server's canonical truth.
+      if (stopOnChangedContext()) return;
       const message = 'Hasil perhitungan otomatis belum pasti lengkap. Periksa kembali data tersimpan; jangan menganggap seluruh baris berhasil.';
       setStatusMessage(message);
       if (draftRevisionRef.current === startedRevision && currentProjectIdRef.current === startedProject) {
@@ -2013,8 +2038,10 @@ export function RabWorkspacePage() {
 
   /** FINAL-TERMINAL-STATE-INVALIDATION §7B: mirrors activateRow's same-value/different-value distinction for the calculation date. */
   const handleCalculationAsOfDateChange = (value: string) => {
-    if (value !== calculationAsOfDate) {
+    if (value !== currentAutoPriceDateRef.current) {
+      currentAutoPriceDateRef.current = value; // synchronous even for rapid A → B → A
       markPersistContextChanged();
+      autoPriceDateRevisionRef.current += 1;
       setAutoPriceNotice(null); // Never resurrect an older date's warning.
     }
     setCalculationAsOfDate(value);

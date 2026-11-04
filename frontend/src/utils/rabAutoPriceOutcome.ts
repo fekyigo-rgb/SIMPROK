@@ -58,6 +58,28 @@ export function accumulateRabAutoPriceOutcome(
 }
 
 /**
+ * The date revision is monotonic: changing A → B → A while a request is in
+ * flight must NOT revive its obsolete result. Item selection is deliberately
+ * excluded because selecting a different row does not change RAB price facts.
+ */
+export interface RabAutoPriceRunScope {
+  readonly projectId: string | null;
+  readonly draftRevision: number;
+  readonly calculationDate: string;
+  readonly calculationDateRevision: number;
+}
+
+export function isRabAutoPriceRunScopeCurrent(
+  started: RabAutoPriceRunScope,
+  current: RabAutoPriceRunScope,
+): boolean {
+  return started.projectId === current.projectId &&
+    started.draftRevision === current.draftRevision &&
+    started.calculationDate === current.calculationDate &&
+    started.calculationDateRevision === current.calculationDateRevision;
+}
+
+/**
  * The last failed write needs a separate, source-scoped notice: the ordinary
  * statusMessage is replaced by the canonical BOQ reload. A retryToken-only
  * refresh is NOT a change in the source/context and must not hide this alert.
