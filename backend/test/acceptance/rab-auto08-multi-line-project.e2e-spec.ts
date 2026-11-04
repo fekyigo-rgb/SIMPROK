@@ -586,7 +586,7 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       where: { boqStructureId: structureId, itemType: 'WORK_ITEM' },
     });
     expect(imported).toHaveLength(lines.length + 1);
-    const newUncoded = imported.find((row) =>
+    let newUncoded = imported.find((row) =>
       row.name === uncodedLine.description);
     expect(newUncoded).toBeDefined();
     expect(newUncoded).toMatchObject({
@@ -616,6 +616,52 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       grandTotal: null,
       subtotal: null,
     });
+
+    // THE MISSING REAL USER ORDER: approve source -> SAVE unchanged draft
+    // BEFORE any first AHSP association. Full-replace mints new BoqItem IDs
+    // but must preserve only the originally approved logical source revision.
+    const approvedEventBefore = await prisma.boqBusinessUseEvent.findUniqueOrThrow({
+      where: { id: approved.body.businessUseEvent.id },
+    });
+    const noOpSaved = await request(app.getHttpServer())
+      .put('/projects/' + projectId + '/boq/draft')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .send({
+        rows: initialDraft.body.items.map((row: {
+          id: string; itemType: string; name: string; wbsCode: string;
+          quantity: string; unit: string; sortOrder: number;
+        }) => ({
+          tempId: row.id, itemType: row.itemType,
+          name: row.name, wbsCode: row.wbsCode,
+          quantity: Number(row.quantity), unit: row.unit,
+          sortOrder: row.sortOrder,
+        })),
+      }).expect(200);
+    expect(noOpSaved.body.items).toHaveLength(imported.length);
+    const afterNoOp = await prisma.boqItem.findMany({
+      where: { boqStructureId: structureId, itemType: 'WORK_ITEM' },
+    });
+    expect(afterNoOp).toHaveLength(imported.length);
+    for (const old of imported) {
+      const current = afterNoOp.find((row) => row.name === old.name);
+      expect(current).toBeDefined();
+      expect(current!.id).not.toBe(old.id);
+      expect(current!.createdAt.getTime()).toBe(old.createdAt.getTime());
+      expect(current!.updatedAt.getTime()).toBe(old.updatedAt.getTime());
+      expect(current!.sourceAhspCode).toBe(old.sourceAhspCode);
+      expect(current!.ahspVersionId).toBeNull();
+      expect(current!.workingOccurrenceId).toBeNull();
+    }
+    newUncoded = afterNoOp.find((row) =>
+      row.name === uncodedLine.description);
+    expect(newUncoded).toBeDefined();
+    const approvedEventAfter = await prisma.boqBusinessUseEvent.findUniqueOrThrow({
+      where: { id: approvedEventBefore.id },
+    });
+    expect(approvedEventAfter).toEqual(approvedEventBefore);
+    expect(await prisma.boqBusinessUseEvent.count({
+      where: { projectId, boqStructureId: structureId },
+    })).toBe(1);
 
     // A second region must block the ENTIRE project, not guess a region
     // and incorrectly report a project total based on partial work.

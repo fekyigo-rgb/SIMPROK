@@ -749,6 +749,9 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
         .fn()
         .mockResolvedValue([{ id: 'project-1', status: 'PLANNED' }]),
       projectBaseline: { count: jest.fn().mockResolvedValue(0) },
+      boqBusinessUseEvent: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       rabDocument: {
         count: jest.fn().mockResolvedValue(0),
         findFirst: jest.fn().mockResolvedValue(null),
@@ -811,6 +814,104 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
   /** Unit-test convenience: the same plain-object rows array is both the (unvalidated-here) dto.rows and the raw pre-transform body, since these tests bypass the real ValidationPipe/class-transformer entirely. */
   const save = (service: ProjectService, rows: Record<string, unknown>[]) =>
     service.saveDraftBoq('project-1', { rows } as any, rows);
+
+  // BOQ source approval continuity is a logical source revision, not a
+  // fresh decision at save time. These cases use the existing draft writer.
+  const sourceCreatedAt = new Date('2026-10-28T10:00:00.000Z');
+  const sourceUpdatedAt = new Date('2026-10-28T10:01:00.000Z');
+  const approvedUse = {
+    id: 'approved-source-event',
+    approvedByAccountId: 'approved-actor',
+    importFingerprint: 'approved-immutable-fingerprint',
+    usedAt: new Date('2026-10-28T10:02:00.000Z'),
+  };
+  const sourceBeforeSave = () => buildServerRow({
+    name: 'Pekerjaan Sumber Terbukti',
+    wbsCode: '1.1', sortOrder: 0, parentId: null, wbsNodeId: null,
+    sourceAhspCode: 'J.75',
+    createdAt: sourceCreatedAt, updatedAt: sourceUpdatedAt,
+    priceOrigin: null, unitPrice: null, lineTotal: null,
+    ahspVersionId: null, ahspSnapshotId: null,
+    workingOccurrenceId: null, calculationOccurrenceId: null,
+  });
+  const unchangedSourceDraftRow = () => ({
+    tempId: SERVER_ROW_ID, itemType: 'WORK_ITEM',
+    name: 'Pekerjaan Sumber Terbukti',
+    wbsCode: '1.1', sortOrder: 0, quantity: 5, unit: 'M1',
+  });
+
+  it('retains original approved source revision through an exactly unchanged draft save without renewing approval', async () => {
+    const { prisma, tx, boqItemCreate } = createPrismaMock([sourceBeforeSave()]);
+    tx.boqBusinessUseEvent.findFirst.mockResolvedValue(approvedUse);
+    await save(buildService(prisma), [unchangedSourceDraftRow()]);
+    const data = boqItemCreate.mock.calls[0][0].data as Record<string, unknown>;
+    expect(data.sourceAhspCode).toBe('J.75');
+    expect(data.createdAt).toEqual(sourceCreatedAt);
+    expect(data.updatedAt).toEqual(sourceUpdatedAt);
+    expect(tx.boqBusinessUseEvent.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { projectId: 'project-1', boqStructureId: STRUCTURE_ID },
+      }),
+    );
+  });
+
+  for (const testCase of [
+    { label: 'without original approval', approval: null, row: {} },
+    {
+      label: 'with stale original approval',
+      approval: { ...approvedUse, usedAt: new Date('2026-10-28T09:00:00.000Z') },
+      row: {},
+    },
+    { label: 'when source volume changes', approval: approvedUse, row: { quantity: 6 } },
+    { label: 'when source work description changes', approval: approvedUse, row: { name: 'Pekerjaan Sumber Berbeda' } },
+    { label: 'when source unit changes', approval: approvedUse, row: { unit: 'M2' } },
+    { label: 'when source WBS changes', approval: approvedUse, row: { wbsCode: '1.2' } },
+    { label: 'when source order changes', approval: approvedUse, row: { sortOrder: 1 } },
+    { label: 'when source price is entered', approval: approvedUse, row: { unitPrice: 99 } },
+  ]) {
+    it('does not retain prior approval revision ' + testCase.label, async () => {
+      const { prisma, tx, boqItemCreate } = createPrismaMock([sourceBeforeSave()]);
+      tx.boqBusinessUseEvent.findFirst.mockResolvedValue(testCase.approval);
+      await save(buildService(prisma), [
+        { ...unchangedSourceDraftRow(), ...testCase.row },
+      ]);
+      const data = boqItemCreate.mock.calls[0][0].data as Record<string, unknown>;
+      expect(data.createdAt).toBeUndefined();
+      expect(data.updatedAt).toBeUndefined();
+    });
+  }
+
+  it('revokes old source lineage when a previously root work is moved under a different folder', async () => {
+    const original = {
+      ...sourceBeforeSave(), sortOrder: 1, parentId: null,
+    };
+    const folder = buildServerRow({
+      id: 'approved-folder', name: 'Sub Judul', itemType: 'FOLDER',
+      wbsCode: 'A', sortOrder: 0, parentId: null,
+      quantity: new Prisma.Decimal(0), unit: '',
+      sourceAhspCode: null, priceOrigin: null, unitPrice: null, lineTotal: null,
+      ahspVersionId: null, ahspSnapshotId: null,
+      workingOccurrenceId: null, calculationOccurrenceId: null,
+    });
+    const { prisma, tx, boqItemCreate } = createPrismaMock([folder, original]);
+    tx.boqBusinessUseEvent.findFirst.mockResolvedValue(approvedUse);
+    await save(buildService(prisma), [
+      {
+        tempId: folder.id, itemType: 'FOLDER', name: 'Sub Judul',
+        wbsCode: 'A', sortOrder: 0,
+      },
+      {
+        ...unchangedSourceDraftRow(), sortOrder: 1,
+        parentTempId: folder.id,
+      },
+    ]);
+    const work = boqItemCreate.mock.calls[1][0].data as Record<string, unknown>;
+    expect(work.sourceAhspCode).toBeNull();
+    expect(work.ahspVersionId).toBeNull();
+    expect(work.workingOccurrenceId).toBeNull();
+    expect(work.createdAt).toBeUndefined();
+    expect(work.updatedAt).toBeUndefined();
+  });
 
   it('rejects a client unitPrice sent for an existing server-authored row (test 9)', async () => {
     const { prisma, boqItemDeleteMany } = createPrismaMock([buildServerRow()]);
@@ -1171,6 +1272,9 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
         .fn()
         .mockResolvedValue([{ id: 'project-1', status: 'PLANNED' }]),
       projectBaseline: { count: jest.fn().mockResolvedValue(0) },
+      boqBusinessUseEvent: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       rabDocument: {
         count: jest.fn().mockResolvedValue(0),
         findFirst: rabDocumentFindFirst,

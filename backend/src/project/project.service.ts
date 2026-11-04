@@ -2432,6 +2432,20 @@ export class ProjectService {
         where: { boqStructureId: structure.id },
       });
       const existingById = new Map(existingItems.map((row) => [row.id, row]));
+      // Existing immutable BOQ business-use event is the ONLY authority.
+      // An unchanged approved SOURCE fact may keep its logical source
+      // revision across full-replace; this is not a new approval event.
+      // Read under the existing project lock, before deleting source rows.
+      const lastApprovedImport = existingItems.length
+        ? await tx.boqBusinessUseEvent.findFirst({
+            where: { projectId, boqStructureId: structure.id },
+            orderBy: [{ usedAt: 'desc' }, { id: 'desc' }],
+            select: {
+              id: true, usedAt: true, approvedByAccountId: true,
+              importFingerprint: true,
+            },
+          })
+        : null;
 
       // GATE-2A §C — one canonical recap policy: read the existing DRAFT
       // RabDocument's margin/tax settings before the destructive replacement
@@ -2526,7 +2540,9 @@ export class ProjectService {
           (typeof existing.name === 'string' &&
             row.name !== existing.name) ||
           (typeof existing.wbsCode === 'string' &&
-            (row.wbsCode ?? '') !== existing.wbsCode);
+            (row.wbsCode ?? '') !== existing.wbsCode) ||
+          (existing.parentId ?? null) !== (row.parentTempId ?? null) ||
+          (existing.wbsNodeId ?? null) !== null;
         if (quantityChanged || unitChanged || itemTypeChanged ||
             workFactChanged) {
           throw new ConflictException(
@@ -2601,9 +2617,44 @@ export class ProjectService {
           (row.unit ?? '') !== existing.unit ||
           (typeof existing.wbsCode === 'string' &&
             (row.wbsCode ?? '') !== existing.wbsCode) ||
+          (existing.parentId ?? null) !== (row.parentTempId ?? null) ||
+          (existing.wbsNodeId ?? null) !== null ||
           row.itemType !== existing.itemType
         );
         const preserveAssociation = !sourceChanged && !isFolder && !isNote;
+        // Immutable import approval is NOT renewed by a draft save.
+        // Only an exact unchanged, previously approved and UNDECIDED work
+        // may retain its logical creation/revision times across the existing
+        // full-replace. New IDs alone must not revoke an unchanged source,
+        // but a changed volume, parent, order, WBS or any source field MUST.
+        // The original last approved BoqBusinessUseEvent remains untouched.
+        const unchangedApprovedSource = Boolean(
+          existing &&
+          lastApprovedImport?.approvedByAccountId &&
+          lastApprovedImport.importFingerprint &&
+          existing.itemType === 'WORK_ITEM' &&
+          row.itemType === 'WORK_ITEM' &&
+          preserveAssociation &&
+          existing.name === row.name &&
+          existing.wbsCode === (row.wbsCode ?? '') &&
+          existing.unit === (row.unit ?? '') &&
+          existing.quantity.equals(quantity) &&
+          existing.sortOrder === effectiveSortOrder &&
+          (existing.parentId ?? null) === (row.parentTempId ?? null) &&
+          existing.wbsNodeId === null &&
+          existing.priceOrigin === null &&
+          existing.unitPrice === null &&
+          existing.lineTotal === null &&
+          (row.unitPrice === null || row.unitPrice === undefined) &&
+          existing.ahspVersionId === null &&
+          existing.ahspSnapshotId === null &&
+          existing.workingOccurrenceId === null &&
+          existing.calculationOccurrenceId === null &&
+          existing.createdAt instanceof Date &&
+          existing.updatedAt instanceof Date &&
+          existing.createdAt.getTime() <= existing.updatedAt.getTime() &&
+          existing.updatedAt.getTime() <= lastApprovedImport.usedAt.getTime(),
+        );
         const isServerRow =
           !isFolder &&
           !isNote &&
@@ -2643,6 +2694,15 @@ export class ProjectService {
         const created = await tx.boqItem.create({
           data: {
             boqStructureId: structure.id,
+            // Copy the original LOGICAL source revision, not a fresh
+            // approval or an invented timestamp. Preserve BOTH timestamps
+            // only for the exact authorized no-op fact established above.
+            ...(unchangedApprovedSource
+              ? {
+                  createdAt: existing!.createdAt,
+                  updatedAt: existing!.updatedAt,
+                }
+              : {}),
             parentId,
             wbsCode: row.wbsCode ?? '',
             name: row.name,
