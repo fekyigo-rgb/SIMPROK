@@ -2432,6 +2432,48 @@ export class ProjectService {
         where: { boqStructureId: structure.id },
       });
       const existingById = new Map(existingItems.map((row) => [row.id, row]));
+      const submittedByTempId = new Map(dto.rows.map((row) => [row.tempId, row]));
+
+      /**
+       * Reuse the existing server BOQ rows and the submitted structural graph
+       * to verify the full parent-to-root identity. Comparing parent IDs only
+       * silently retains an approved AHSP/source (or kernel price) when a
+       * FOLDER's title or WBS changes but its tempId stays unchanged.
+       *
+       * This is a fact guard, NOT a new classifier or matching engine.
+       * Structural validation still owns legality and cycle rejection;
+       * this walk has its own bounded visited guard and fails closed.
+       */
+      const sameAncestorContext = (
+        existing: (typeof existingItems)[number],
+        incoming: (typeof dto.rows)[number],
+      ): boolean => {
+        let priorParentId = existing.parentId ?? null;
+        let newParentId = incoming.parentTempId ?? null;
+        const visited = new Set<string>();
+        while (priorParentId !== null || newParentId !== null) {
+          if (
+            !priorParentId || !newParentId ||
+            priorParentId !== newParentId ||
+            visited.has(priorParentId)
+          ) return false;
+          visited.add(priorParentId);
+          const previousParent = existingById.get(priorParentId);
+          const nextParent = submittedByTempId.get(newParentId);
+          if (
+            !previousParent || !nextParent ||
+            previousParent.itemType !== 'FOLDER' ||
+            nextParent.itemType !== 'FOLDER' ||
+            previousParent.name !== nextParent.name ||
+            previousParent.wbsCode !== (nextParent.wbsCode ?? '') ||
+            (nextParent.sortOrder !== undefined &&
+              previousParent.sortOrder !== nextParent.sortOrder)
+          ) return false;
+          priorParentId = previousParent.parentId ?? null;
+          newParentId = nextParent.parentTempId ?? null;
+        }
+        return true;
+      };
       // Existing immutable BOQ business-use event is the ONLY authority.
       // An unchanged approved SOURCE fact may keep its logical source
       // revision across full-replace; this is not a new approval event.
@@ -2541,7 +2583,7 @@ export class ProjectService {
             row.name !== existing.name) ||
           (typeof existing.wbsCode === 'string' &&
             (row.wbsCode ?? '') !== existing.wbsCode) ||
-          (existing.parentId ?? null) !== (row.parentTempId ?? null) ||
+          !sameAncestorContext(existing, row) ||
           (existing.wbsNodeId ?? null) !== null;
         if (quantityChanged || unitChanged || itemTypeChanged ||
             workFactChanged) {
@@ -2617,7 +2659,7 @@ export class ProjectService {
           (row.unit ?? '') !== existing.unit ||
           (typeof existing.wbsCode === 'string' &&
             (row.wbsCode ?? '') !== existing.wbsCode) ||
-          (existing.parentId ?? null) !== (row.parentTempId ?? null) ||
+          !sameAncestorContext(existing, row) ||
           (existing.wbsNodeId ?? null) !== null ||
           row.itemType !== existing.itemType
         );
@@ -2640,7 +2682,7 @@ export class ProjectService {
           existing.unit === (row.unit ?? '') &&
           existing.quantity.equals(quantity) &&
           existing.sortOrder === effectiveSortOrder &&
-          (existing.parentId ?? null) === (row.parentTempId ?? null) &&
+          sameAncestorContext(existing, row) &&
           existing.wbsNodeId === null &&
           existing.priceOrigin === null &&
           existing.unitPrice === null &&

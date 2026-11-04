@@ -1233,4 +1233,102 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       ahspVersionId: string | null; lineTotal: string | null;
     }) => row.ahspVersionId && row.lineTotal !== null)).toBe(true);
   }, 120000);
+
+  it('protects the full nested BOQ ancestor context over real Working Draft HTTP and PostgreSQL', async () => {
+    const rootName = tag + ' Pekerjaan Beton Bertulang';
+    const subName = tag + ' Pekerjaan Permukaan';
+    const childName = tag + ' Pengecatan Permukaan';
+    const root = await prisma.boqItem.create({
+      data: {
+        boqStructureId: structureId, wbsNodeId: null, wbsCode: 'Z',
+        name: rootName, itemType: 'FOLDER', parentId: null,
+        quantity: '0', unit: '', sortOrder: 2000,
+      },
+    });
+    const sub = await prisma.boqItem.create({
+      data: {
+        boqStructureId: structureId, wbsNodeId: null, wbsCode: 'Z.1',
+        name: subName, itemType: 'FOLDER', parentId: root.id,
+        quantity: '0', unit: '', sortOrder: 0,
+      },
+    });
+    const child = await prisma.boqItem.create({
+      data: {
+        boqStructureId: structureId, wbsNodeId: null, wbsCode: 'Z.1.1',
+        name: childName, itemType: 'WORK_ITEM', parentId: sub.id,
+        quantity: '1', unit: 'Kg', sortOrder: 0,
+        sourceAhspCode: lines[0].code,
+      },
+    });
+    const selection = await request(app.getHttpServer())
+      .post('/projects/' + projectId + '/ahsp-occurrences/boq-items/' +
+        child.id + '/select-ahsp')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .send({
+        ahspVersionId: versionIds[0],
+        businessPricingAsOfDate: asOfDate,
+        referenceRegionId: regionId,
+        idempotencyKey: tag + '-nested-ancestor-source',
+      }).expect(201);
+    expect(selection.body.id).toBeTruthy();
+    const canonicalSaveRows = (items: Array<{
+      id: string; parentId: string | null; itemType: string;
+      name: string; wbsCode: string; quantity: string;
+      unit: string; sortOrder: number;
+    }>, renamedId?: string, renamedName?: string) =>
+      items.map((row) => ({
+        tempId: row.id, parentTempId: row.parentId,
+        itemType: row.itemType,
+        name: row.id === renamedId ? renamedName : row.name,
+        wbsCode: row.wbsCode, quantity: Number(row.quantity),
+        unit: row.unit, sortOrder: row.sortOrder,
+      }));
+    const initial = await request(app.getHttpServer())
+      .get('/projects/' + projectId + '/boq/draft')
+      .set('Authorization', 'Bearer ' + editorToken).expect(200);
+    const unchanged = await request(app.getHttpServer())
+      .put('/projects/' + projectId + '/boq/draft')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .send({ rows: canonicalSaveRows(initial.body.items) })
+      .expect(200);
+    const unchangedChild = unchanged.body.items.find(
+      (row: { name: string }) => row.name === childName,
+    );
+    expect(unchangedChild).toBeTruthy();
+    expect(unchangedChild.sourceAhspCode).toBe(lines[0].code);
+    expect(unchangedChild.ahspVersionId).toBe(versionIds[0]);
+    expect(unchangedChild.workingOccurrenceId).not.toBeNull();
+
+    const changedRoot = unchanged.body.items.find(
+      (row: { name: string }) => row.name === rootName,
+    );
+    const modified = await request(app.getHttpServer())
+      .put('/projects/' + projectId + '/boq/draft')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .send({
+        rows: canonicalSaveRows(
+          unchanged.body.items,
+          changedRoot.id, tag + ' Pekerjaan Tanah dan Galian',
+        ),
+      }).expect(200);
+    const invalidated = modified.body.items.find(
+      (row: { name: string }) => row.name === childName,
+    );
+    expect(invalidated).toBeTruthy();
+    expect(invalidated).toMatchObject({
+      sourceAhspCode: null,
+      ahspVersionId: null,
+      workingOccurrenceId: null,
+      priceOrigin: null,
+      unitPrice: null,
+      lineTotal: null,
+    });
+    const healthy = modified.body.items.filter(
+      (row: { priceOrigin: string | null }) =>
+        row.priceOrigin === 'SERVER_COST_KERNEL',
+    );
+    expect(healthy).toHaveLength(lines.length + 3);
+    expect(healthy.every((row: { lineTotal: string | null }) =>
+      row.lineTotal !== null)).toBe(true);
+  }, 120000);
 });
