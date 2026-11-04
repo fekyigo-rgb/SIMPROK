@@ -6,10 +6,19 @@
  */
 const SPEC_KEYS: Record<string, string> = {
   merek: 'merek', merk: 'merek', brand: 'merek',
-  tipe: 'tipe', type: 'tipe', model: 'tipe',
+  tipe: 'tipe', 'tipe/model': 'tipe', 'tipe model': 'tipe', type: 'tipe', model: 'tipe',
   ukuran: 'ukuran', dimensi: 'dimensi', diameter: 'diameter',
+  panjang: 'panjang', lebar: 'lebar', tinggi: 'tinggi',
+  volume: 'volume', berat: 'berat',
   warna: 'warna', mutu: 'mutu', standar: 'standar', standard: 'standar',
   kapasitas: 'kapasitas',
+  // Open-ended supplier details are evidence, not proof of technical identity.
+  spesifikasi: 'spesifikasi', 'spesifikasi tambahan': 'spesifikasi',
+  // Verbatim supplier headings, NOT verified quality standards or product identity.
+  'mutu dan standar': 'mutu_dan_standar_sumber',
+  mutu_dan_standar_sumber: 'mutu_dan_standar_sumber',
+  'jenis/kegunaan': 'jenis_kegunaan_sumber',
+  jenis_kegunaan_sumber: 'jenis_kegunaan_sumber',
   // Confirmed, explicit use/function context. These remain qualitative facts;
   // unlike definitive types/brands, different wording alone cannot prove
   // a technical conflict or permit silent re-identification.
@@ -46,9 +55,23 @@ export function compareConfirmedSpecifications(
   source: ConfirmedResourceSpecifications,
   candidate: unknown,
 ): 'MATCH' | 'CONFLICT' | 'UNKNOWN' {
-  const known = confirmedSpecifications(candidate);
-  if (!known) return 'UNKNOWN';
-  for (const [key, value] of Object.entries(source)) {
+  const knownRaw = confirmedSpecifications(candidate);
+  if (!knownRaw) return 'UNKNOWN';
+  // Format A supplies literal "semua merk" for generic resources such as
+  // Dump Truck. This means ANY brand is allowed, not that "semua merk" is
+  // itself a manufacturer's brand. Preserve the exact source/audit facts and
+  // omit ONLY this non-specific brand from identity comparison. In particular
+  // a known Mitsubishi brand is NOT a conflict with "semua merk"; nor may
+  // two generic brand placeholders prove that two resources are identical.
+  const isAnyBrandScope = (value: string) =>
+    /^semua\s+mer(?:e)?k$/iu.test(value.trim());
+  const withoutGenericBrandScope = (facts: ConfirmedResourceSpecifications) =>
+    Object.fromEntries(Object.entries(facts).filter(([key, value]) =>
+      key !== 'merek' || !isAnyBrandScope(value)));
+  const reviewed = withoutGenericBrandScope(source);
+  const known = withoutGenericBrandScope(knownRaw);
+  if (Object.keys(reviewed).length === 0) return 'UNKNOWN';
+  for (const [key, value] of Object.entries(reviewed)) {
     if (!Object.hasOwn(known, key) || known[key].toLocaleLowerCase('id-ID') === value.toLocaleLowerCase('id-ID')) continue;
     // A size in cm and one in mm MAY be equivalent. A dash can be a range.
     // Only same-unit, unambiguous numerical dimensions establish difference.
@@ -61,16 +84,45 @@ export function compareConfirmedSpecifications(
           Number(a[2].replace(',', '.')) !== Number(b[2].replace(',', '.'))) return 'CONFLICT';
       return 'UNKNOWN';
     }
-    if (key === 'diameter' || key === 'kapasitas' ||
+    // Two REVIEWED physical measurements with the same literal unit
+    // cannot describe an identical product variant when their values differ.
+    // This is a conflict test, NOT a quantity converter. Unknown units,
+    // compound descriptions, different units or ambiguous number formats
+    // remain UNKNOWN; the canonical Unit Kernel owns conversions.
+    if (key === 'diameter' || key === 'panjang' || key === 'lebar' ||
+        key === 'tinggi' || key === 'volume' || key === 'berat') {
+      const measure = /^(\d+(?:[.,]\d+)?)\s*(mm|cm|m|m2|m3|kg|g|ton|t|liter|l|ml|cc)$/iu;
+      const a = measure.exec(value);
+      const b = measure.exec(known[key]);
+      if (!a || !b || a[2].toLowerCase() !== b[2].toLowerCase()) return 'UNKNOWN';
+      // A period/comma followed by three digits may be a thousands separator
+      // in supplier data, so never interpret that spelling as a decimal here.
+      if ([a[1], b[1]].some(number => /[.,]\d{3}$/u.test(number))) return 'UNKNOWN';
+      const first = Number(a[1].replace(',', '.'));
+      const second = Number(b[1].replace(',', '.'));
+      return first !== second ? 'CONFLICT' : 'UNKNOWN';
+    }
+    if (key === 'spesifikasi' || key === 'mutu_dan_standar_sumber' ||
+        key === 'jenis_kegunaan_sumber' || key === 'kapasitas' ||
         key === 'lingkungan' || key === 'kondisi' ||
         key === 'penggunaan' || key === 'peruntukan' ||
         key === 'fungsi' || key === 'metode' || key === 'kompetensi' ||
         key === 'penempatan' || key === 'ketahanan') return 'UNKNOWN';
     return 'CONFLICT';
   }
-  if (Object.keys(source).length === Object.keys(known).length &&
-    Object.keys(source).every(key => Object.hasOwn(known, key) &&
-      known[key].toLocaleLowerCase('id-ID') === source[key].toLocaleLowerCase('id-ID'))) return 'MATCH';
+  // A free-text specification note may be useful evidence, but equal notes
+  // cannot by themselves establish identical product variants. Only the
+  // pre-existing typed identity comparison can return MATCH.
+  const isSupplierOnly = (key: string) => key === 'spesifikasi' ||
+    key === 'mutu_dan_standar_sumber' || key === 'jenis_kegunaan_sumber';
+  const identityKeys = Object.keys(reviewed).filter(key => !isSupplierOnly(key));
+  const knownIdentityKeys = Object.keys(known).filter(key => !isSupplierOnly(key));
+  // Equal capacity alone is not a sufficient identity proof for equipment:
+  // other technical variants may still differ. Keep the source as a candidate.
+  if (identityKeys.length === 1 && identityKeys[0] === 'kapasitas') return 'UNKNOWN';
+  if (identityKeys.length > 0 && identityKeys.length === knownIdentityKeys.length &&
+    identityKeys.every(key => Object.hasOwn(known, key) &&
+      known[key].toLocaleLowerCase('id-ID') === reviewed[key].toLocaleLowerCase('id-ID'))) return 'MATCH';
   return 'UNKNOWN';
 }
 

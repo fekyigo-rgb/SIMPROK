@@ -1,4 +1,6 @@
 import { Prisma } from '@prisma/client';
+import { resolveResourceIdentity } from './resource-identity-resolution.kernel';
+import { candidateContextDigest } from './ghx-candidate-context';
 import {
   ResourceAdmissionService,
   ResourceAdmissionNotExhaustedError,
@@ -131,6 +133,92 @@ describe('ResourceAdmissionService', () => {
     expect(
       tx.resourceSourceIdentity.create.mock.calls[0][0].data.rawCode,
     ).toBe('AGX');
+  });
+
+  it('accepts a genuinely different confirmed variant despite identical family/name/code/unit, only after exact live candidate refusal', async () => {
+    const oldResource = {
+      id: 'cat-semen-pcc50',
+      code: 'M01',
+      name: 'Semen',
+      type: 'MATERIAL' as const,
+      baseUnit: 'ZAK',
+      status: 'ACTIVE' as const,
+      specifications: { tipe: 'PCC', berat: '50 kg' },
+    };
+    const sourceSpecs = { tipe: 'OPC', berat: '40 kg' };
+    const verdict = resolveResourceIdentity({
+      reference: {
+        rawName: 'Semen', rawCode: 'M01', rawUnit: 'zak',
+        resourceType: 'MATERIAL', confirmedSpecifications: sourceSpecs,
+      },
+      catalogCandidates: [oldResource], sourceSightings: [], reviewedMappings: [],
+    });
+    expect(verdict.status).toBe('UNRESOLVED');
+    expect(verdict.reasonCodes).toContain('SPECIFICATION_CONFLICT');
+    expect(verdict.candidates.map(c => c.identityBasis)).toEqual(['RULED_OUT']);
+    const digest = candidateContextDigest(verdict.candidates.map(c => ({
+      resourceCatalogId: c.resourceCatalogId,
+      name: c.name,
+      type: c.type,
+      baseUnit: c.baseUnit,
+      specifications: c.specifications,
+    })));
+    identity.resolve.mockResolvedValue(verdict);
+    tx.resourceCatalog.findFirst.mockResolvedValue(oldResource);
+    tx.resourceCatalog.create.mockResolvedValue({ id: 'cat-semen-opc40' });
+    const variantInput = input({
+      rawName: 'Semen',
+      rawCode: 'M01',
+      rawUnit: 'zak',
+      baseUnit: 'ZAK',
+      confirmedSpecifications: sourceSpecs,
+    });
+
+    // Even a genuinely ruled-out candidate cannot be ignored silently:
+    // the actual reviewer must refuse exactly the current candidate set.
+    await expect(service.admitObservedResource(tx, variantInput))
+      .rejects.toBeInstanceOf(ResourceAdmissionNotExhaustedError);
+    await expect(service.admitObservedResource(tx, input({
+      ...variantInput,
+      examination: { refusedCandidateIds: [oldResource.id], candidateContextDigest: 'stale' },
+    }))).rejects.toBeInstanceOf(ResourceAdmissionNotExhaustedError);
+    expect(tx.resourceCatalog.create).not.toHaveBeenCalled();
+
+    const created = await service.admitObservedResource(tx, input({
+      ...variantInput,
+      examination: { refusedCandidateIds: [oldResource.id], candidateContextDigest: digest },
+    }));
+    expect(created.id).toBe('cat-semen-opc40');
+    expect(created.id).not.toBe(oldResource.id);
+    expect(tx.resourceCatalog.create.mock.calls[0][0].data).toMatchObject({
+      name: 'Semen', type: 'MATERIAL', baseUnit: 'ZAK',
+      specifications: sourceSpecs, code: null,
+    });
+    expect(tx.resourceSourceIdentity.create.mock.calls[0][0].data)
+      .toMatchObject({ rawName: 'Semen', rawCode: 'M01', resourceCatalogId: created.id });
+  });
+
+  it('still refuses a duplicate when name/code/unit and independently verified specifications all match', async () => {
+    const specs = { tipe: 'OPC', berat: '40 kg' };
+    const existing = {
+      id: 'cat-existing-opc40', code: 'M01', name: 'Semen',
+      type: 'MATERIAL' as const, baseUnit: 'ZAK',
+      status: 'ACTIVE' as const, specifications: specs,
+    };
+    const verdict = resolveResourceIdentity({
+      reference: {
+        rawName: 'Semen', rawCode: 'M01', rawUnit: 'zak',
+        resourceType: 'MATERIAL', confirmedSpecifications: specs,
+      },
+      catalogCandidates: [existing], sourceSightings: [], reviewedMappings: [],
+    });
+    expect(verdict.status).toBe('RESOLVED');
+    identity.resolve.mockResolvedValue(verdict);
+    await expect(service.admitObservedResource(tx, input({
+      rawName: 'Semen', rawCode: 'M01', rawUnit: 'zak',
+      baseUnit: 'ZAK', confirmedSpecifications: specs,
+    }))).rejects.toBeInstanceOf(ResourceAdmissionNotExhaustedError);
+    expect(tx.resourceCatalog.create).not.toHaveBeenCalled();
   });
 
   it('keeps a cross-type observed code collision separate and fail-safe', async () => {
@@ -409,16 +497,19 @@ describe('ResourceAdmissionService', () => {
       expect(catalog.id).not.toBe('cat-4inch');
     });
 
-    it('returns the existing row when the same name already holds that code', async () => {
+    it('never turns same name + source code into identity after the canonical gate authorizes a new item', async () => {
       const existing = {
-        id: 'cat-same',
+        id: 'cat-old',
         name: 'Pipa porous diameter 5"',
         code: 'M25a',
         type: 'MATERIAL',
         baseUnit: 'M1',
         workspaceId: 'ws-1',
       };
+      // The single identity authority already ruled this a lawful new item.
+      // Source code occupancy may determine ONLY code placement, not identity.
       tx.resourceCatalog.findFirst = jest.fn().mockResolvedValue(existing);
+      tx.resourceCatalog.create.mockResolvedValue({ id: 'cat-new-variant' });
       const catalog = await service.admitHumanDeclaredResource(
         tx,
         declared({
@@ -428,8 +519,14 @@ describe('ResourceAdmissionService', () => {
           baseUnit: 'M1',
         }),
       );
-      expect(catalog).toEqual(existing);
-      expect(tx.resourceCatalog.create).not.toHaveBeenCalled();
+      expect(catalog).toEqual({ id: 'cat-new-variant' });
+      expect(catalog.id).not.toBe(existing.id);
+      expect(tx.resourceCatalog.create).toHaveBeenCalledTimes(1);
+      expect(tx.resourceCatalog.create.mock.calls[0][0].data).toMatchObject({
+        name: existing.name,
+        type: existing.type,
+        code: null,
+      });
     });
 
     it('does not reuse a different type that already holds the code', async () => {

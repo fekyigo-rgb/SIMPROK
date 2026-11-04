@@ -28,7 +28,9 @@ import {
   PriceLiteralReading,
   interpretPriceLiteral,
 } from '../universal-intake/structure/price-literal';
-import { resourceFamilyOfCategoryText } from '../universal-intake/structure/header-vocabulary';
+import { foldHeader, resourceFamilyOfCategoryText } from '../universal-intake/structure/header-vocabulary';
+import { matchKdnHeading } from '../universal-intake/structure/kdn-heading';
+import { isExplicitSpecificationHeader } from './basic-price-source-specification-gate';
 import {
   interpretKdnColumns,
   type KdnColumnDecision,
@@ -65,6 +67,14 @@ export const BASIC_PRICE_SEMANTIC_HEADER_CONTRACT_VERSION =
   'USI01_BASIC_PRICE_SEMANTIC_HEADER_V1';
 export const BASIC_PRICE_REGIONAL_MATRIX_CONTRACT_VERSION =
   'USI01_BASIC_PRICE_REGIONAL_MATRIX_V1';
+/** A new, evidence-proven nested header layout; existing flat V1 contracts remain frozen. */
+export const BASIC_PRICE_HIERARCHICAL_SPECIFICATION_CONTRACT_VERSION =
+  'USI01_BASIC_PRICE_SEMANTIC_SPEC_CHILD_V1';
+/** A Roman-numbered, source-PROVEN resource-family title is a stronger reading.
+ * Keep pre-existing V1 replay identity frozen; never silently rewrite its rows.
+ */
+export const BASIC_PRICE_HIERARCHICAL_SOURCE_SECTION_CONTRACT_VERSION =
+  'USI01_BASIC_PRICE_SEMANTIC_SPEC_CHILD_ROMAN_SECTION_V2';
 
 const CONTRACT_BY_STRUCTURE: Record<PriceTableStructure, string> = {
   SECTIONED_PRICE_LIST: BASIC_PRICE_PARSER_CONTRACT_VERSION,
@@ -182,7 +192,7 @@ export const PRICE_NORMALIZED_FROM_TEXT_REASON = 'PRICE_NORMALIZED_FROM_TEXT';
  * name, or the row's position. Every one of those is presentation or
  * statistics wearing the costume of proof.
  */
-export type HeadingEvidence = 'SOURCE_SECTION_TITLE_GRAMMAR';
+export type HeadingEvidence = 'SOURCE_SECTION_TITLE_GRAMMAR' | 'SOURCE_ROW_ROMAN_SECTION_MARKER';
 
 /**
  * The affirmative structural evidence a row's own name text carries, or null
@@ -974,15 +984,65 @@ function summarizeSectionProvenance(
  * because its family is proven by section titles, so the NO-header row is
  * read here as an overlay — meaning, not column number.
  */
+/**
+ * An explicit 'Spesifikasi' parent over named child and grandchild columns is
+ * different from a flat semantic table. Read those exact source header cells,
+ * never infer dimensions from a cell value or from a neighbouring resource.
+ * Reuse the existing specification header vocabulary and KDN heading authority.
+ */
+function hierarchicalSpecificationHeaders(
+  table: SourceTable,
+  structure: DetectedStructure,
+): Array<{ columnNumber: number; headerText: string }> {
+  if (structure.structure !== 'SEMANTIC_HEADER_TABLE' || structure.headerRowNumber === null) return [];
+  const parent = structure.columns.find((column) => foldHeader(column.headerText) === 'spesifikasi');
+  if (!parent) return [];
+  const next = structure.columns
+    .filter((column) => column.columnNumber > parent.columnNumber)
+    .map((column) => column.columnNumber);
+  const lastColumn = next.length > 0
+    ? Math.min(...next) - 1
+    : table.columnCount;
+  if (lastColumn < parent.columnNumber || lastColumn - parent.columnNumber > MAX_RAW_CONTEXT_ENTRIES) return [];
+  const child = table.rows.find((row) => row.number === structure.headerRowNumber! + 1);
+  const grandchild = table.rows.find((row) => row.number === structure.headerRowNumber! + 2);
+  if (!child) return [];
+  const recognized = (label: string): boolean =>
+    isExplicitSpecificationHeader(label) || matchKdnHeading(label) === 'CLEAR';
+  const secondLevel = Array.from(
+    { length: lastColumn - parent.columnNumber + 1 },
+    (_, i) => parent.columnNumber + i,
+  ).filter((columnNumber) => {
+    const label = textAt(child, columnNumber);
+    return label !== null && recognized(label);
+  });
+  // A single similar label may belong to an ordinary data row. Require a
+  // genuinely grouped multi-header, not a guessed classification.
+  if (secondLevel.length < 2) return [];
+  const headers: Array<{ columnNumber: number; headerText: string }> = [];
+  for (let columnNumber = parent.columnNumber; columnNumber <= lastColumn; columnNumber += 1) {
+    const leaf = grandchild ? textAt(grandchild, columnNumber) : null;
+    const childText = textAt(child, columnNumber);
+    const headerText = leaf && isExplicitSpecificationHeader(leaf)
+      ? leaf
+      : childText && recognized(childText) ? childText : null;
+    if (headerText) headers.push({ columnNumber, headerText });
+  }
+  return headers;
+}
+
 function kdnHeaderColumns(
   table: SourceTable,
   structure: DetectedStructure,
 ): Array<{ columnNumber: number; headerText: string }> {
   if (structure.columns.length > 0) {
-    return structure.columns.map((column) => ({
-      columnNumber: column.columnNumber,
-      headerText: column.headerText,
-    }));
+    return [
+      ...structure.columns.map((column) => ({
+        columnNumber: column.columnNumber,
+        headerText: column.headerText,
+      })),
+      ...hierarchicalSpecificationHeaders(table, structure),
+    ];
   }
   const headerRow = table.rows.find((row) => {
     const marker = textAt(row, 2);
@@ -1114,8 +1174,14 @@ export class BasicPriceUniversalIntakeAdapter {
             kdnMapping,
           );
 
+    const hierarchical = hierarchicalSpecificationHeaders(table, structure).length > 0;
+    const sourceRomanFamilyProof = rows.rows.some(row =>
+      row.sourceSectionProvenance === 'SOURCE_SECTION_TITLE');
     return {
-      parserContractVersion: CONTRACT_BY_STRUCTURE[structure.structure],
+      parserContractVersion: hierarchical && sourceRomanFamilyProof
+        ? BASIC_PRICE_HIERARCHICAL_SOURCE_SECTION_CONTRACT_VERSION
+        : hierarchical ? BASIC_PRICE_HIERARCHICAL_SPECIFICATION_CONTRACT_VERSION
+        : CONTRACT_BY_STRUCTURE[structure.structure],
       readerId: read.readerId,
       readerContractVersion: read.readerContractVersion,
       locatorDialect: table.locatorDialect,
@@ -1383,12 +1449,14 @@ export class BasicPriceUniversalIntakeAdapter {
         ? (regionChoice?.columnNumber ?? null)
         : null;
 
-    const headerByColumn = new Map<number, string>(
-      structure.columns.map((column) => [
-        column.columnNumber,
-        column.headerText,
+    const headerByColumn = new Map<number, string>([
+      ...structure.columns.map((column): [number, string] => [
+        column.columnNumber, column.headerText,
       ]),
-    );
+      ...hierarchicalSpecificationHeaders(table, structure).map(
+        (column): [number, string] => [column.columnNumber, column.headerText],
+      ),
+    ]);
     const consumedColumns = new Set<number>(
       [
         nameColumn,
@@ -1421,6 +1489,11 @@ export class BasicPriceUniversalIntakeAdapter {
     );
 
     const rows: BasicPriceImportKnowledgeRow[] = [];
+    // The existing section-title family vocabulary is the ONLY type authority.
+    // A Roman source heading proves the group boundary, but labels such as
+    // 'Semen' or 'Cat' do not themselves assert a canonical MATERIAL type.
+    let provenRomanFamily: BasicPriceSection | null = null;
+    let provenRomanTitle: string | null = null;
     let totalSourceRows = 0;
     let excludedNonDataRows = 0;
 
@@ -1435,14 +1508,26 @@ export class BasicPriceUniversalIntakeAdapter {
       const hasPriceEvidenceInAnyJurisdiction = priceEvidenceColumns.some(
         (column) => (row.cells[column - 1] ?? null) !== null,
       );
+      // A source may NUMBER ITS SECTIONS with Roman numerals (I, II, III),
+      // while numbering priced items separately. A Roman marker combined with
+      // NO unit and NO price is positive source evidence of a section banner,
+      // not a priced item. Arabic numbers retain the previous ambiguity law.
+      // Crucially, a Roman-marked row WITH commercial evidence remains an item.
+      const rowNumberText =
+        rowNumberColumn === null ? null : textAt(row, rowNumberColumn);
+      const romanSectionMarker =
+        rowNumberText !== null &&
+        /^[IVXLCDM]{1,8}\.?$/u.test(rowNumberText.toUpperCase()) &&
+        !hasUnitEvidence && !hasPriceEvidenceInAnyJurisdiction;
       const rowKind = classifyPhysicalRow({
         hasName: true,
         hasUnitEvidence,
         hasPriceEvidenceInAnyJurisdiction,
-        hasRowNumberEvidence:
-          rowNumberColumn !== null && textAt(row, rowNumberColumn) !== null,
-        // LAW G.1 — the row must PROVE it is a title. Absence proves nothing.
-        headingEvidence: affirmativeHeadingEvidence(name),
+        hasRowNumberEvidence: rowNumberText !== null && !romanSectionMarker,
+        // LAW G.1 — a Roman section marker is explicitly recorded by the
+        // document, never inferred from the item's name or nearby categories.
+        headingEvidence: affirmativeHeadingEvidence(name) ??
+          (romanSectionMarker ? 'SOURCE_ROW_ROMAN_SECTION_MARKER' : null),
       });
       // Neither kind is a price observation, so neither becomes a Basic Price
       // candidate — one because the source proved it is a title, the other
@@ -1452,6 +1537,13 @@ export class BasicPriceUniversalIntakeAdapter {
         rowKind === 'STRUCTURAL_HEADING' ||
         rowKind === 'NO_COMMERCIAL_EVIDENCE'
       ) {
+        // A Roman section title is affirmative structure. Reuse the existing
+        // controlled category vocabulary, but do not promote unfamiliar group
+        // names to any canonical resource type. A new heading RESETS the old
+        // context, especially before a trailing resource outside prior groups.
+        provenRomanFamily = romanSectionMarker
+          ? resourceFamilyOfCategoryText(name) : null;
+        provenRomanTitle = romanSectionMarker && provenRomanFamily ? name : null;
         excludedNonDataRows += 1;
         continue;
       }
@@ -1479,11 +1571,18 @@ export class BasicPriceUniversalIntakeAdapter {
         categoryNameColumn === null ? null : textAt(row, categoryNameColumn);
       const rawSourceCategoryCode =
         categoryCodeColumn === null ? null : textAt(row, categoryCodeColumn);
-      const resolvedSection = resolveRowSection({
-        rawCategoryName: rawSourceCategoryName,
+      const hasRowCategory = rawSourceCategoryName !== null ||
+        rawSourceCategoryCode !== null;
+      const sourceGroup = !sourceStatesCategory && !hasRowCategory && provenRomanFamily !== null
+        ? provenRomanTitle : null;
+      const categoryResolution = resolveRowSection({
+        rawCategoryName: rawSourceCategoryName ?? sourceGroup,
         rawCategoryCode: rawSourceCategoryCode,
         declaredSection,
       });
+      const resolvedSection = sourceGroup !== null && categoryResolution.section !== null
+        ? { ...categoryResolution, provenance: 'SOURCE_SECTION_TITLE' as const }
+        : categoryResolution;
 
       const warnings: string[] = [
         ...separatorWarnings(priceCell),

@@ -152,8 +152,12 @@ export interface BasicPriceImportRowSummary {
   unit: string | null;
   /** Source labels and literal values, NOT verified canonical specifications. */
   sourceSpecifications?: Array<{ label: string; value: string | null }>;
+  /** Verbatim supplier note; not yet an identity/classification decision. */
+  sourceKeterangan?: string | null;
   /** Validated append-only decision on this row, or null before confirmation. */
   specificationDecision?: { facts: Record<string, string>; decisionKind: string; resultingVersion: number } | null;
+  /** From the existing audited decision; read-only capacity view, no second truth. */
+  reviewedCapacity?: { status: 'ABSENT' | 'STRUCTURED' | 'UNPARSED'; facts: Array<{ kind: string; value: string; unit: string }> };
   rawPriceDisplayText: string | null;
   proposedCanonicalPrice: string | null;
   /**

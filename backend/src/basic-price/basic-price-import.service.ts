@@ -30,8 +30,9 @@ import { UpdateBasicPriceImportBatchDto } from './dto/update-basic-price-import-
 import { PriceSubmissionReviewService } from '../reality-intake/price-submission-review.service';
 import { assertBatchOwnedByCaller } from './basic-price-import-ownership.util';
 import { toDecimalString2 } from '../common/money';
-import { sourceSpecificationEvidence } from './basic-price-source-specification-gate';
+import { sourceKeteranganEvidence, sourceSpecificationEvidence } from './basic-price-source-specification-gate';
 import { confirmedSpecifications } from '../resource-catalog/resource-identity-specification.contract';
+import { projectReviewedCapacity } from './basic-price-reviewed-capacity.projection';
 import { batchTemporalQuestions } from './basic-price-temporal-question.law';
 import {
   assertTemporalProvenanceCoherent,
@@ -1563,7 +1564,9 @@ export class BasicPriceImportService {
         unit: r.rawUnitText ?? null,
         // Source evidence only; no identity assertion or catalogue mutation.
         sourceSpecifications: sourceSpecificationEvidence(r.rawSourceContext),
+        sourceKeterangan: sourceKeteranganEvidence(r.rawSourceContext),
         specificationDecision: reviewedSpecsByRow?.get(r.id) ?? null,
+        reviewedCapacity: projectReviewedCapacity(reviewedSpecsByRow?.get(r.id)?.facts),
         rawPriceDisplayText: r.rawPriceDisplayText ?? null,
         proposedCanonicalPrice: r.proposedCanonicalPrice
           ? r.proposedCanonicalPrice.toString()

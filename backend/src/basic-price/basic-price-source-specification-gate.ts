@@ -15,21 +15,57 @@ const EXPLICIT_SPECIFICATION_HEADERS = new Set([
   'merk',
   'brand',
   'tipe',
+  'tipe model',
   'type',
   'model',
   'ukuran',
   'dimensi',
+  'panjang',
+  'lebar',
+  'tinggi',
   'diameter',
+  'volume',
+  'berat',
+  'kapasitas',
   'warna',
   'mutu',
+  // Supplier-combined labels remain source evidence, not certified quality.
+  'mutu dan standar',
+  'jenis kegunaan',
   'standar',
   'standard',
   'spesifikasi',
+  'spesifikasi tambahan',
   'specification',
 ]);
 
+/**
+ * Supplier Keterangan is original machine-readable meaning evidence.
+ * A semantic candidate discovery consumer must read it automatically; the
+ * Import user must not copy it manually into a specification field.
+ * Readability does NOT grant canonical identity/variant equivalence authority.
+ * That eventual consumer must reuse Resource Identity instead of minting one.
+ */
+export function sourceKeteranganEvidence(rawSourceContext: unknown): string | null {
+  if (rawSourceContext === null || typeof rawSourceContext !== 'object' ||
+      Array.isArray(rawSourceContext)) return null;
+  const entries = Object.entries(rawSourceContext).filter(
+    ([key]) => foldHeader(key) === 'keterangan',
+  );
+  if (entries.length !== 1) return null;
+  const value = entries[0][1];
+  return typeof value === 'string' && value.trim()
+    ? value.trim().slice(0, 512)
+    : null;
+}
+
 export const SOURCE_SPECIFICATION_UNVERIFIED =
   'SOURCE_SPECIFICATION_UNVERIFIED';
+
+/** One existing, controlled source-header vocabulary. No importer-side duplicate. */
+export function isExplicitSpecificationHeader(header: string): boolean {
+  return EXPLICIT_SPECIFICATION_HEADERS.has(foldHeader(header));
+}
 
 /**
  * Read-only projection of explicit source fields for Tinjau Hasil.

@@ -2432,3 +2432,288 @@ tr.bp-detail-anchor > td {
   line-height: 1.4;
   color: var(--simprok-engineering-blue-700);
 }
+
+/* Owner-PASS product specification 2026-10-31:
+ * one compact existing editor; no new menu, no source/status badges.
+ * Scoped to the Basic Price review specification form only. */
+.bp-spec-editor {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+  padding: 7px 0 4px;
+}
+.bp-spec-editor__group {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+.bp-spec-editor__group h4 {
+  margin: 0;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--simprok-engineering-blue-900);
+}
+.bp-spec-editor__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 132px), 1fr));
+  gap: 9px;
+  min-width: 0;
+}
+.bp-spec-editor .bp-field {
+  min-width: 0;
+}
+.bp-spec-editor .bp-input {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+}
+.bp-spec-editor__dimensions,
+.bp-spec-editor__knowledge {
+  min-width: 0;
+  padding: 9px 0 0;
+  border-top: 1px solid var(--simprok-engineering-blue-100);
+}
+.bp-spec-editor__dimensions > summary,
+.bp-spec-editor__knowledge > summary {
+  font-weight: var(--weight-semibold);
+}
+.bp-spec-editor__dimensions[open] > summary,
+.bp-spec-editor__knowledge[open] > summary {
+  margin-bottom: 9px;
+}
+.bp-spec-editor__source-note {
+  overflow-wrap: anywhere;
+  margin: 0;
+  color: var(--simprok-engineering-blue-800);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+.bp-spec-editor__knowledge-content {
+  display: grid;
+  gap: 6px;
+}
+.bp-spec-editor__knowledge-content p {
+  margin: 0;
+  line-height: 1.5;
+}
+
+/* Owner-approved repeatable capacity rows: type / numeric value / exact unit.
+ * Responsive in the existing narrow Review pane, without changing its grid. */
+.bp-spec-editor__capacity-row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 118px), 1fr));
+  align-items: end;
+  gap: 8px;
+  min-width: 0;
+  padding: 8px;
+  border: 1px solid var(--simprok-engineering-blue-100);
+  border-radius: 6px;
+}
+.bp-spec-editor__capacity-row > button {
+  align-self: end;
+  justify-self: start;
+}
+ .bp-spec-editor__capacity-row .bp-field {
+  min-width: 0;
+}
+.bp-spec-editor__capacity-row .bp-field__label,
+.bp-spec-editor__capacity-row .bp-input,
+.bp-spec-editor__capacity-row select,
+.bp-spec-editor__capacity-row option {
+  overflow-wrap: anywhere;
+  white-space: normal;
+  max-width: 100%;
+}
+.bp-spec-editor__capacity-row { overflow-wrap: anywhere; }
+.bp-rowcard__source-facts dd { overflow-wrap: anywhere; }
+.bp-spec-editor__grid > * { min-width: 0; }
+.bp-spec-editor__capacity > .bp-btn {
+  justify-self: start;
+}
+
+/* Format A: Owner's two reference screenshots. Presentation-only; the
+   existing review action, audited specification writer and 60:40 card remain. */
+.bp-room .bp-rowcard__ready-block {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+.bp-room .bp-rowcard__ready-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 12px;
+  border: 1px solid var(--bp-progress-border);
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--bp-progress) 12%, white);
+  color: var(--bp-progress);
+}
+.bp-room .bp-rowcard__ready-state > div { min-width: 0; }
+.bp-room .bp-rowcard__ready-state strong {
+  display: block;
+  font-size: 13px;
+  line-height: 1.35;
+}
+.bp-room .bp-rowcard__ready-state p {
+  margin: 2px 0 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--simprok-engineering-blue-800);
+}
+.bp-room .bp-rowcard__ready-icon {
+  display: grid;
+  place-items: center;
+  flex: 0 0 22px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--bp-progress);
+  color: white;
+  font-weight: 700;
+  font-size: 14px;
+}
+.bp-room .bp-rowcard__ready-help {
+  margin: 0;
+  line-height: 1.45;
+  font-size: 11px;
+  color: var(--simprok-engineering-blue-700);
+}
+.bp-room .bp-rowcard__ready-summary {
+  overflow: hidden;
+  border: 1px solid var(--simprok-engineering-blue-200);
+  border-radius: 7px;
+  background: var(--simprok-white);
+}
+.bp-room .bp-rowcard__ready-summary-title {
+  display: block;
+  padding: 9px 11px;
+  border-bottom: 1px solid var(--simprok-engineering-blue-100);
+  background: var(--simprok-engineering-blue-50);
+  color: var(--simprok-authority-navy-900);
+  font-size: 12px;
+}
+.bp-room .bp-rowcard__ready-summary dl {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 10px 11px;
+}
+.bp-room .bp-rowcard__ready-summary dl > div {
+  display: grid;
+  grid-template-columns: minmax(88px, 36%) minmax(0, 1fr);
+  gap: 9px;
+  align-items: baseline;
+  font-size: 11px;
+}
+.bp-room .bp-rowcard__ready-summary dt {
+  color: var(--simprok-engineering-blue-700);
+}
+.bp-room .bp-rowcard__ready-summary dd {
+  margin: 0;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+  color: var(--simprok-engineering-blue-900);
+}
+.bp-room .bp-rowcard__ready-save { width: 100%; justify-content: center; }
+
+/* The same specification decision writer, presented on one compact row.
+   At smaller widths it wraps instead of shrinking fields into unreadability. */
+.bp-room .bp-spec-editor__decision-bar {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 0.9fr) minmax(190px, 1.3fr);
+  gap: 11px;
+  align-items: end;
+  min-width: 0;
+  padding-top: 8px;
+  border-top: 1px solid var(--simprok-engineering-blue-100);
+}
+.bp-room .bp-spec-editor__decision-bar > .bp-field { margin: 0; min-width: 0; }
+.bp-room .bp-spec-editor__decision-bar .bp-input { width: 100%; min-width: 0; }
+.bp-room .bp-spec-editor__decision-bar textarea.bp-input {
+  min-height: 35px;
+  height: 35px;
+  resize: vertical;
+}
+.bp-room .bp-spec-editor__save {
+  width: 100%;
+  min-width: 0;
+  min-height: 35px;
+  align-self: end;
+  justify-content: center;
+  white-space: normal;
+  background: var(--bp-progress);
+  border-color: var(--bp-progress);
+  color: var(--simprok-white);
+}
+.bp-room .bp-spec-editor__save:hover:not(:disabled),
+.bp-room .bp-spec-editor__save:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--bp-progress) 82%, black);
+  border-color: color-mix(in srgb, var(--bp-progress) 82%, black);
+  color: var(--simprok-white);
+}
+@media (max-width: 1020px) {
+  .bp-room .bp-spec-editor__decision-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .bp-room .bp-spec-editor__save { grid-column: 1 / -1; }
+}
+@media (max-width: 600px) {
+  .bp-room .bp-spec-editor__decision-bar { grid-template-columns: minmax(0, 1fr); }
+  .bp-room .bp-spec-editor__save { grid-column: 1; }
+}
+
+/* OWNER LOCK — workflow button semantics (2026-11-03).
+   Import/review is PRIVATE and uses the existing green Color Lock token.
+   Published SIMPROK catalog/governance actions retain their own blue styling.
+   This is a color seam only: no new actions, engines or change to 60:40. */
+.bp-room[data-bp-flow="private"] .bp-btn--primary,
+.bp-room[data-bp-flow="private"] .simprok-rab-toolbar .bp-btn--primary {
+  background: var(--bp-progress);
+  border-color: var(--bp-progress);
+  color: var(--simprok-white);
+}
+.bp-room[data-bp-flow="private"] .bp-btn--primary:hover:not(:disabled),
+.bp-room[data-bp-flow="private"] .bp-btn--primary:focus-visible:not(:disabled),
+.bp-room[data-bp-flow="private"] .simprok-rab-toolbar .bp-btn--primary:hover:not(:disabled),
+.bp-room[data-bp-flow="private"] .simprok-rab-toolbar .bp-btn--primary:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--bp-progress) 82%, black);
+  border-color: color-mix(in srgb, var(--bp-progress) 82%, black);
+  color: var(--simprok-white);
+}
+.bp-room[data-bp-flow="private"] .bp-btn--primary:disabled,
+.bp-room[data-bp-flow="private"] .bp-btn--primary[aria-disabled='true'],
+.bp-room[data-bp-flow="private"] .simprok-rab-toolbar .bp-btn--primary:disabled,
+.bp-room[data-bp-flow="private"] .simprok-rab-toolbar .bp-btn--primary[aria-disabled='true'] {
+  background: var(--simprok-engineering-blue-100);
+  border-color: var(--simprok-engineering-blue-200);
+  color: var(--bp-uncertain);
+}
+.bp-room[data-bp-flow="private"] .bp-rowcard__resolution > .bp-rowcard__choice:hover:not(:disabled) {
+  background: var(--bp-progress);
+  border-color: var(--bp-progress);
+  color: var(--simprok-white);
+}
+.bp-room[data-bp-flow="private"] .bp-rowcard__resolution > .bp-rowcard__choice[aria-expanded='true'] {
+  background: color-mix(in srgb, var(--bp-progress) 12%, white);
+  border-color: var(--bp-progress);
+  color: var(--simprok-engineering-blue-900);
+}
+/* Proposal only submits a PRIVATE asset for review; submission is not publish. */
+.bp-selectionbar .bp-btn--proposal {
+  background: var(--bp-progress);
+  border-color: var(--bp-progress);
+  color: var(--simprok-white);
+}
+.bp-selectionbar .bp-btn--proposal:hover:not(:disabled),
+.bp-selectionbar .bp-btn--proposal:focus-visible:not(:disabled) {
+  background: color-mix(in srgb, var(--bp-progress) 82%, black);
+  border-color: color-mix(in srgb, var(--bp-progress) 82%, black);
+  color: var(--simprok-white);
+}
+
+/* Owner-PASS Format A review proportion in QA: 60:40.
+   Scope narrowly to Basic Price review; preserve responsive 1-column under 861px.
+   Do not alter the 35:65 legacy rule used by other cards/pages. */
+@media (min-width: 861px) {
+  .bp-room[data-bp-flow="private"][data-bp-page="review"] .bp-rowcard {
+    grid-template-columns: minmax(0, 60fr) minmax(0, 40fr);
+  }
+}
