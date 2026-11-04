@@ -31,7 +31,7 @@ import {
 import { UNIT_REASON } from '../unit-kernel/unit-kernel.contracts';
 import { UnitKernelService } from '../unit-kernel/unit-kernel.service';
 import { ResourceIdentityResolutionService } from '../resource-catalog/resource-identity-resolution.service';
-import { hasGovernedUnindexedSource, isProvenContextRefreshOccurrence, samePreviouslyDecidedUnindexedWorkFact, sameProvenBoqSourceFact, unindexedWorkSearchTerm } from './rab-auto-source-proof';
+import { findGovernedUnindexedSourceIds, hasGovernedUnindexedSource, isProvenContextRefreshOccurrence, samePreviouslyDecidedUnindexedWorkFact, sameProvenBoqSourceFact } from './rab-auto-source-proof';
 import { exactUncodedFirstCandidateProven, exactUncodedWorkFact, normalizedExactUncodedWorkFact, explicitAhspSourceProof } from './rab-auto-first-source-reference';
 import {
   AhspResourceResolutionOrchestrator,
@@ -696,28 +696,10 @@ export class ProjectAhspService {
               )) {
                 throw new ConflictException('RAB_AUTO_UNINDEXED_ORIGIN_NOT_PROVEN');
               }
-              const searchTerm = unindexedWorkSearchTerm(item.name);
-              if (searchTerm.length < 2) {
-                throw new ConflictException('RAB_AUTO_UNINDEXED_SOURCE_NOT_SEARCHABLE');
-              }
-              const competitors = await tx.boqItem.findMany({
-                where: {
-                  id: { not: item.id },
-                  boqStructureId: structure.id,
-                  itemType: 'WORK_ITEM',
-                  wbsNodeId: null,
-                  wbsCode: item.wbsCode,
-                  unit: item.unit,
-                  name: { contains: searchTerm, mode: 'insensitive' },
-                  OR: [
-                    { workingOccurrenceId: { not: null } },
-                    { calculationOccurrenceId: { not: null } },
-                  ],
-                },
-                select: { id: true },
-                take: 2,
-              });
-              if (competitors.length !== 1 || competitors[0].id !== source.id) {
+              // Recheck the SAME normalized source universe inside the
+              // project transaction; substring matching is not identity.
+              const candidateIds = await findGovernedUnindexedSourceIds(tx, item);
+              if (candidateIds.length !== 1 || candidateIds[0] !== source.id) {
                 throw new ConflictException('RAB_AUTO_UNINDEXED_SOURCE_AMBIGUOUS');
               }
             }

@@ -2660,6 +2660,11 @@ export class ProjectService {
              * one derivation now, and it happens in the preflight.
              */
             sortOrder: effectiveSortOrder,
+            // Restore the SOURCE'S explicit AHSP code only if its BOQ work
+            // identity is unchanged. This field is not client-writable;
+            // preserving it never automatically renews import approval.
+            sourceAhspCode: preserveAssociation
+              ? existing?.sourceAhspCode ?? null : null,
             ahspVersionId: preserveAssociation
               ? existing?.ahspVersionId ?? null : null,
             ahspSnapshotId: preserveAssociation

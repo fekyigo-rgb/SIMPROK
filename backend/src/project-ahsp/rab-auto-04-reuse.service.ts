@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { parseDateOnlyUtc } from '../common/date-only.util';
 import { WORKING_DRAFT_STRUCTURE_NAME } from '../project/rab-lifecycle-policy.service';
 import { ProjectAhspService } from './project-ahsp.service';
-import { buildProvenContextRefreshKey, hasGovernedUnindexedSource, samePreviouslyDecidedUnindexedWorkFact, sameProvenBoqSourceFact, unindexedWorkSearchTerm } from './rab-auto-source-proof';
+import { buildProvenContextRefreshKey, findGovernedUnindexedSourceIds, hasGovernedUnindexedSource, samePreviouslyDecidedUnindexedWorkFact, sameProvenBoqSourceFact } from './rab-auto-source-proof';
 
 /**
  * RAB-AUTO-04. Reuses one already-human-proven AHSP association for an
@@ -58,6 +58,7 @@ export class RabAutoProvenReuseService {
       },
       select: {
         id: true,
+        boqStructureId: true,
         wbsNodeId: true,
         wbsCode: true,
         name: true,
@@ -320,6 +321,7 @@ export class RabAutoProvenReuseService {
   private async tryUnindexedReuse(
     item: {
       id: string;
+      boqStructureId: string;
       wbsNodeId: string | null;
       wbsCode: string;
       name: string;
@@ -335,33 +337,28 @@ export class RabAutoProvenReuseService {
     permittedRegions: ReadonlySet<string>,
   ): Promise<{ boqItemId: string; kind: string }> {
     const result = (kind: string) => ({ boqItemId: item.id, kind });
-    const term = unindexedWorkSearchTerm(item.name);
-    if (term.length < 2) return result('SOURCE_IDENTITY_NOT_ESTABLISHED');
+    if (!item.name.trim()) return result('SOURCE_IDENTITY_NOT_ESTABLISHED');
     try {
+      const sourceIds = await findGovernedUnindexedSourceIds(this.prisma, item);
+      if (sourceIds.length !== 1) {
+        return result(sourceIds.length > 1
+          ? 'MULTIPLE_SOURCE_DECISIONS'
+          : 'NO_PROVEN_ASSOCIATION');
+      }
       const sources = await this.prisma.boqItem.findMany({
         where: {
-          id: { not: item.id },
-          itemType: 'WORK_ITEM',
-          wbsNodeId: null,
-          wbsCode: item.wbsCode,
-          unit: item.unit,
-          name: { contains: term, mode: 'insensitive' },
+          id: { in: sourceIds },
           boqStructure: {
             projectId: input.projectId,
             name: WORKING_DRAFT_STRUCTURE_NAME,
             status: 'DRAFT',
             project: { workspaceId: input.workspaceId },
           },
-          OR: [
-            { workingOccurrenceId: { not: null } },
-            { calculationOccurrenceId: { not: null } },
-          ],
         },
         include: {
           workingOccurrence: { include: { previousOccurrence: true } },
           calculationOccurrence: { include: { previousOccurrence: true } },
         },
-        take: 2,
       });
       if (sources.length !== 1) {
         return result(sources.length > 1

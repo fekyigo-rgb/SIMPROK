@@ -22,7 +22,7 @@ describe('RAB-AUTO-04 governed unindexed legacy reuse', () => {
   const priorId = '80000000-0000-4000-8000-000000000001';
   const text = 'Pengecatan Dinding Beton Sandaran';
   const target = {
-    id: targetId, wbsNodeId: null, wbsCode: '1.',
+    id: targetId, boqStructureId: '90000000-0000-4000-8000-000000000001', wbsNodeId: null, wbsCode: '1.',
     name: 'Pek. Pengecatan Dinding Beton Sandaran', unit: 'm2',
     ahspVersionId: null, workingOccurrenceId: null,
     calculationOccurrenceId: null, priceOrigin: null,
@@ -79,6 +79,7 @@ describe('RAB-AUTO-04 governed unindexed legacy reuse', () => {
   });
   const make = (rows: Array<ReturnType<typeof source>>) => {
     const prisma = {
+      $queryRaw: jest.fn().mockResolvedValue(rows.map((row) => ({ id: row.id }))),
       boqItem: {
         findMany: jest.fn()
           .mockResolvedValueOnce([target])
@@ -148,19 +149,18 @@ describe('RAB-AUTO-04 governed unindexed legacy reuse', () => {
         referenceRegionId: region, reuseSourceBoqItemId: sourceId,
       }),
     );
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     const query = prisma.boqItem.findMany.mock.calls[1][0];
     expect(query.where).toMatchObject({
-      wbsNodeId: null, wbsCode: '1.', unit: 'm2',
-      name: { contains: 'Pengecatan Dinding Beton Sandaran', mode: 'insensitive' },
+      id: { in: [sourceId] },
       boqStructure: { projectId: input.projectId },
     });
-    expect(query.take).toBe(2);
   });
 
   it('does not borrow from competing, non-identical, or unverifiable decisions', async () => {
     const cases = [
       { rows: [] as Array<ReturnType<typeof source>>, kind: 'NO_PROVEN_ASSOCIATION' },
-      { rows: [source(), source({ id: 'competing-source' })], kind: 'MULTIPLE_SOURCE_DECISIONS' },
+      { rows: [source(), source({ id: 'competing-source', name: 'Pengecatan   Dinding Beton Sandaran' })], kind: 'MULTIPLE_SOURCE_DECISIONS' },
       { rows: [source({ name: 'Pengecatan Dinding Baja Sandaran' })], kind: 'SOURCE_CONTEXT_NOT_AUTHORIZED' },
       { rows: [source({ workingOccurrence: { ...occurrence(), requestPayloadHash: null } })], kind: 'SOURCE_CONTEXT_NOT_AUTHORIZED' },
       { rows: [source({ workingOccurrence: { ...occurrence(), referenceRegionId: 'other-region' } })], kind: 'SOURCE_CONTEXT_NOT_AUTHORIZED' },

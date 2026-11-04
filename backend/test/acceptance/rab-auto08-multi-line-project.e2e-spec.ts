@@ -962,6 +962,46 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
     ).toBe(lines.length + 1);
   }, 120000);
 
+  it('preserves imported AHSP source references through an unchanged Working Draft save and fresh readback', async () => {
+    const before = await request(app.getHttpServer())
+      .get('/projects/' + projectId + '/boq/draft')
+      .set('Authorization', 'Bearer ' + editorToken).expect(200);
+    expect(before.body.items.filter((row: { itemType: string }) =>
+      row.itemType === 'WORK_ITEM')).toHaveLength(lines.length + 1);
+    const saved = await request(app.getHttpServer())
+      .put('/projects/' + projectId + '/boq/draft')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .send({ rows: before.body.items.map((row: {
+        id: string; itemType: string; name: string; wbsCode: string;
+        quantity: string; unit: string; sortOrder: number;
+      }) => ({
+        tempId: row.id, itemType: row.itemType, name: row.name,
+        wbsCode: row.wbsCode, quantity: Number(row.quantity),
+        unit: row.unit, sortOrder: row.sortOrder,
+        // Source code is intentionally NOT writable by the client.
+      })) }).expect(200);
+    for (const line of lines) {
+      const row = saved.body.items.find((v: { name: string }) => v.name === line.description);
+      expect(row?.sourceAhspCode).toBe(line.code);
+      expect(row?.priceOrigin).toBe('SERVER_COST_KERNEL');
+      expect(row?.lineTotal).toBe(line.expectedTotal);
+    }
+    const readback = await request(app.getHttpServer())
+      .get('/projects/' + projectId + '/boq/draft')
+      .set('Authorization', 'Bearer ' + editorToken).expect(200);
+    for (const line of lines) {
+      const row = readback.body.items.find((v: { name: string }) => v.name === line.description);
+      expect(row?.sourceAhspCode).toBe(line.code);
+      expect(row?.lineTotal).toBe(line.expectedTotal);
+    }
+    // New row IDs/timestamps do not silently renew prior import approval.
+    const postSaveBind = await request(app.getHttpServer())
+      .post('/projects/' + projectId +
+        '/ahsp-occurrences/boq-items/working-draft/auto-bind-explicit-references')
+      .set('Authorization', 'Bearer ' + editorToken)
+      .send({ businessPricingAsOfDate: asOfDate }).expect(201);
+    expect(postSaveBind.body.automaticBindingPerformed).toBe(false);
+  }, 120000);
   it('reuses a previously governed AHSP decision for a NO-CODE legacy BOQ and persists RAB via real HTTP and PostgreSQL', async () => {
     const source = await prisma.boqItem.create({
       data: {
@@ -997,6 +1037,27 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       ahspVersionId: null, workingOccurrenceId: null, sourceAhspCode: null,
     });
 
+    // A second prior decision whose description differs ONLY by spaces
+    // MUST be counted, not hidden by a raw substring search.
+    const competitor = await prisma.boqItem.create({ data: {
+      boqStructureId: structureId, wbsNodeId: null, wbsCode: '9.9',
+      name: lines[0].description.replace(' ', '   '),
+      quantity: '1', unit: 'Kg', sortOrder: 902,
+      itemType: 'WORK_ITEM', sourceAhspCode: null,
+      ahspVersionId: versionIds[0], workingOccurrenceId: chosen.body.id,
+    } });
+    try {
+      const refused = await request(app.getHttpServer())
+        .post('/projects/' + projectId +
+          '/ahsp-occurrences/boq-items/working-draft/auto-reuse-proven?page=1&limit=25')
+        .set('Authorization', 'Bearer ' + editorToken)
+        .send({ businessPricingAsOfDate: asOfDate }).expect(201);
+      expect(refused.body.summary.MULTIPLE_SOURCE_DECISIONS).toBe(1);
+      expect((await prisma.boqItem.findUniqueOrThrow({ where: { id: target.id } }))
+        .workingOccurrenceId).toBeNull();
+    } finally {
+      await prisma.boqItem.delete({ where: { id: competitor.id } });
+    }
     // Existing "Lengkapi Otomatis" route; no manual selection on target.
     const reused = await request(app.getHttpServer())
       .post('/projects/' + projectId +
@@ -1068,7 +1129,7 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
         boqStructureId: structureId, wbsNodeId: null, wbsCode: '9.10',
         name: tag + ' Sambungan Pelat Baru Tipe A',
         quantity: '1', unit: 'Kg', sortOrder: 902,
-        itemType: 'WORK_ITEM', sourceAhspCode: null,
+        itemType: 'WORK_ITEM', sourceAhspCode: lines[0].code,
       },
     });
     await request(app.getHttpServer())
@@ -1114,6 +1175,7 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
     expect(changed).toBeTruthy();
     expect(changed).toMatchObject({
       ahspVersionId: null, workingOccurrenceId: null,
+      sourceAhspCode: null,
       priceOrigin: null, unitPrice: null, lineTotal: null,
     });
     const preserved = saved.body.items.filter(

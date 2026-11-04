@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { Prisma } from '@prisma/client';
 import { normalizeWorkHeadingForEvidence } from './ahsp-preference';
 
 /**
@@ -149,6 +150,38 @@ export function unindexedWorkSearchTerm(name: string): string {
 }
 
 
+/**
+ * Canonical source universe for governed historical RAB-AUTO-04 reuse.
+ * The exact normalization is shared by preview and transactional writer;
+ * differences in whitespace/Pek. headings cannot conceal a competitor.
+ * The caller establishes project/workspace ownership of boqStructureId.
+ * The result is bounded to two IDs: zero=absent, two=ambiguous.
+ */
+export async function findGovernedUnindexedSourceIds(
+  store: Prisma.TransactionClient,
+  target: BoqSourceFact & { id: string; boqStructureId: string },
+): Promise<string[]> {
+  const normalized = unindexedWorkSearchTerm(target.name).toLocaleLowerCase('id-ID');
+  if (!normalized || !target.wbsCode.trim() || !target.unit.trim()) return [];
+  const rows = await store.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT "id" FROM "boq_items"
+    WHERE "boqStructureId" = ${target.boqStructureId}::uuid
+      AND "id" <> ${target.id}::uuid
+      AND "itemType" = 'WORK_ITEM'
+      AND "wbsNodeId" IS NULL
+      AND btrim("wbsCode") = ${target.wbsCode.trim()}
+      AND "unit" = ${target.unit}
+      AND ("workingOccurrenceId" IS NOT NULL
+        OR "calculationOccurrenceId" IS NOT NULL)
+      AND btrim(regexp_replace(
+        regexp_replace(lower(normalize("name", NFC)),
+          '^[[:space:]]*(pek[[:space:]]*[.][[:space:]]*|pekerjaan[[:space:]]+)',
+          '', 'i'),
+        '[[:space:]]+', ' ', 'g')) = ${normalized}
+    ORDER BY "id" LIMIT 2
+  `);
+  return rows.map((row) => row.id);
+}
 /**
  * Proves that this persisted selection was made FOR THIS source BOQ row by
  * the already-existing canonical selection writer. A generation predecessor

@@ -898,6 +898,7 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
         name: 'Pekerjaan Tipe A', wbsCode: '1.1',
         priceOrigin: null, unitPrice: null, lineTotal: null,
         calculationOccurrenceId: null, workingOccurrenceId: 'old-occurrence',
+        sourceAhspCode: 'J.75',
       }),
     ]);
     await save(buildService(prisma), [{
@@ -909,6 +910,7 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
     expect(data.ahspVersionId).toBeNull();
     expect(data.ahspSnapshotId).toBeNull();
     expect(data.workingOccurrenceId).toBeNull();
+    expect(data.sourceAhspCode).toBeNull();
     expect(data.unitPrice).toBeNull();
     expect(data.lineTotal).toBeNull();
   });
@@ -919,6 +921,7 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
         name: 'Pekerjaan Tipe A', wbsCode: '1.1',
         priceOrigin: null, unitPrice: null, lineTotal: null,
         calculationOccurrenceId: null, workingOccurrenceId: 'old-occurrence',
+        sourceAhspCode: 'J.75',
       }),
     ]);
     await save(buildService(prisma), [{
@@ -929,6 +932,7 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
     const data = boqItemCreate.mock.calls[0][0].data as Record<string, any>;
     expect(data.ahspVersionId).toBe('ahsp-version-1');
     expect(data.workingOccurrenceId).toBe('old-occurrence');
+    expect(data.sourceAhspCode).toBe('J.75');
   });
 
   it('rejects a quantity change for an existing server-authored row, requiring explicit recalculation', async () => {
