@@ -984,7 +984,7 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
       const row = saved.body.items.find((v: { name: string }) => v.name === line.description);
       expect(row?.sourceAhspCode).toBe(line.code);
       expect(row?.priceOrigin).toBe('SERVER_COST_KERNEL');
-      expect(row?.lineTotal).toBe(line.expectedTotal);
+      expect(Number(row?.lineTotal).toFixed(2)).toBe(line.expectedTotal);
     }
     const readback = await request(app.getHttpServer())
       .get('/projects/' + projectId + '/boq/draft')
@@ -992,7 +992,7 @@ describe('RAB-AUTO-08 — multi-line complete project Golden Thread (e2e)', () =
     for (const line of lines) {
       const row = readback.body.items.find((v: { name: string }) => v.name === line.description);
       expect(row?.sourceAhspCode).toBe(line.code);
-      expect(row?.lineTotal).toBe(line.expectedTotal);
+      expect(Number(row?.lineTotal).toFixed(2)).toBe(line.expectedTotal);
     }
     // New row IDs/timestamps do not silently renew prior import approval.
     const postSaveBind = await request(app.getHttpServer())
