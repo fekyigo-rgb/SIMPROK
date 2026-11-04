@@ -30,6 +30,7 @@ describe('PR205 browser-proof: qualified resource heading outranks ambiguous Jen
         ['TEST-M-04', 'Rubber Ring Dia. 100 cm', 'Unit', 292800, 'BAHAN'],
       ],
     );
+    expect(result.parserContractVersion).toBe('USI01_BASIC_PRICE_SEMANTIC_HEADER_V1');
     expect(result.rows).toHaveLength(4);
     expect(result.rows.map((r) => r.rawResourceNameText)).toEqual([
       'Kayu 5/7 cm',

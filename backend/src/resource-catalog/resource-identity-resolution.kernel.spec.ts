@@ -1855,3 +1855,58 @@ describe('resolveResourceIdentity — LEVEL 0: canonical id reference', () => {
     expect(result.resolvedResourceCatalogId).toBe(CATALOG_PEKERJA.id);
   });
 });
+
+describe('G123 independent gate: canonical Resource Identity honors specification uncertainty and contradiction', () => {
+  const evaluate = (
+    sourceFacts: Record<string, string>,
+    catalogFacts: Record<string, string>,
+  ) => resolveResourceIdentity({
+    reference: {
+      rawName: 'Semen Conch',
+      rawCode: 'M12',
+      rawUnit: 'zak',
+      resourceType: 'MATERIAL',
+      confirmedSpecifications: sourceFacts,
+    },
+    catalogCandidates: [{
+      id: 'catalog-conch',
+      code: 'M12',
+      name: 'Semen Conch',
+      type: 'MATERIAL',
+      baseUnit: 'zak',
+      status: 'ACTIVE',
+      specifications: catalogFacts,
+    }],
+    sourceSightings: [],
+    reviewedMappings: [],
+  });
+
+  it('does not reuse canonical id if the source declares unverified Premium but catalog has no such qualification', () => {
+    const result = evaluate(
+      { merek: 'Conch', berat: '40 kg', mutu_dan_standar_sumber: 'Premium' },
+      { merek: 'Conch', berat: '40 kg' },
+    );
+    expect(result.status).toBe('NEEDS_REVIEW');
+    expect(result.resolvedResourceCatalogId).toBeNull();
+    expect(result.reasonCodes).toContain('SPECIFICATION_UNPROVED');
+  });
+
+  it('rules out a different model despite an uncertain weight spelling', () => {
+    const result = evaluate(
+      { berat: '40kg', tipe: 'PCC' },
+      { berat: '40 kg', tipe: 'OPC' },
+    );
+    expect(result.status).toBe('UNRESOLVED');
+    expect(result.resolvedResourceCatalogId).toBeNull();
+    expect(result.reasonCodes).toContain('SPECIFICATION_CONFLICT');
+  });
+
+  it('preserves the previously healthy exact confirmed brand and weight identity', () => {
+    const result = evaluate(
+      { merek: 'Conch', berat: '40 kg' },
+      { merek: 'Conch', berat: '40 kg' },
+    );
+    expect(result.status).toBe('RESOLVED');
+    expect(result.resolvedResourceCatalogId).toBe('catalog-conch');
+  });
+});

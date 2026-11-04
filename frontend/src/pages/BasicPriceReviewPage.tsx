@@ -1114,7 +1114,7 @@ export function BasicPriceReviewPage() {
 
   if (!batch) {
     return (
-      <div className="bp-room">
+      <div className="bp-room" data-bp-flow="private" data-bp-page="review">
         <header className="bp-head">
           <div>
             <div className="bp-head__crumb">SIMPROK / Basic Price / Peninjauan</div>
@@ -1229,7 +1229,7 @@ export function BasicPriceReviewPage() {
   };
 
   return (
-    <div className="bp-room">
+    <div className="bp-room" data-bp-flow="private" data-bp-page="review">
       {/*
         BACK TO THIS BATCH, not back to an empty upload form. Every reason an
         action is blocked below except "no rows finished yet" is a missing batch
@@ -1298,6 +1298,16 @@ export function BasicPriceReviewPage() {
       <p className="bp-field__help" aria-label="Ringkasan kerja SIMPROK dalam kalimat">
         {formatMachineFirstSummary(batch)}
       </p>
+
+            {batch.rows.some(row => (row.sourceSpecifications?.length ?? 0) > 0) ? (
+        <p className="bp-field__help" role="status" aria-label="Status pemeriksaan spesifikasi">
+          Spesifikasi Excel: {batch.rows.filter(row =>
+            (row.sourceSpecifications?.length ?? 0) > 0).length} baris memiliki fakta sumber;
+          {' '}{batch.rows.filter(row => Boolean(row.specificationDecision)).length} baris
+          sudah memiliki keputusan spesifikasi tercatat.
+          {' '}Tinjauan item di atas merupakan proses terpisah.
+        </p>
+      ) : null}
 
       <p className="bp-note bp-note--info" aria-live="polite">
         {statusMessage}
@@ -1805,9 +1815,12 @@ export function BasicPriceReviewPage() {
                         key={row.id + ':' + (row.specificationDecision?.resultingVersion ?? 'none')}
                         rowNumber={row.sourceRowNumber}
                         sourceSpecifications={row.sourceSpecifications}
+                        sourceKeterangan={row.sourceKeterangan}
                         specificationDecision={row.specificationDecision}
+                        reviewedCapacity={row.reviewedCapacity}
                         mutable={mutable}
                         disabled={isBusy}
+                        saveBlockedReason={row.section === null ? 'Konfirmasi Jenis pada panel Pilih Penyelesaian terlebih dahulu. Fakta sumber tetap dapat diperiksa.' : null}
                         onSave={(facts, kind, reason) => handleSaveManualSpecifications(row, facts, kind, reason)}
                       />
                     ) : null}
@@ -1886,6 +1899,44 @@ export function BasicPriceReviewPage() {
 
                   <div className="bp-rowcard__actions bp-rowcard__resolution">
                     <h3>Pilih Penyelesaian</h3>
+                    {row.status === 'READY_FOR_SUBMISSION' ? (
+                      <section className="bp-rowcard__ready-block" aria-label={`Status penyimpanan baris ${row.sourceRowNumber}`}>
+                        <div className="bp-rowcard__ready-state" role="status">
+                          <span className="bp-rowcard__ready-icon" aria-hidden="true">✓</span>
+                          <div>
+                            <strong>{row.savedAsPrivatePrice || row.privateBasicPriceId ? 'Tersimpan privat' : 'Siap disimpan'}</strong>
+                            <p>{row.savedAsPrivatePrice || row.privateBasicPriceId
+                              ? 'Harga baris ini telah tersimpan dalam Basic Price privat.'
+                              : row.specificationDecision
+                                ? 'Spesifikasi baris ini telah diperiksa dan dapat disimpan.'
+                                : 'Identitas dan satuan baris ini telah siap untuk disimpan.'}</p>
+                          </div>
+                        </div>
+                        <p className="bp-rowcard__ready-help">
+                          {row.savedAsPrivatePrice || row.privateBasicPriceId
+                            ? 'Harga ini dapat ditemukan kembali melalui Basic Price.'
+                            : 'Pastikan ringkasan informasi sudah sesuai. Anda dapat menyimpan baris ini, meninjau ulang keputusan, atau menundanya.'}
+                        </p>
+                        <div className="bp-rowcard__ready-summary">
+                          <strong className="bp-rowcard__ready-summary-title">Ringkasan Baris</strong>
+                          <dl>
+                            <div><dt>Nama</dt><dd>{row.name}</dd></div>
+                            <div><dt>Satuan</dt><dd>{row.unit?.trim() || 'Tidak tercantum'}</dd></div>
+                            <div><dt>Harga</dt><dd>{row.rawPriceDisplayText ? `Rp ${row.rawPriceDisplayText}` : 'Tidak tercantum'}</dd></div>
+                            <div><dt>Jenis (terkonfirmasi)</dt><dd>{rowSectionDisplay(row)}</dd></div>
+                          </dl>
+                        </div>
+                        {!row.savedAsPrivatePrice && !row.privateBasicPriceId ? (
+                          <button type="button" className="bp-btn bp-btn--primary bp-rowcard__ready-save"
+                            aria-label={`Simpan Privat satu baris #${row.sourceRowNumber}`}
+                            disabled={isBusy}
+                            onClick={() => void handleKeepSinglePrivate(row)}>
+                            Simpan Privat baris ini saja
+                          </button>
+                        ) : null}
+                      </section>
+                    ) : null}
+
                     {sourceContradictions.length > 0 ? (
                       <section className="bp-note bp-note--info" role="note" aria-label={`Ketidaksesuaian data sumber baris ${row.sourceRowNumber}`}>
                         <strong>Data sumber perlu diklarifikasi</strong>
@@ -2270,17 +2321,8 @@ export function BasicPriceReviewPage() {
                         ) : null}
                         <button type="button" className="bp-btn bp-btn--danger-quiet" onClick={() => void handleReject(row)} disabled={isBusy} aria-disabled={isBusy}>Tolak baris harga ini</button>
                       </>
-                    ) : <p className="bp-field__help">{rowStateLabel(row)}</p>}
-                    {row.status === 'READY_FOR_SUBMISSION' && !row.savedAsPrivatePrice && !row.privateBasicPriceId ? (
-                      <div className="bp-field" aria-label={`Simpan Privat satu baris #${row.sourceRowNumber}`}>
-                        <button type="button" className="bp-btn bp-btn--primary"
-                          disabled={isBusy}
-                          onClick={() => void handleKeepSinglePrivate(row)}>
-                          Simpan Privat baris ini saja
-                        </button>
-                        <span className="bp-field__help">Hanya baris ini. Tidak menerima kandidat otomatis dan tidak menyimpan M60/baris lain.</span>
-                      </div>
-                    ) : null}
+                    ) : row.status !== 'READY_FOR_SUBMISSION' ? <p className="bp-field__help">{rowStateLabel(row)}</p> : null}
+
                     {(row.status === 'REJECTED' || row.status === 'READY_FOR_SUBMISSION') &&
                       !row.savedAsPrivatePrice && !row.privateBasicPriceId ? (
                       <div className="bp-field" aria-label={`Koreksi keputusan baris ${row.sourceRowNumber}`}>
