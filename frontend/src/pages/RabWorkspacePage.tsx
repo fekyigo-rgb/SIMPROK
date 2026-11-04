@@ -47,7 +47,9 @@ import {
   accumulateRabAutoPriceOutcome,
   describeRabAutoPriceOutcome,
   emptyRabAutoPriceOutcome,
+  isRabAutoPriceNoticeCurrent,
   parseRabAutoPricePage,
+  type RabAutoPriceNotice,
 } from '../utils/rabAutoPriceOutcome';
 import { appendBoqImportApprovalIdentity, dismissBoqImportPreview, requiresBoqImportConfirmation, type BoqImportDraftImpact } from '../utils/boqImportApproval';
 import {
@@ -665,6 +667,9 @@ export function RabWorkspacePage() {
   const [autoReuseNotice, setAutoReuseNotice] = useState<{
     projectId: string; date: string; message: string;
   } | null>(null);
+  // Persistent RAB write-outcome alert is separate from transient draft-load
+  // statusMessage, which is intentionally overwritten by retryToken reload.
+  const [autoPriceNotice, setAutoPriceNotice] = useState<RabAutoPriceNotice | null>(null);
   // The analysis remains primary; the editor is opened only by explicit user intent.
   const [showAhspSelection, setShowAhspSelection] = useState(false);
   const persistGenerationRef = useRef(0);
@@ -886,6 +891,7 @@ export function RabWorkspacePage() {
     previousProjectIdRef.current = projectId;
     if (projectChanged) {
       markPersistContextChanged();
+      setAutoPriceNotice(null); // An old project's write outcome is not this project's result.
       setPersistState({ kind: 'idle' });
     }
 
@@ -1760,6 +1766,7 @@ export function RabWorkspacePage() {
   const handleAutoPriceReady = async () => {
     if (!projectId || !canEditDraft || !workingDraftLoaded || draftDirty || isAutoPricing) return;
     setIsAutoPricing(true);
+    setAutoPriceNotice(null); // A new run replaces the previous scoped outcome.
     // A concurrent local edit/project switch must never be overwritten by a
     // completion-triggered reload. The canonical server may have committed
     // some rows; ask for an explicit reconciliation instead.
@@ -1784,7 +1791,14 @@ export function RabWorkspacePage() {
             setStatusMessage('Perhitungan selesai pada server, tetapi draft berubah selama proses. Simpan perubahan lokal sebelum memuat ulang hasil.');
             return;
           }
-          setStatusMessage(describeRabAutoPriceOutcome(outcome));
+          const message = describeRabAutoPriceOutcome(outcome);
+          setStatusMessage(message);
+          if (outcome.requiresRevalidation > 0) {
+            setAutoPriceNotice({
+              projectId: startedProject, date: calculationAsOfDate,
+              draftRevision: startedRevision, message,
+            });
+          }
           setRetryToken((value) => value + 1);
           return;
         }
@@ -1793,8 +1807,13 @@ export function RabWorkspacePage() {
     } catch {
       // Some pages may have committed before a later failure. Never announce
       // full success or retry without reloading the server's canonical truth.
-      setStatusMessage('Hasil perhitungan otomatis belum pasti lengkap. Periksa kembali data tersimpan; jangan menganggap seluruh baris berhasil.');
+      const message = 'Hasil perhitungan otomatis belum pasti lengkap. Periksa kembali data tersimpan; jangan menganggap seluruh baris berhasil.';
+      setStatusMessage(message);
       if (draftRevisionRef.current === startedRevision && currentProjectIdRef.current === startedProject) {
+        setAutoPriceNotice({
+          projectId: startedProject, date: calculationAsOfDate,
+          draftRevision: startedRevision, message,
+        });
         setRetryToken((value) => value + 1);
       }
     } finally {
@@ -1994,7 +2013,10 @@ export function RabWorkspacePage() {
 
   /** FINAL-TERMINAL-STATE-INVALIDATION §7B: mirrors activateRow's same-value/different-value distinction for the calculation date. */
   const handleCalculationAsOfDateChange = (value: string) => {
-    if (value !== calculationAsOfDate) markPersistContextChanged();
+    if (value !== calculationAsOfDate) {
+      markPersistContextChanged();
+      setAutoPriceNotice(null); // Never resurrect an older date's warning.
+    }
     setCalculationAsOfDate(value);
   };
 
@@ -2264,6 +2286,7 @@ export function RabWorkspacePage() {
    * marker, is what protects it (see reloadDraft/handlePersistCalculation).
    */
   const markDraftMutated = () => {
+    setAutoPriceNotice(null); // Changed BOQ facts invalidate the last calculation outcome.
     draftRevisionRef.current += 1;
     setDraftRevisionSnapshot(draftRevisionRef.current);
     setDraftDirty(true);
@@ -3210,6 +3233,16 @@ export function RabWorkspacePage() {
                 <small role="status" aria-label="Hasil terakhir RAB Otomatis"
                   style={{ display: 'block', color: 'var(--simprok-catatan-muted)', maxWidth: '68ch' }}>
                   {autoReuseNotice.message}
+                </small>
+              ) : null}
+            {isRabAutoPriceNoticeCurrent(autoPriceNotice, {
+              projectId, date: calculationAsOfDate,
+              draftRevision: draftRevisionSnapshot, draftDirty,
+            }) ? (
+                <small role="alert" aria-label="Hasil penyimpanan RAB Otomatis perlu perhatian"
+                  className="simprok-rab-validation-alert"
+                  style={{ display: 'block', maxWidth: '68ch' }}>
+                  {autoPriceNotice.message}
                 </small>
               ) : null}
             {draftAssessmentDisplay ? (

@@ -18,8 +18,41 @@ test('RAB auto-price UI consumes and accumulates official revalidation counts be
   assert.match(priceJourney, /parseRabAutoPricePage\(payload, projectId\)/);
   assert.match(priceJourney, /outcome = accumulateRabAutoPriceOutcome\(outcome, pageResult\.counts\)/);
   assert.match(priceJourney, /if \(!pageResult\.hasNext\)/);
-  assert.match(priceJourney, /setStatusMessage\(describeRabAutoPriceOutcome\(outcome\)\)/);
+  assert.match(priceJourney, /const message = describeRabAutoPriceOutcome\(outcome\)/);
+  assert.match(priceJourney, /setStatusMessage\(message\)/);
   assert.match(priceJourney, /AUTO_PRICE_INCOMPLETE_PAGINATION/);
+});
+
+
+test('RAB failed-write notice remains visible after retryToken draft reload in normal and focus modes', () => {
+  assert.match(priceJourney, /if \(outcome\.requiresRevalidation > 0\) \{\s*setAutoPriceNotice\(\{/);
+  const persisted = priceJourney.indexOf('setAutoPriceNotice({');
+  const reloaded = priceJourney.indexOf('setRetryToken((value) => value + 1)', persisted);
+  assert.ok(persisted >= 0 && reloaded > persisted,
+    'warning must be stored separately before the canonical reload');
+  const reloadStart = source.indexOf('const projectChanged = previousProjectIdRef.current !== projectId;');
+  const reloadEnd = source.indexOf('}, [projectId, retryToken, isProvisional]);', reloadStart);
+  assert.ok(reloadStart >= 0 && reloadEnd > reloadStart);
+  const reloadEffect = source.slice(reloadStart, reloadEnd);
+  assert.match(reloadEffect, /if \(projectChanged\) \{\s*markPersistContextChanged\(\);\s*setAutoPriceNotice\(null\)/);
+  const sameProjectReload = reloadEffect.slice(reloadEffect.indexOf('let cancelled = false;'));
+  assert.match(sameProjectReload, /setStatusMessage\('Memuat draft\.\.\.'\)/);
+  assert.match(sameProjectReload, /Draft tersimpan dimuat\. Ruang kerja siap\./);
+  assert.doesNotMatch(sameProjectReload, /setAutoPriceNotice\(/,
+    'retryToken-only reload must never clear the outcome alert');
+  const sheetStart = source.indexOf('<section className="simprok-rab-sheet"');
+  const alertAt = source.indexOf('aria-label="Hasil penyimpanan RAB Otomatis perlu perhatian"', sheetStart);
+  assert.ok(sheetStart >= 0 && alertAt > sheetStart);
+  assert.match(source.slice(sheetStart, alertAt), /isRabAutoPriceNoticeCurrent\(autoPriceNotice/);
+  assert.match(source.slice(alertAt - 75, alertAt + 180), /role="alert"/);
+  assert.ok(source.indexOf('focusMode ? null : (', 0) < sheetStart,
+    'shared RAB sheet must remain present even when normal header is hidden');
+});
+
+test('RAB failed-write notice clears on fresh calculation, user BOQ edit and date change', () => {
+  assert.match(priceJourney, /setIsAutoPricing\(true\);\s*setAutoPriceNotice\(null\)/);
+  assert.match(source, /const markDraftMutated = \(\) => \{\s*setAutoPriceNotice\(null\)/);
+  assert.match(source, /const handleCalculationAsOfDateChange = \(value: string\) => \{[\s\S]*?setAutoPriceNotice\(null\)/);
 });
 
 test('RAB-level automation connects first-source proof before proven-reuse then official Cost Kernel action', () => {

@@ -4,6 +4,7 @@ import {
   accumulateRabAutoPriceOutcome,
   describeRabAutoPriceOutcome,
   emptyRabAutoPriceOutcome,
+  isRabAutoPriceNoticeCurrent,
   parseRabAutoPricePage,
   type RabAutoPriceOutcome,
 } from './rabAutoPriceOutcome.ts';
@@ -95,4 +96,57 @@ test('malformed or missing revalidation evidence is rejected, never treated as z
       ...counts, requiresRevalidation: invalid,
     } }, projectId), null);
   }
+});
+
+test('failed-write alert survives transient loading and ready messages after canonical draft reload', () => {
+  const notice = {
+    projectId,
+    date: '2026-11-04',
+    draftRevision: 7,
+    message: describeRabAutoPriceOutcome({
+      calculatedAndPersisted: 2,
+      unpriced: 0,
+      requiresRevalidation: 1,
+    }),
+  };
+  const context = {
+    projectId, date: notice.date, draftRevision: 7, draftDirty: false,
+  };
+  // The current header is transient and can be replaced by retryToken reload.
+  // The separate alert is scoped to source context, not to that header.
+  for (const transientHeader of [
+    notice.message,
+    'Memuat draft...',
+    'Draft tersimpan dimuat. Ruang kerja siap.',
+  ]) {
+    assert.equal(typeof transientHeader, 'string');
+    assert.equal(isRabAutoPriceNoticeCurrent(notice, context), true);
+    assert.match(notice.message, /1 baris belum berhasil disimpan/);
+  }
+});
+
+test('failed-write alert never leaks into changed BOQ, project or date contexts', () => {
+  const notice = {
+    projectId,
+    date: '2026-11-04',
+    draftRevision: 7,
+    message: '1 baris memerlukan validasi ulang',
+  };
+  const context = {
+    projectId, date: notice.date, draftRevision: 7, draftDirty: false,
+  };
+  assert.equal(isRabAutoPriceNoticeCurrent(notice, context), true);
+  assert.equal(isRabAutoPriceNoticeCurrent(notice, {
+    ...context, projectId: 'another-project',
+  }), false);
+  assert.equal(isRabAutoPriceNoticeCurrent(notice, {
+    ...context, date: '2026-11-05',
+  }), false);
+  assert.equal(isRabAutoPriceNoticeCurrent(notice, {
+    ...context, draftRevision: 8,
+  }), false);
+  assert.equal(isRabAutoPriceNoticeCurrent(notice, {
+    ...context, draftDirty: true,
+  }), false);
+  assert.equal(isRabAutoPriceNoticeCurrent(null, context), false);
 });
