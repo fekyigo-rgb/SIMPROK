@@ -366,6 +366,9 @@ describe('saveDraftBoq structural fail-closed — zero mutation', () => {
     const tx = {
       $queryRaw: jest.fn().mockResolvedValue([{ id: 'project-1', status: 'PLANNED' }]),
       projectBaseline: { count: jest.fn().mockResolvedValue(0) },
+      boqBusinessUseEvent: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       rabDocument: {
         count: jest.fn().mockResolvedValue(0),
         findFirst: jest.fn().mockResolvedValue(null),

@@ -749,6 +749,9 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
         .fn()
         .mockResolvedValue([{ id: 'project-1', status: 'PLANNED' }]),
       projectBaseline: { count: jest.fn().mockResolvedValue(0) },
+      boqBusinessUseEvent: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       rabDocument: {
         count: jest.fn().mockResolvedValue(0),
         findFirst: jest.fn().mockResolvedValue(null),
@@ -812,6 +815,332 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
   const save = (service: ProjectService, rows: Record<string, unknown>[]) =>
     service.saveDraftBoq('project-1', { rows } as any, rows);
 
+  // BOQ source approval continuity is a logical source revision, not a
+  // fresh decision at save time. These cases use the existing draft writer.
+  const sourceCreatedAt = new Date('2026-10-28T10:00:00.000Z');
+  const sourceUpdatedAt = new Date('2026-10-28T10:01:00.000Z');
+  const approvedUse = {
+    id: 'approved-source-event',
+    approvedByAccountId: 'approved-actor',
+    importFingerprint: 'approved-immutable-fingerprint',
+    usedAt: new Date('2026-10-28T10:02:00.000Z'),
+  };
+  const sourceBeforeSave = () => buildServerRow({
+    name: 'Pekerjaan Sumber Terbukti',
+    wbsCode: '1.1', sortOrder: 0, parentId: null, wbsNodeId: null,
+    sourceAhspCode: 'J.75',
+    createdAt: sourceCreatedAt, updatedAt: sourceUpdatedAt,
+    priceOrigin: null, unitPrice: null, lineTotal: null,
+    ahspVersionId: null, ahspSnapshotId: null,
+    workingOccurrenceId: null, calculationOccurrenceId: null,
+  });
+  const unchangedSourceDraftRow = () => ({
+    tempId: SERVER_ROW_ID, itemType: 'WORK_ITEM',
+    name: 'Pekerjaan Sumber Terbukti',
+    wbsCode: '1.1', sortOrder: 0, quantity: 5, unit: 'M1',
+  });
+
+  it('retains original approved source revision through an exactly unchanged draft save without renewing approval', async () => {
+    const { prisma, tx, boqItemCreate } = createPrismaMock([sourceBeforeSave()]);
+    tx.boqBusinessUseEvent.findFirst.mockResolvedValue(approvedUse);
+    await save(buildService(prisma), [unchangedSourceDraftRow()]);
+    const data = boqItemCreate.mock.calls[0][0].data as Record<string, unknown>;
+    expect(data.sourceAhspCode).toBe('J.75');
+    expect(data.createdAt).toEqual(sourceCreatedAt);
+    expect(data.updatedAt).toEqual(sourceUpdatedAt);
+    expect(tx.boqBusinessUseEvent.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { projectId: 'project-1', boqStructureId: STRUCTURE_ID },
+      }),
+    );
+  });
+
+  for (const testCase of [
+    { label: 'without original approval', approval: null, row: {} },
+    {
+      label: 'with stale original approval',
+      approval: { ...approvedUse, usedAt: new Date('2026-10-28T09:00:00.000Z') },
+      row: {},
+    },
+    { label: 'when source volume changes', approval: approvedUse, row: { quantity: 6 } },
+    { label: 'when source work description changes', approval: approvedUse, row: { name: 'Pekerjaan Sumber Berbeda' } },
+    { label: 'when source unit changes', approval: approvedUse, row: { unit: 'M2' } },
+    { label: 'when source WBS changes', approval: approvedUse, row: { wbsCode: '1.2' } },
+    { label: 'when source order changes', approval: approvedUse, row: { sortOrder: 1 } },
+    { label: 'when source price is entered', approval: approvedUse, row: { unitPrice: 99 } },
+  ]) {
+    it('does not retain prior approval revision ' + testCase.label, async () => {
+      const { prisma, tx, boqItemCreate } = createPrismaMock([sourceBeforeSave()]);
+      tx.boqBusinessUseEvent.findFirst.mockResolvedValue(testCase.approval);
+      await save(buildService(prisma), [
+        { ...unchangedSourceDraftRow(), ...testCase.row },
+      ]);
+      const data = boqItemCreate.mock.calls[0][0].data as Record<string, unknown>;
+      expect(data.createdAt).toBeUndefined();
+      expect(data.updatedAt).toBeUndefined();
+    });
+  }
+
+  it('revokes old source lineage when a previously root work is moved under a different folder', async () => {
+    const original = {
+      ...sourceBeforeSave(), sortOrder: 1, parentId: null,
+    };
+    const folder = buildServerRow({
+      id: 'approved-folder', name: 'Sub Judul', itemType: 'FOLDER',
+      wbsCode: 'A', sortOrder: 0, parentId: null,
+      quantity: new Prisma.Decimal(0), unit: '',
+      sourceAhspCode: null, priceOrigin: null, unitPrice: null, lineTotal: null,
+      ahspVersionId: null, ahspSnapshotId: null,
+      workingOccurrenceId: null, calculationOccurrenceId: null,
+    });
+    const { prisma, tx, boqItemCreate } = createPrismaMock([folder, original]);
+    tx.boqBusinessUseEvent.findFirst.mockResolvedValue(approvedUse);
+    await save(buildService(prisma), [
+      {
+        tempId: folder.id, itemType: 'FOLDER', name: 'Sub Judul',
+        wbsCode: 'A', sortOrder: 0,
+      },
+      {
+        ...unchangedSourceDraftRow(), sortOrder: 1,
+        parentTempId: folder.id,
+      },
+    ]);
+    const work = boqItemCreate.mock.calls[1][0].data as Record<string, unknown>;
+    expect(work.sourceAhspCode).toBeNull();
+    expect(work.ahspVersionId).toBeNull();
+    expect(work.workingOccurrenceId).toBeNull();
+    expect(work.createdAt).toBeUndefined();
+    expect(work.updatedAt).toBeUndefined();
+  });
+
+
+  // Existing FOLDER -> FOLDER -> WORK_ITEM graph. Parent IDs can remain
+  // identical in a save payload even when the folder's NAME changes.
+  // An unchanged child is NOT an unchanged approved source in that case.
+  const nestedFolders = () => [
+    buildServerRow({
+      id: 'folder-root', name: 'Pekerjaan Beton',
+      wbsCode: 'A', itemType: 'FOLDER', sortOrder: 0,
+      parentId: null, quantity: new Prisma.Decimal(0), unit: '',
+      priceOrigin: null, unitPrice: null, lineTotal: null,
+      ahspVersionId: null, workingOccurrenceId: null,
+      calculationOccurrenceId: null,
+    }),
+    buildServerRow({
+      id: 'folder-sub', name: 'Pekerjaan Plesteran',
+      wbsCode: 'A.1', itemType: 'FOLDER', sortOrder: 0,
+      parentId: 'folder-root', quantity: new Prisma.Decimal(0), unit: '',
+      priceOrigin: null, unitPrice: null, lineTotal: null,
+      ahspVersionId: null, workingOccurrenceId: null,
+      calculationOccurrenceId: null,
+    }),
+  ];
+  const nestedIncoming = (
+    changes: { rootName?: string; subName?: string; rootWbs?: string; subWbs?: string } = {},
+  ) => [
+    {
+      tempId: 'folder-root', itemType: 'FOLDER',
+      name: changes.rootName ?? 'Pekerjaan Beton',
+      wbsCode: changes.rootWbs ?? 'A', sortOrder: 0,
+    },
+    {
+      tempId: 'folder-sub', itemType: 'FOLDER',
+      name: changes.subName ?? 'Pekerjaan Plesteran',
+      wbsCode: changes.subWbs ?? 'A.1', sortOrder: 0,
+      parentTempId: 'folder-root',
+    },
+    {
+      ...unchangedSourceDraftRow(),
+      parentTempId: 'folder-sub',
+    },
+  ];
+  const nestedOriginalWork = () => ({
+    ...sourceBeforeSave(), parentId: 'folder-sub',
+  });
+
+  it('preserves a genuine no-op TWO-LEVEL parent context and approved source', async () => {
+    const { prisma, tx, boqItemCreate } = createPrismaMock([
+      ...nestedFolders(), nestedOriginalWork(),
+    ]);
+    tx.boqBusinessUseEvent.findFirst.mockResolvedValue(approvedUse);
+    await save(buildService(prisma), nestedIncoming());
+    const child = boqItemCreate.mock.calls.map(
+      (call) => call[0].data as Record<string, any>,
+    ).find((data) => data.name === 'Pekerjaan Sumber Terbukti');
+    expect(child).toBeDefined();
+    expect(child.sourceAhspCode).toBe('J.75');
+    expect(child.createdAt).toEqual(sourceCreatedAt);
+    expect(child.updatedAt).toEqual(sourceUpdatedAt);
+    expect(child.parentId).toBe('new-row-1');
+  });
+
+  for (const change of [
+    { label: 'root heading renamed', args: { rootName: 'Pekerjaan Galian' } },
+    { label: 'nested heading renamed', args: { subName: 'Pekerjaan Galian' } },
+    { label: 'root WBS changed', args: { rootWbs: 'B' } },
+    { label: 'nested WBS changed', args: { subWbs: 'B.1' } },
+  ]) {
+    it('does not inherit approval or AHSP when ' + change.label, async () => {
+      const { prisma, tx, boqItemCreate } = createPrismaMock([
+        ...nestedFolders(), nestedOriginalWork(),
+      ]);
+      tx.boqBusinessUseEvent.findFirst.mockResolvedValue(approvedUse);
+      await save(buildService(prisma), nestedIncoming(change.args));
+      const child = boqItemCreate.mock.calls.map(
+        (call) => call[0].data as Record<string, any>,
+      ).find((data) => data.name === 'Pekerjaan Sumber Terbukti');
+      expect(child).toBeDefined();
+      expect(child.sourceAhspCode).toBeNull();
+      expect(child.ahspVersionId).toBeNull();
+      expect(child.workingOccurrenceId).toBeNull();
+      expect(child.createdAt).toBeUndefined();
+      expect(child.updatedAt).toBeUndefined();
+    });
+  }
+
+  it('keeps the original immutable human-selected BOQ identity across a no-op draft save', async () => {
+    const linked = {
+      ...sourceBeforeSave(), sourceAhspCode: null,
+      ahspVersionId: 'approved-ahsp-version',
+      workingOccurrenceId: 'original-human-occurrence',
+    };
+    const { prisma, boqItemCreate } = createPrismaMock([linked]);
+    await save(buildService(prisma), [unchangedSourceDraftRow()]);
+    const persisted = boqItemCreate.mock.calls[0][0].data as Record<string, unknown>;
+    expect(persisted.id).toBe(SERVER_ROW_ID);
+    expect(persisted.ahspVersionId).toBe('approved-ahsp-version');
+    expect(persisted.workingOccurrenceId).toBe('original-human-occurrence');
+    expect(persisted.sourceAhspCode).toBeNull();
+  });
+
+  it('does not retain human-selected identity when the BOQ work specification changes', async () => {
+    const linked = {
+      ...sourceBeforeSave(), sourceAhspCode: null,
+      ahspVersionId: 'approved-ahsp-version',
+      workingOccurrenceId: 'original-human-occurrence',
+    };
+    const { prisma, boqItemCreate } = createPrismaMock([linked]);
+    await save(buildService(prisma), [
+      { ...unchangedSourceDraftRow(), name: 'Pekerjaan Sumber Terbukti Tebal 20 mm' },
+    ]);
+    const persisted = boqItemCreate.mock.calls[0][0].data as Record<string, unknown>;
+    expect(persisted.id).toBeUndefined();
+    expect(persisted.ahspVersionId).toBeNull();
+    expect(persisted.workingOccurrenceId).toBeNull();
+  });
+
+  it('keeps the source BOQ id across a genuine no-op save under a two-level Sub Judul', async () => {
+    const linked = {
+      ...nestedOriginalWork(), sourceAhspCode: null,
+      ahspVersionId: 'approved-ahsp-version',
+      workingOccurrenceId: 'original-human-occurrence',
+    };
+    const { prisma, boqItemCreate } = createPrismaMock([
+      ...nestedFolders(), linked,
+    ]);
+    await save(buildService(prisma), nestedIncoming());
+    const persisted = boqItemCreate.mock.calls.map(
+      (call) => call[0].data as Record<string, unknown>,
+    ).find((data) => data.name === 'Pekerjaan Sumber Terbukti');
+    expect(persisted?.id).toBe(SERVER_ROW_ID);
+    expect(persisted?.parentId).toBe('new-row-1');
+    expect(persisted?.workingOccurrenceId).toBe('original-human-occurrence');
+  });
+
+  it('invalidates old occurrence identity when an ancestor Sub Judul changes', async () => {
+    const linked = {
+      ...nestedOriginalWork(), sourceAhspCode: null,
+      ahspVersionId: 'approved-ahsp-version',
+      workingOccurrenceId: 'original-human-occurrence',
+    };
+    const { prisma, boqItemCreate } = createPrismaMock([
+      ...nestedFolders(), linked,
+    ]);
+    await save(buildService(prisma), nestedIncoming({
+      rootName: 'Pekerjaan Galian',
+    }));
+    const persisted = boqItemCreate.mock.calls.map(
+      (call) => call[0].data as Record<string, unknown>,
+    ).find((data) => data.name === 'Pekerjaan Sumber Terbukti');
+    expect(persisted?.id).toBeUndefined();
+    expect(persisted?.workingOccurrenceId).toBeNull();
+    expect(persisted?.ahspVersionId).toBeNull();
+  });
+
+  it('retains the BOQ id for unchanged kernel-priced occurrence without modifying its money', async () => {
+    const linked = buildServerRow({
+      name: 'Pekerjaan Sumber Terbukti',
+      wbsCode: '1.1', sortOrder: 0, parentId: null, wbsNodeId: null,
+      workingOccurrenceId: 'human-working-occurrence',
+    });
+    const { prisma, boqItemCreate } = createPrismaMock([linked]);
+    await save(buildService(prisma), [unchangedSourceDraftRow()]);
+    const persisted = boqItemCreate.mock.calls[0][0].data as Record<string, unknown>;
+    expect(persisted.id).toBe(SERVER_ROW_ID);
+    expect(persisted.priceOrigin).toBe('SERVER_COST_KERNEL');
+    expect(persisted.calculationOccurrenceId).toBe('occurrence-1');
+    expect((persisted.unitPrice as Prisma.Decimal).toFixed(2)).toBe('200000.00');
+  });
+
+  it('clears an unpriced existing AHSP working occurrence after ancestor rename', async () => {
+    const linked = {
+      ...nestedOriginalWork(),
+      ahspVersionId: 'ahsp-version-1',
+      workingOccurrenceId: 'old-occurrence',
+    };
+    const { prisma, tx, boqItemCreate } = createPrismaMock([
+      ...nestedFolders(), linked,
+    ]);
+    tx.boqBusinessUseEvent.findFirst.mockResolvedValue(approvedUse);
+    await save(buildService(prisma), nestedIncoming({
+      rootName: 'Pekerjaan Tanah dan Galian',
+    }));
+    const child = boqItemCreate.mock.calls.map(
+      (call) => call[0].data as Record<string, any>,
+    ).find((data) => data.name === 'Pekerjaan Sumber Terbukti');
+    expect(child.sourceAhspCode).toBeNull();
+    expect(child.ahspVersionId).toBeNull();
+    expect(child.workingOccurrenceId).toBeNull();
+  });
+
+
+  it('preserves existing SERVER_COST_KERNEL proof for a truly unchanged nested work', async () => {
+    const child = buildServerRow({
+      name: 'Pekerjaan Sumber Terbukti',
+      wbsCode: '1.1', sortOrder: 0, parentId: 'folder-sub',
+    });
+    const { prisma, tx, boqItemCreate } = createPrismaMock([
+      ...nestedFolders(), child,
+    ]);
+    tx.boqBusinessUseEvent.findFirst.mockResolvedValue(approvedUse);
+    await save(buildService(prisma), nestedIncoming());
+    const persisted = boqItemCreate.mock.calls.map(
+      (call) => call[0].data as Record<string, any>,
+    ).find((data) => data.name === 'Pekerjaan Sumber Terbukti');
+    expect(persisted.priceOrigin).toBe('SERVER_COST_KERNEL');
+    expect(persisted.ahspVersionId).toBe('ahsp-version-1');
+    expect(persisted.calculationOccurrenceId).toBe('occurrence-1');
+    expect(persisted.unitPrice.toFixed(2)).toBe('200000.00');
+    expect(persisted.lineTotal.toFixed(2)).toBe('1000000.00');
+  });
+
+  it('rejects a priced child BEFORE any deletion when an ancestor is renamed', async () => {
+    const child = buildServerRow({
+      name: 'Pekerjaan Sumber Terbukti',
+      wbsCode: '1.1', sortOrder: 0, parentId: 'folder-sub',
+    });
+    const { prisma, tx, boqItemDeleteMany } = createPrismaMock([
+      ...nestedFolders(), child,
+    ]);
+    tx.boqBusinessUseEvent.findFirst.mockResolvedValue(approvedUse);
+    await expect(save(buildService(prisma), nestedIncoming({
+      subName: 'Pekerjaan Tanah dan Galian',
+    }))).rejects.toMatchObject({
+      message: 'SERVER_ROW_INPUT_CHANGED_REQUIRES_RECALCULATION',
+    });
+    expect(boqItemDeleteMany).not.toHaveBeenCalled();
+  });
+
   it('rejects a client unitPrice sent for an existing server-authored row (test 9)', async () => {
     const { prisma, boqItemDeleteMany } = createPrismaMock([buildServerRow()]);
     const service = buildService(prisma);
@@ -873,6 +1202,66 @@ describe('ProjectService saveDraftBoq GATE-2A server-row protection', () => {
     const data = boqItemCreate.mock.calls[0][0].data as Record<string, any>;
     expect(data.priceOrigin).toBe('SERVER_COST_KERNEL');
     expect(data.unitPrice.toString()).toBe('200000');
+  });
+
+
+  it('refuses a real server-priced work-description change without losing the stored calculation', async () => {
+    const { prisma, boqItemDeleteMany } = createPrismaMock([
+      buildServerRow({ name: 'Pekerjaan Server', wbsCode: '1.1' }),
+    ]);
+    await expect(save(buildService(prisma), [{
+      tempId: SERVER_ROW_ID,
+      itemType: 'WORK_ITEM',
+      name: 'Pekerjaan Server Tipe B',
+      wbsCode: '1.1',
+      quantity: 5, unit: 'M1',
+    }])).rejects.toMatchObject({
+      message: 'SERVER_ROW_INPUT_CHANGED_REQUIRES_RECALCULATION',
+    });
+    expect(boqItemDeleteMany).not.toHaveBeenCalled();
+  });
+
+  it('invalidates an UNPRICED occurrence on real BOQ work/spec change, preserving the ability to edit draft', async () => {
+    const { prisma, boqItemCreate } = createPrismaMock([
+      buildServerRow({
+        name: 'Pekerjaan Tipe A', wbsCode: '1.1',
+        priceOrigin: null, unitPrice: null, lineTotal: null,
+        calculationOccurrenceId: null, workingOccurrenceId: 'old-occurrence',
+        sourceAhspCode: 'J.75',
+      }),
+    ]);
+    await save(buildService(prisma), [{
+      tempId: SERVER_ROW_ID, itemType: 'WORK_ITEM',
+      name: 'Pekerjaan Tipe B', wbsCode: '1.1',
+      quantity: 5, unit: 'M1',
+    }]);
+    const data = boqItemCreate.mock.calls[0][0].data as Record<string, any>;
+    expect(data.ahspVersionId).toBeNull();
+    expect(data.ahspSnapshotId).toBeNull();
+    expect(data.workingOccurrenceId).toBeNull();
+    expect(data.sourceAhspCode).toBeNull();
+    expect(data.unitPrice).toBeNull();
+    expect(data.lineTotal).toBeNull();
+  });
+
+  it('preserves an UNPRICED occurrence when the complete BOQ source fact is unchanged', async () => {
+    const { prisma, boqItemCreate } = createPrismaMock([
+      buildServerRow({
+        name: 'Pekerjaan Tipe A', wbsCode: '1.1',
+        priceOrigin: null, unitPrice: null, lineTotal: null,
+        calculationOccurrenceId: null, workingOccurrenceId: 'old-occurrence',
+        sourceAhspCode: 'J.75',
+      }),
+    ]);
+    await save(buildService(prisma), [{
+      tempId: SERVER_ROW_ID, itemType: 'WORK_ITEM',
+      name: 'Pekerjaan Tipe A', wbsCode: '1.1',
+      quantity: 5, unit: 'M1',
+    }]);
+    const data = boqItemCreate.mock.calls[0][0].data as Record<string, any>;
+    expect(data.ahspVersionId).toBe('ahsp-version-1');
+    expect(data.workingOccurrenceId).toBe('old-occurrence');
+    expect(data.sourceAhspCode).toBe('J.75');
   });
 
   it('rejects a quantity change for an existing server-authored row, requiring explicit recalculation', async () => {
@@ -1111,6 +1500,9 @@ describe('ProjectService saveDraftBoq GATE-2A §C — one canonical recap policy
         .fn()
         .mockResolvedValue([{ id: 'project-1', status: 'PLANNED' }]),
       projectBaseline: { count: jest.fn().mockResolvedValue(0) },
+      boqBusinessUseEvent: {
+        findFirst: jest.fn().mockResolvedValue(null),
+      },
       rabDocument: {
         count: jest.fn().mockResolvedValue(0),
         findFirst: rabDocumentFindFirst,

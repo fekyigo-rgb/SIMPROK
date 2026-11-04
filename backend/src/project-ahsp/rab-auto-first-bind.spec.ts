@@ -1,7 +1,7 @@
 import 'reflect-metadata';
 import { PrismaService } from '../prisma/prisma.service';
 import { ProjectAhspService } from './project-ahsp.service';
-import { explicitAhspSourceProof } from './rab-auto-first-source-reference';
+import { exactUncodedFirstCandidateProven, exactUncodedSearchAnchor, exactUncodedWorkFact, explicitAhspSourceProof } from './rab-auto-first-source-reference';
 import { RabAutoFirstBindService } from './rab-auto-first-bind.service';
 import { RabAutoFirstBindController } from './rab-auto-first-bind.controller';
 import { PERMISSIONS } from '../common/constants/permissions';
@@ -18,6 +18,7 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
     id: '40000000-0000-4000-8000-000000000001',
     sourceAhspCode: 'B.64',
     name: 'Saluran U Pracetak Tipe DS 10A (140 cm x 140 cm dengan tutup)',
+    unit: 'Kg',
     updatedAt: new Date('2026-10-28T11:00:00Z'),
     ahspVersionId: null,
     workingOccurrenceId: null,
@@ -30,10 +31,13 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
     ahsp: {
       code: 'B.64',
       workType: 'Saluran U Pracetak',
+      methodType: 'MANUAL',
+      locationType: 'GENERAL',
       methodName:
         'Saluran U Pracetak Tipe DS 10A (140 cm x 140 cm dengan tutup)',
     },
     preference: { recommended: true },
+    uncodedClassificationScopeProven: true,
     ...extra,
   });
   let prisma: {
@@ -42,7 +46,11 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
     projectRegionSelection: { findMany: jest.Mock };
     boqItem: { findMany: jest.Mock };
   };
-  let ahsp: { searchEligibleVersions: jest.Mock; selectForBoqItem: jest.Mock };
+  let ahsp: {
+    searchEligibleVersions: jest.Mock;
+    searchExactUncodedEligibleVersions: jest.Mock;
+    selectForBoqItem: jest.Mock;
+  };
   let service: RabAutoFirstBindService;
   beforeEach(() => {
     prisma = {
@@ -67,6 +75,9 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
       searchEligibleVersions: jest.fn().mockResolvedValue({
         items: [candidate()],
         hasNext: false,
+      }),
+      searchExactUncodedEligibleVersions: jest.fn().mockResolvedValue({
+        items: [], hasNext: false,
       }),
       selectForBoqItem: jest.fn().mockResolvedValue({ id: 'persisted' }),
     };
@@ -118,12 +129,121 @@ describe('RAB-AUTO-05 ΓÇö explicit approved first AHSP source reference', () 
     expect(result.rabApproved).toBe(false);
   });
 
-  it('does not treat an ordinary BOQ row as an AHSP reference', async () => {
+  it('does not treat an ordinary BOQ row as a proven AHSP when classification or resource proof is missing', async () => {
     prisma.boqItem.findMany.mockResolvedValue([line({ sourceAhspCode: null })]);
     expect((await service.execute(input)).summary).toEqual({
-      EXPLICIT_SOURCE_REFERENCE_MISSING: 1,
+      UNCODED_EXACT_WORK_NOT_PROVEN: 1,
     });
-    expect(ahsp.searchEligibleVersions).not.toHaveBeenCalled();
+    expect(ahsp.searchExactUncodedEligibleVersions).toHaveBeenCalled();
+    expect(ahsp.selectForBoqItem).not.toHaveBeenCalled();
+  });
+
+  it('automatically binds one fully identical uncoded work with approved BOQ and canonical preferred category', async () => {
+    const uncoded = line({
+      sourceAhspCode: null,
+      name: 'Pek. Saluran U Pracetak Tipe DS 10A (140 cm x 140 cm dengan tutup)',
+    });
+    const exact = candidate({
+      outputUnit: 'Kg', _count: { resources: 1 },
+      preference: {
+        recommended: true, band: 'PREFERRED_KATEGORI',
+        classificationPath: 'Konstruksi > Pracetak',
+      },
+    });
+    prisma.boqItem.findMany.mockResolvedValue([uncoded]);
+    ahsp.searchExactUncodedEligibleVersions.mockResolvedValue({
+      hasNext: false, items: [exact],
+    });
+    expect(exactUncodedSearchAnchor(uncoded.name))
+      .toBe('Saluran U Pracetak');
+    expect(exactUncodedFirstCandidateProven(uncoded, exact)).toBe(true);
+    const outcome = await service.execute(input);
+    expect(outcome.summary).toEqual({
+      FIRST_UNCODED_EXACT_WORK_LINKED: 1,
+    });
+    expect(outcome.automaticBindingPerformed).toBe(true);
+    expect(ahsp.selectForBoqItem).toHaveBeenCalledWith(
+      expect.objectContaining({
+        firstUncodedExactWork: true,
+        boqItemId: uncoded.id,
+        ahspVersionId: exact.id,
+      }),
+    );
+    expect(String(ahsp.selectForBoqItem.mock.calls[0][0].idempotencyKey))
+      .toMatch(/^rab-auto-06-[a-f0-9]{64}$/);
+  });
+
+  it('fails closed for another spec, category fallback, conflicting candidate or incomplete catalog', async () => {
+    const uncoded = line({
+      sourceAhspCode: null,
+      name: 'Pek. Saluran U Pracetak Tipe DS 10A (140 cm x 140 cm dengan tutup)',
+    });
+    prisma.boqItem.findMany.mockResolvedValue([uncoded]);
+    const good = candidate({
+      outputUnit: 'Kg', _count: { resources: 1 },
+      preference: {
+        recommended: true, band: 'PREFERRED_KATEGORI',
+        classificationPath: 'Konstruksi > Pracetak',
+      },
+    });
+    expect(exactUncodedWorkFact(uncoded, {
+      methodName: 'Saluran U Pracetak Tipe DS 10B (140 cm x 140 cm dengan tutup)',
+    })).toBe(false);
+    expect(exactUncodedWorkFact(uncoded, {
+      methodName: 'Saluran U Pracetak Tipe DS 10A (160 cm x 140 cm dengan tutup)',
+    })).toBe(false);
+    for (const changed of [
+      { ...good, preference: {
+        recommended: true, band: 'CROSS_CATEGORY_FALLBACK',
+        classificationPath: 'Other Category',
+      } },
+      { ...good, outputUnit: null },
+      { ...good, _count: { resources: 0 } },
+      { ...good, uncodedClassificationScopeProven: false },
+      { ...good, ahsp: { ...good.ahsp, methodType: 'MECHANICAL' } },
+      { ...good, ahsp: { ...good.ahsp, locationType: 'SWAMP' } },
+      { ...good, ahsp: { ...good.ahsp, keterangan: 'Khusus struktur basah' } },
+      { ...good, ahsp: {
+        ...good.ahsp, methodName: good.ahsp.methodName.replace('10A', '10B'),
+      } },
+    ]) {
+      ahsp.searchExactUncodedEligibleVersions.mockResolvedValue({
+        hasNext: false, items: [changed],
+      });
+      expect((await service.execute(input)).summary)
+        .toEqual({ UNCODED_EXACT_WORK_NOT_PROVEN: 1 });
+    }
+    ahsp.searchExactUncodedEligibleVersions.mockResolvedValue({
+      hasNext: false,
+      items: [good, { ...good, id: 'another-approved-version' }],
+    });
+    expect((await service.execute(input)).summary)
+      .toEqual({ UNCODED_EXACT_WORK_AMBIGUOUS: 1 });
+    // Another exact AHSP cannot disappear just because the project's
+    // preference ranks its classification as a fallback.
+    ahsp.searchExactUncodedEligibleVersions.mockResolvedValue({
+      hasNext: false,
+      items: [
+        good,
+        {
+          ...good,
+          id: 'other-class-same-method',
+          uncodedClassificationScopeProven: false,
+          preference: {
+            recommended: true, band: 'CROSS_CATEGORY_FALLBACK',
+            classificationPath: 'Another canonical category',
+          },
+        },
+      ],
+    });
+    expect((await service.execute(input)).summary)
+      .toEqual({ UNCODED_EXACT_WORK_AMBIGUOUS: 1 });
+    ahsp.searchExactUncodedEligibleVersions.mockResolvedValue({
+      hasNext: true, items: [good],
+    });
+    expect((await service.execute(input)).summary)
+      .toEqual({ CANDIDATE_UNIVERSE_INCOMPLETE: 1 });
+    expect(ahsp.selectForBoqItem).not.toHaveBeenCalled();
   });
 
   it('does not select a region when project settings contain multiple regions', async () => {

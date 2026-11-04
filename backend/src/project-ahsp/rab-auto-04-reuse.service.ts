@@ -3,7 +3,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { parseDateOnlyUtc } from '../common/date-only.util';
 import { WORKING_DRAFT_STRUCTURE_NAME } from '../project/rab-lifecycle-policy.service';
 import { ProjectAhspService } from './project-ahsp.service';
-import { buildProvenContextRefreshKey, sameProvenBoqSourceFact } from './rab-auto-source-proof';
+import { buildProvenContextRefreshKey, findGovernedUnindexedSourceIds, hasGovernedUnindexedSource, samePreviouslyDecidedUnindexedWorkFact, sameProvenBoqSourceFact } from './rab-auto-source-proof';
 
 /**
  * RAB-AUTO-04. Reuses one already-human-proven AHSP association for an
@@ -58,6 +58,8 @@ export class RabAutoProvenReuseService {
       },
       select: {
         id: true,
+        boqStructureId: true,
+        parentId: true,
         wbsNodeId: true,
         wbsCode: true,
         name: true,
@@ -170,6 +172,13 @@ export class RabAutoProvenReuseService {
         item.calculationOccurrenceId
       ) {
         results.push({ boqItemId: item.id, kind: 'ALREADY_DECIDED' });
+        continue;
+      }
+      // Unindexed legacy BOQ: reuse only one previously governed exact work
+      // decision. The original WBS-node gate below stays untouched.
+      if (item.wbsNodeId === null && item.wbsCode.trim() &&
+          item.name.trim() && item.unit.trim()) {
+        results.push(await this.tryUnindexedReuse(item, input, asOf, permittedRegions));
         continue;
       }
       if (
@@ -302,5 +311,96 @@ export class RabAutoProvenReuseService {
       rabApproved: false,
       rabLocked: false,
     };
+  }
+
+  /**
+   * One bounded governed reuse for legacy BOQ rows without WBS node ids.
+   * A lexical query merely fetches possible prior decisions. The exact
+   * canonical fact and persisted human provenance decide; the official writer
+   * rechecks both inside the project transaction before any mutation.
+   */
+  private async tryUnindexedReuse(
+    item: {
+      id: string;
+      boqStructureId: string;
+      parentId: string | null;
+      wbsNodeId: string | null;
+      wbsCode: string;
+      name: string;
+      unit: string;
+    },
+    input: {
+      projectId: string;
+      workspaceId: string;
+      accountId: string;
+      businessPricingAsOfDate: string;
+    },
+    asOf: Date,
+    permittedRegions: ReadonlySet<string>,
+  ): Promise<{ boqItemId: string; kind: string }> {
+    const result = (kind: string) => ({ boqItemId: item.id, kind });
+    if (!item.name.trim()) return result('SOURCE_IDENTITY_NOT_ESTABLISHED');
+    try {
+      const sourceIds = await findGovernedUnindexedSourceIds(this.prisma, item);
+      if (sourceIds.length !== 1) {
+        return result(sourceIds.length > 1
+          ? 'MULTIPLE_SOURCE_DECISIONS'
+          : 'NO_PROVEN_ASSOCIATION');
+      }
+      const sources = await this.prisma.boqItem.findMany({
+        where: {
+          id: { in: sourceIds },
+          boqStructure: {
+            projectId: input.projectId,
+            name: WORKING_DRAFT_STRUCTURE_NAME,
+            status: 'DRAFT',
+            project: { workspaceId: input.workspaceId },
+          },
+        },
+        include: {
+          workingOccurrence: { include: { previousOccurrence: true } },
+          calculationOccurrence: { include: { previousOccurrence: true } },
+        },
+      });
+      if (sources.length !== 1) {
+        return result(sources.length > 1
+          ? 'MULTIPLE_SOURCE_DECISIONS'
+          : 'NO_PROVEN_ASSOCIATION');
+      }
+      const source = sources[0];
+      const occurrence = source.workingOccurrence ?? source.calculationOccurrence;
+      if (!samePreviouslyDecidedUnindexedWorkFact(item, source) ||
+          !source.ahspVersionId || source.priceOrigin === 'MANUAL_CLIENT' ||
+          !occurrence || occurrence.projectId !== input.projectId ||
+          occurrence.workspaceId !== input.workspaceId ||
+          occurrence.ahspVersionId !== source.ahspVersionId ||
+          occurrence.businessPricingAsOfDate?.getTime() !== asOf.getTime() ||
+          !occurrence.referenceRegionId ||
+          !permittedRegions.has(occurrence.referenceRegionId) ||
+          !hasGovernedUnindexedSource(source.id, occurrence, input.projectId)) {
+        return result('SOURCE_CONTEXT_NOT_AUTHORIZED');
+      }
+      const idempotencyKey = [
+        'rab-auto-04-unindexed', item.id, source.id,
+        source.ahspVersionId, input.businessPricingAsOfDate,
+        occurrence.referenceRegionId,
+      ].join('-');
+      const selected = await this.ahsp.selectForBoqItem({
+        projectId: input.projectId,
+        workspaceId: input.workspaceId,
+        accountId: input.accountId,
+        boqItemId: item.id,
+        ahspVersionId: source.ahspVersionId,
+        referenceRegionId: occurrence.referenceRegionId,
+        businessPricingAsOfDate: input.businessPricingAsOfDate,
+        idempotencyKey,
+        reuseSourceBoqItemId: source.id,
+      });
+      return result(selected.id
+        ? 'PROVEN_ASSOCIATION_REUSED'
+        : 'REUSE_REVALIDATION_REQUIRED');
+    } catch {
+      return result('REUSE_REVALIDATION_REQUIRED');
+    }
   }
 }

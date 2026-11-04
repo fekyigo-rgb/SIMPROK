@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { Prisma } from '@prisma/client';
 import { normalizeWorkHeadingForEvidence } from './ahsp-preference';
 
 /**
@@ -107,4 +108,177 @@ export function isProvenContextRefreshOccurrence(input: {
     refreshExpectedBoqUpdatedAt: originalRevision,
   }));
   return originalPayloadHash === input.requestPayloadHash;
+}
+
+
+/**
+ * Narrow RAB-AUTO-04 adjunct for legacy BOQ rows with no WBS node.
+ * NOT a text matcher or a first-association inference: both rows must live in
+ * the same server-scoped Working Draft (enforced by the caller), retain the
+ * same source WBS code and entire meaning-bearing description/specification,
+ * share the exact source unit, and have one governed prior occurrence.
+ *
+ * Unlike sameProvenBoqSourceFact, this helper MUST NOT be used without
+ * transactionally checking the unique, human-originated source decision.
+ */
+type UnindexedBoqSourceFact = BoqSourceFact & { parentId: string | null };
+
+export function samePreviouslyDecidedUnindexedWorkFact(
+  a: UnindexedBoqSourceFact,
+  b: UnindexedBoqSourceFact,
+): boolean {
+  const exactWork = (text: string): string =>
+    normalizeWorkHeadingForEvidence(text)
+      .replace(/^Pekerjaan\s+/iu, '')
+      .trim()
+      .toLocaleLowerCase('id-ID');
+  return Boolean(
+    a.wbsNodeId === null &&
+    b.wbsNodeId === null &&
+    // The same persisted parent also proves the same parent-to-root path.
+    // Reject missing parent fields rather than treating undefined == undefined
+    // as a root match. Two genuine null parents are both root work items.
+    (a.parentId === null || (typeof a.parentId === 'string' && a.parentId.trim().length > 0)) &&
+    (b.parentId === null || (typeof b.parentId === 'string' && b.parentId.trim().length > 0)) &&
+    a.parentId === b.parentId &&
+    a.wbsCode.trim() &&
+    b.wbsCode.trim() &&
+    a.wbsCode.trim() === b.wbsCode.trim() &&
+    exactWork(a.name) &&
+    exactWork(a.name) === exactWork(b.name) &&
+    a.unit.trim() &&
+    a.unit === b.unit,
+  );
+}
+
+export function unindexedWorkSearchTerm(name: string): string {
+  return normalizeWorkHeadingForEvidence(name)
+    .replace(/^Pekerjaan\s+/iu, '')
+    .trim();
+}
+
+
+/**
+ * Canonical source universe for governed historical RAB-AUTO-04 reuse.
+ * The exact normalization is shared by preview and transactional writer;
+ * differences in whitespace/Pek. headings cannot conceal a competitor.
+ * The caller establishes project/workspace ownership of boqStructureId.
+ * The result is bounded to two IDs: zero=absent, two=ambiguous.
+ */
+export async function findGovernedUnindexedSourceIds(
+  store: Prisma.TransactionClient,
+  target: UnindexedBoqSourceFact & { id: string; boqStructureId: string },
+): Promise<string[]> {
+  const normalized = unindexedWorkSearchTerm(target.name).toLocaleLowerCase('id-ID');
+  if (!normalized || !target.wbsCode.trim() || !target.unit.trim() ||
+      (target.parentId !== null &&
+        (typeof target.parentId !== 'string' || !target.parentId.trim()))) return [];
+  const rows = await store.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+    SELECT "id" FROM "boq_items"
+    WHERE "boqStructureId" = ${target.boqStructureId}::uuid
+      AND "parentId" IS NOT DISTINCT FROM ${target.parentId}::uuid
+      AND "id" <> ${target.id}::uuid
+      AND "itemType" = 'WORK_ITEM'
+      AND "wbsNodeId" IS NULL
+      AND btrim("wbsCode") = ${target.wbsCode.trim()}
+      AND "unit" = ${target.unit}
+      AND ("workingOccurrenceId" IS NOT NULL
+        OR "calculationOccurrenceId" IS NOT NULL)
+      AND btrim(regexp_replace(
+        regexp_replace(lower(normalize("name", NFC)),
+          '^[[:space:]]*(pek[[:space:]]*[.][[:space:]]*|pekerjaan[[:space:]]+)',
+          '', 'i'),
+        '[[:space:]]+', ' ', 'g')) = ${normalized}
+    ORDER BY "id" LIMIT 2
+  `);
+  return rows.map((row) => row.id);
+}
+/**
+ * Proves that this persisted selection was made FOR THIS source BOQ row by
+ * the already-existing canonical selection writer. A generation predecessor
+ * is merely shared AHSP-version history; it is not evidence against the
+ * manual choice. The immutable request hash, not a prefix, proves identity.
+ */
+function originalHumanSelectionPayloadMatches(
+  sourceBoqItemId: string,
+  origin: {
+    ahspVersionId: string;
+    createdByAccountId: string | null;
+    idempotencyKey: string;
+    requestPayloadHash: string | null;
+    resolutionPolicyVersion: string | null;
+    businessPricingAsOfDate: Date | null;
+    referenceRegionId: string | null;
+  },
+): boolean {
+  if (!origin.createdByAccountId ||
+      !origin.requestPayloadHash ||
+      !origin.resolutionPolicyVersion ||
+      !origin.businessPricingAsOfDate ||
+      !origin.referenceRegionId ||
+      origin.idempotencyKey.startsWith('rab-auto-')) {
+    return false;
+  }
+  return origin.requestPayloadHash === digest(JSON.stringify({
+    boqItemId: sourceBoqItemId,
+    ahspVersionId: origin.ahspVersionId,
+    businessPricingAsOfDate:
+      origin.businessPricingAsOfDate.toISOString().slice(0, 10),
+    referenceRegionId: origin.referenceRegionId,
+    resolutionPolicyVersion: origin.resolutionPolicyVersion,
+  }));
+}
+
+/**
+ * Requires positive persisted provenance, not the user-editable idempotency
+ * prefix alone. A refreshed occurrence must prove the existing canonical
+ * context-refresh hash AND trace back to one human-governed original choice.
+ */
+export function hasGovernedUnindexedSource(
+  sourceBoqItemId: string,
+  occurrence: {
+    ahspVersionId: string;
+    createdByAccountId: string | null;
+    idempotencyKey: string;
+    requestPayloadHash: string | null;
+    resolutionPolicyVersion: string | null;
+    previousOccurrenceId: string | null;
+    businessPricingAsOfDate: Date | null;
+    referenceRegionId: string | null;
+    previousOccurrence?: {
+      ahspVersionId: string;
+      createdByAccountId: string | null;
+      idempotencyKey: string;
+      requestPayloadHash: string | null;
+      resolutionPolicyVersion: string | null;
+      businessPricingAsOfDate: Date | null;
+      referenceRegionId: string | null;
+    } | null;
+  },
+  projectId: string,
+): boolean {
+  if (!occurrence.createdByAccountId || !occurrence.requestPayloadHash ||
+      !occurrence.resolutionPolicyVersion) return false;
+  if (occurrence.idempotencyKey.startsWith('rab-auto-context-')) {
+    const prior = occurrence.previousOccurrence;
+    if (!prior ||
+        !originalHumanSelectionPayloadMatches(sourceBoqItemId, prior) ||
+        prior.ahspVersionId !== occurrence.ahspVersionId ||
+        !occurrence.businessPricingAsOfDate || !occurrence.referenceRegionId) {
+      return false;
+    }
+    return isProvenContextRefreshOccurrence({
+      projectId,
+      boqItemId: sourceBoqItemId,
+      ahspVersionId: occurrence.ahspVersionId,
+      referenceRegionId: occurrence.referenceRegionId,
+      businessPricingAsOfDate:
+        occurrence.businessPricingAsOfDate.toISOString().slice(0, 10),
+      previousOccurrenceId: occurrence.previousOccurrenceId,
+      resolutionPolicyVersion: occurrence.resolutionPolicyVersion,
+      idempotencyKey: occurrence.idempotencyKey,
+      requestPayloadHash: occurrence.requestPayloadHash,
+    });
+  }
+  return originalHumanSelectionPayloadMatches(sourceBoqItemId, occurrence);
 }

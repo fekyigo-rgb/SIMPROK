@@ -2424,14 +2424,71 @@ export class ProjectService {
         });
       }
 
-      // GATE-2A protection: read the current rows BEFORE the full-replace so a
-      // SERVER_COST_KERNEL row's authority can be validated and its frozen
-      // values carried forward. A row survives a save by VALUE, not by id —
-      // the full-replace below always mints new ids, kernel or manual alike.
+      // GATE-2A protection: read current rows BEFORE full-replace so
+      // authoritative values can be carried forward after source verification.
+      // Unlinked rows still receive new IDs. Only unchanged source facts
+      // already carrying a governed AHSP occurrence retain their old row ID,
+      // because the immutable human selection hash is bound to that ID.
       const existingItems = await tx.boqItem.findMany({
         where: { boqStructureId: structure.id },
       });
       const existingById = new Map(existingItems.map((row) => [row.id, row]));
+      const submittedByTempId = new Map(dto.rows.map((row) => [row.tempId, row]));
+
+      /**
+       * Reuse the existing server BOQ rows and the submitted structural graph
+       * to verify the full parent-to-root identity. Comparing parent IDs only
+       * silently retains an approved AHSP/source (or kernel price) when a
+       * FOLDER's title or WBS changes but its tempId stays unchanged.
+       *
+       * This is a fact guard, NOT a new classifier or matching engine.
+       * Structural validation still owns legality and cycle rejection;
+       * this walk has its own bounded visited guard and fails closed.
+       */
+      const sameAncestorContext = (
+        existing: (typeof existingItems)[number],
+        incoming: (typeof dto.rows)[number],
+      ): boolean => {
+        let priorParentId = existing.parentId ?? null;
+        let newParentId = incoming.parentTempId ?? null;
+        const visited = new Set<string>();
+        while (priorParentId !== null || newParentId !== null) {
+          if (
+            !priorParentId || !newParentId ||
+            priorParentId !== newParentId ||
+            visited.has(priorParentId)
+          ) return false;
+          visited.add(priorParentId);
+          const previousParent = existingById.get(priorParentId);
+          const nextParent = submittedByTempId.get(newParentId);
+          if (
+            !previousParent || !nextParent ||
+            previousParent.itemType !== 'FOLDER' ||
+            nextParent.itemType !== 'FOLDER' ||
+            previousParent.name !== nextParent.name ||
+            previousParent.wbsCode !== (nextParent.wbsCode ?? '') ||
+            (nextParent.sortOrder !== undefined &&
+              previousParent.sortOrder !== nextParent.sortOrder)
+          ) return false;
+          priorParentId = previousParent.parentId ?? null;
+          newParentId = nextParent.parentTempId ?? null;
+        }
+        return true;
+      };
+      // Existing immutable BOQ business-use event is the ONLY authority.
+      // An unchanged approved SOURCE fact may keep its logical source
+      // revision across full-replace; this is not a new approval event.
+      // Read under the existing project lock, before deleting source rows.
+      const lastApprovedImport = existingItems.length
+        ? await tx.boqBusinessUseEvent.findFirst({
+            where: { projectId, boqStructureId: structure.id },
+            orderBy: [{ usedAt: 'desc' }, { id: 'desc' }],
+            select: {
+              id: true, usedAt: true, approvedByAccountId: true,
+              importFingerprint: true,
+            },
+          })
+        : null;
 
       // GATE-2A §C — one canonical recap policy: read the existing DRAFT
       // RabDocument's margin/tax settings before the destructive replacement
@@ -2522,7 +2579,15 @@ export class ProjectService {
         const unitChanged =
           row.unit !== undefined && row.unit !== existing.unit;
         const itemTypeChanged = row.itemType !== existing.itemType;
-        if (quantityChanged || unitChanged || itemTypeChanged) {
+        const workFactChanged =
+          (typeof existing.name === 'string' &&
+            row.name !== existing.name) ||
+          (typeof existing.wbsCode === 'string' &&
+            (row.wbsCode ?? '') !== existing.wbsCode) ||
+          !sameAncestorContext(existing, row) ||
+          (existing.wbsNodeId ?? null) !== null;
+        if (quantityChanged || unitChanged || itemTypeChanged ||
+            workFactChanged) {
           throw new ConflictException(
             SERVER_ROW_PROTECTION_REASON.SERVER_ROW_INPUT_CHANGED_REQUIRES_RECALCULATION,
           );
@@ -2585,6 +2650,67 @@ export class ProjectService {
             : new Prisma.Decimal(0);
 
         const existing = existingById.get(row.tempId);
+        // Editing a source work fact may not silently carry a different
+        // AHSP or its old resource/price resolutions into the new work.
+        // The ordinary draft-save path invalidates unpriced associations;
+        // priced server rows are protected by the preflight above.
+        const sourceChanged = existing != null && (
+          (typeof existing.name === 'string' &&
+            row.name !== existing.name) ||
+          (row.unit ?? '') !== existing.unit ||
+          (typeof existing.wbsCode === 'string' &&
+            (row.wbsCode ?? '') !== existing.wbsCode) ||
+          !sameAncestorContext(existing, row) ||
+          (existing.wbsNodeId ?? null) !== null ||
+          row.itemType !== existing.itemType
+        );
+        const preserveAssociation = !sourceChanged && !isFolder && !isNote;
+        // A human AHSP selection's immutable payload hash binds to the
+        // ORIGINAL BOQ item ID. Reminting that ID during a no-op draft save
+        // would strand valid proof and force repeat human decisions. Keep the
+        // existing ID only while the guarded work/ancestor fact is unchanged
+        // and an existing working/calculation occurrence survives. This does
+        // not grant authority: the existing occurrence hash and lineage must
+        // still pass the canonical RAB-AUTO-04 source verifier at reuse time.
+        // New, changed, and undecided rows retain existing remint behavior.
+        const preserveOccurrenceSourceId = Boolean(
+          existing && preserveAssociation &&
+          (existing.workingOccurrenceId || existing.calculationOccurrenceId) &&
+          (existing.priceOrigin === null || existing.priceOrigin === 'SERVER_COST_KERNEL'),
+        );
+        // Immutable import approval is NOT renewed by a draft save.
+        // Only an exact unchanged, previously approved and UNDECIDED work
+        // may retain its logical creation/revision times across the existing
+        // full-replace. New IDs alone must not revoke an unchanged source,
+        // but a changed volume, parent, order, WBS or any source field MUST.
+        // The original last approved BoqBusinessUseEvent remains untouched.
+        const unchangedApprovedSource = Boolean(
+          existing &&
+          lastApprovedImport?.approvedByAccountId &&
+          lastApprovedImport.importFingerprint &&
+          existing.itemType === 'WORK_ITEM' &&
+          row.itemType === 'WORK_ITEM' &&
+          preserveAssociation &&
+          existing.name === row.name &&
+          existing.wbsCode === (row.wbsCode ?? '') &&
+          existing.unit === (row.unit ?? '') &&
+          existing.quantity.equals(quantity) &&
+          existing.sortOrder === effectiveSortOrder &&
+          sameAncestorContext(existing, row) &&
+          existing.wbsNodeId === null &&
+          existing.priceOrigin === null &&
+          existing.unitPrice === null &&
+          existing.lineTotal === null &&
+          (row.unitPrice === null || row.unitPrice === undefined) &&
+          existing.ahspVersionId === null &&
+          existing.ahspSnapshotId === null &&
+          existing.workingOccurrenceId === null &&
+          existing.calculationOccurrenceId === null &&
+          existing.createdAt instanceof Date &&
+          existing.updatedAt instanceof Date &&
+          existing.createdAt.getTime() <= existing.updatedAt.getTime() &&
+          existing.updatedAt.getTime() <= lastApprovedImport.usedAt.getTime(),
+        );
         const isServerRow =
           !isFolder &&
           !isNote &&
@@ -2623,7 +2749,18 @@ export class ProjectService {
         // calculatedAt, calculationPolicyVersion) across an unrelated save.
         const created = await tx.boqItem.create({
           data: {
+            // A preserved ID is identity continuity, not an approval event.
+            ...(preserveOccurrenceSourceId ? { id: existing!.id } : {}),
             boqStructureId: structure.id,
+            // Copy the original LOGICAL source revision, not a fresh
+            // approval or an invented timestamp. Preserve BOTH timestamps
+            // only for the exact authorized no-op fact established above.
+            ...(unchangedApprovedSource
+              ? {
+                  createdAt: existing!.createdAt,
+                  updatedAt: existing!.updatedAt,
+                }
+              : {}),
             parentId,
             wbsCode: row.wbsCode ?? '',
             name: row.name,
@@ -2641,9 +2778,17 @@ export class ProjectService {
              * one derivation now, and it happens in the preflight.
              */
             sortOrder: effectiveSortOrder,
-            ahspVersionId: existing?.ahspVersionId ?? null,
-            ahspSnapshotId: existing?.ahspSnapshotId ?? null,
-            workingOccurrenceId: existing?.workingOccurrenceId ?? null,
+            // Restore the SOURCE'S explicit AHSP code only if its BOQ work
+            // identity is unchanged. This field is not client-writable;
+            // preserving it never automatically renews import approval.
+            sourceAhspCode: preserveAssociation
+              ? existing?.sourceAhspCode ?? null : null,
+            ahspVersionId: preserveAssociation
+              ? existing?.ahspVersionId ?? null : null,
+            ahspSnapshotId: preserveAssociation
+              ? existing?.ahspSnapshotId ?? null : null,
+            workingOccurrenceId: preserveAssociation
+              ? existing?.workingOccurrenceId ?? null : null,
             priceOrigin: isServerRow
               ? 'SERVER_COST_KERNEL'
               : unitPrice !== null

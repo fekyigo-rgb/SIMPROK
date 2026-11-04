@@ -43,6 +43,15 @@ import {
   describeRabAutoItemReadiness,
   type RabAutoDraftLine,
 } from '../utils/rabAutoDraftReadiness';
+import {
+  accumulateRabAutoPriceOutcome,
+  describeRabAutoPriceOutcome,
+  emptyRabAutoPriceOutcome,
+  isRabAutoPriceNoticeCurrent,
+  isRabAutoPriceRunScopeCurrent,
+  parseRabAutoPricePage,
+  type RabAutoPriceNotice,
+} from '../utils/rabAutoPriceOutcome';
 import { appendBoqImportApprovalIdentity, dismissBoqImportPreview, requiresBoqImportConfirmation, type BoqImportDraftImpact } from '../utils/boqImportApproval';
 import {
   projectFieldContextView,
@@ -619,6 +628,10 @@ export function RabWorkspacePage() {
     return () => window.removeEventListener('beforeunload', warn);
   }, [draftDirty, isSaving]);
   const [calculationAsOfDate, setCalculationAsOfDate] = useState(() => toLocalDateOnlyString(new Date()));
+  // Date-only generation: an in-flight request for A stays stale after A → B → A.
+  // Unlike persistContextRevisionRef, row selection does not increment this.
+  const autoPriceDateRevisionRef = useRef(0);
+  const currentAutoPriceDateRef = useRef(calculationAsOfDate);
   const [persistState, setPersistState] = useState<PersistUiState>({ kind: 'idle' });
   /**
    * RM-03B: `origin` distinguishes a workspace's OWN AHSP from the curated
@@ -659,6 +672,9 @@ export function RabWorkspacePage() {
   const [autoReuseNotice, setAutoReuseNotice] = useState<{
     projectId: string; date: string; message: string;
   } | null>(null);
+  // Persistent RAB write-outcome alert is separate from transient draft-load
+  // statusMessage, which is intentionally overwritten by retryToken reload.
+  const [autoPriceNotice, setAutoPriceNotice] = useState<RabAutoPriceNotice | null>(null);
   // The analysis remains primary; the editor is opened only by explicit user intent.
   const [showAhspSelection, setShowAhspSelection] = useState(false);
   const persistGenerationRef = useRef(0);
@@ -880,6 +896,7 @@ export function RabWorkspacePage() {
     previousProjectIdRef.current = projectId;
     if (projectChanged) {
       markPersistContextChanged();
+      setAutoPriceNotice(null); // An old project's write outcome is not this project's result.
       setPersistState({ kind: 'idle' });
     }
 
@@ -1754,15 +1771,36 @@ export function RabWorkspacePage() {
   const handleAutoPriceReady = async () => {
     if (!projectId || !canEditDraft || !workingDraftLoaded || draftDirty || isAutoPricing) return;
     setIsAutoPricing(true);
+    setAutoPriceNotice(null); // A new run replaces the previous scoped outcome.
     // A concurrent local edit/project switch must never be overwritten by a
     // completion-triggered reload. The canonical server may have committed
     // some rows; ask for an explicit reconciliation instead.
     const startedRevision = draftRevisionRef.current;
     const startedProject = projectId;
-    let priced = 0;
-    let unpriced = 0;
+    const runScope = {
+      projectId: startedProject, draftRevision: startedRevision,
+      calculationDate: calculationAsOfDate,
+      calculationDateRevision: autoPriceDateRevisionRef.current,
+    };
+    const runStillCurrent = () => isRabAutoPriceRunScopeCurrent(runScope, {
+      projectId: currentProjectIdRef.current,
+      draftRevision: draftRevisionRef.current,
+      calculationDate: currentAutoPriceDateRef.current,
+      calculationDateRevision: autoPriceDateRevisionRef.current,
+    });
+    // A prior server page may have committed. Do not attribute its outcome
+    // to a newer date/project/BOQ; ask the user to inspect canonical results.
+    const stopOnChangedContext = () => {
+      if (runStillCurrent()) return false;
+      if (currentProjectIdRef.current === startedProject) {
+        setStatusMessage('Konteks RAB berubah selama perhitungan. Sebagian hasil mungkin telah tersimpan di server; periksa data RAB sebelum mencoba lagi.');
+      }
+      return true;
+    };
+    let outcome = emptyRabAutoPriceOutcome();
     try {
       for (let page = 1; page <= 20; page++) {
+        if (stopOnChangedContext()) return;
         const query = new URLSearchParams({ page: String(page), limit: '25' });
         const response = await apiFetch(
           `/projects/${projectId}/rab/auto-price-ready?${query}`,
@@ -1771,23 +1809,20 @@ export function RabWorkspacePage() {
         );
         if (!response.ok) throw new Error('AUTO_PRICE_REQUEST_FAILED');
         const payload: unknown = await response.json();
-        if (!payload || typeof payload !== 'object' ||
-          !('projectId' in payload) || payload.projectId !== projectId ||
-          !('hasNext' in payload) || typeof payload.hasNext !== 'boolean' ||
-          !('counts' in payload) || !payload.counts || typeof payload.counts !== 'object' ||
-          !('calculatedAndPersisted' in payload.counts) ||
-          typeof payload.counts.calculatedAndPersisted !== 'number' ||
-          !('unpriced' in payload.counts) || typeof payload.counts.unpriced !== 'number') {
-          throw new Error('AUTO_PRICE_INVALID_RESULT');
-        }
-        priced += payload.counts.calculatedAndPersisted;
-        unpriced += payload.counts.unpriced;
-        if (!payload.hasNext) {
-          if (draftRevisionRef.current !== startedRevision || currentProjectIdRef.current !== startedProject) {
-            setStatusMessage('Perhitungan selesai pada server, tetapi draft berubah selama proses. Simpan perubahan lokal sebelum memuat ulang hasil.');
-            return;
+        if (stopOnChangedContext()) return; // no subsequent old-date page
+        const pageResult = parseRabAutoPricePage(payload, projectId);
+        if (!pageResult) throw new Error('AUTO_PRICE_INVALID_RESULT');
+        outcome = accumulateRabAutoPriceOutcome(outcome, pageResult.counts);
+        if (!pageResult.hasNext) {
+          if (stopOnChangedContext()) return;
+          const message = describeRabAutoPriceOutcome(outcome);
+          setStatusMessage(message);
+          if (outcome.requiresRevalidation > 0) {
+            setAutoPriceNotice({
+              projectId: startedProject, date: calculationAsOfDate,
+              draftRevision: startedRevision, message,
+            });
           }
-          setStatusMessage(`${priced} baris dihitung dan disimpan otomatis. ${unpriced} baris belum memenuhi syarat harga. Pemeriksaan tetap menggunakan Cost Kernel.`);
           setRetryToken((value) => value + 1);
           return;
         }
@@ -1796,8 +1831,14 @@ export function RabWorkspacePage() {
     } catch {
       // Some pages may have committed before a later failure. Never announce
       // full success or retry without reloading the server's canonical truth.
-      setStatusMessage('Hasil perhitungan otomatis belum pasti lengkap. Periksa kembali data tersimpan; jangan menganggap seluruh baris berhasil.');
+      if (stopOnChangedContext()) return;
+      const message = 'Hasil perhitungan otomatis belum pasti lengkap. Periksa kembali data tersimpan; jangan menganggap seluruh baris berhasil.';
+      setStatusMessage(message);
       if (draftRevisionRef.current === startedRevision && currentProjectIdRef.current === startedProject) {
+        setAutoPriceNotice({
+          projectId: startedProject, date: calculationAsOfDate,
+          draftRevision: startedRevision, message,
+        });
         setRetryToken((value) => value + 1);
       }
     } finally {
@@ -1819,13 +1860,15 @@ export function RabWorkspacePage() {
     setIsReusingProven(true);
     setAutoReuseNotice(null);
     let firstBound = 0;
+    let uncodedBound = 0;
     let reused = 0;
     let refreshed = 0;
     let reviewed = 0;
     try {
-      // First use the Owner-approved BOQ's EXPLICIT AHSP reference where
-      // the server proves code, full specification, unit, region and version.
-      // Existing BOQs without such source evidence remain unchanged.
+      // Reuse the existing source-approved first-association command. It
+      // proves explicit codes OR uniquely identical uncoded full-work facts
+      // with canonical Unit Kernel/classification, then revalidates in writer.
+      // Ambiguous BOQ rows are not linked or given fabricated prices.
       for (let page = 1; page <= 20; page++) {
         const query = new URLSearchParams({ page: String(page), limit: '25' });
         const response = await apiFetch(
@@ -1851,6 +1894,8 @@ export function RabWorkspacePage() {
         }
         firstBound += payload.results.filter((row: { kind: string }) =>
           row.kind === 'FIRST_ASSOCIATION_PROVEN_AND_LINKED').length;
+        uncodedBound += payload.results.filter((row: { kind: string }) =>
+          row.kind === 'FIRST_UNCODED_EXACT_WORK_LINKED').length;
         if (draftRevisionRef.current !== startedRevision ||
             currentProjectIdRef.current !== startedProject) {
           setStatusMessage('Draft berubah selama pemeriksaan. Simpan perubahan lokal sebelum memuat ulang hasil server.');
@@ -1894,9 +1939,9 @@ export function RabWorkspacePage() {
           return;
         }
         if (!payload.hasNext) {
-          const totalLinked = firstBound + reused + refreshed;
+          const totalLinked = firstBound + uncodedBound + reused + refreshed;
           const message = totalLinked > 0
-            ? `${firstBound} hubungan AHSP terbukti dari referensi BOQ yang disetujui, ${reused} keputusan terdahulu dipakai ulang, ${refreshed} occurrence dievaluasi ulang sesuai konteks Persiapan terbaru. Harga selanjutnya diperiksa oleh Cost Kernel; sisanya tetap menunggu bukti.`
+            ? `${firstBound} hubungan AHSP dari kode sumber BOQ, ${uncodedBound} hubungan pertama tanpa kode terbukti cocok secara lengkap, ${reused} keputusan terdahulu dipakai ulang, ${refreshed} occurrence dievaluasi ulang. Harga diperiksa Cost Kernel; sisanya tetap menunggu bukti.`
             : `${reviewed} baris diperiksa. Tidak ada hubungan AHSP atau occurrence baru yang dapat dibuktikan. Yang sudah sah tetap dipertahankan; sisanya menunggu bukti. SIMPROK tidak menebak pasangan atau harga.`;
           setAutoReuseNotice({ projectId: startedProject, date: calculationAsOfDate, message });
           setStatusMessage(message);
@@ -1993,7 +2038,12 @@ export function RabWorkspacePage() {
 
   /** FINAL-TERMINAL-STATE-INVALIDATION §7B: mirrors activateRow's same-value/different-value distinction for the calculation date. */
   const handleCalculationAsOfDateChange = (value: string) => {
-    if (value !== calculationAsOfDate) markPersistContextChanged();
+    if (value !== currentAutoPriceDateRef.current) {
+      currentAutoPriceDateRef.current = value; // synchronous even for rapid A → B → A
+      markPersistContextChanged();
+      autoPriceDateRevisionRef.current += 1;
+      setAutoPriceNotice(null); // Never resurrect an older date's warning.
+    }
     setCalculationAsOfDate(value);
   };
 
@@ -2263,6 +2313,7 @@ export function RabWorkspacePage() {
    * marker, is what protects it (see reloadDraft/handlePersistCalculation).
    */
   const markDraftMutated = () => {
+    setAutoPriceNotice(null); // Changed BOQ facts invalidate the last calculation outcome.
     draftRevisionRef.current += 1;
     setDraftRevisionSnapshot(draftRevisionRef.current);
     setDraftDirty(true);
@@ -3209,6 +3260,16 @@ export function RabWorkspacePage() {
                 <small role="status" aria-label="Hasil terakhir RAB Otomatis"
                   style={{ display: 'block', color: 'var(--simprok-catatan-muted)', maxWidth: '68ch' }}>
                   {autoReuseNotice.message}
+                </small>
+              ) : null}
+            {isRabAutoPriceNoticeCurrent(autoPriceNotice, {
+              projectId, date: calculationAsOfDate,
+              draftRevision: draftRevisionSnapshot, draftDirty,
+            }) ? (
+                <small role="alert" aria-label="Hasil penyimpanan RAB Otomatis perlu perhatian"
+                  className="simprok-rab-validation-alert"
+                  style={{ display: 'block', maxWidth: '68ch' }}>
+                  {autoPriceNotice.message}
                 </small>
               ) : null}
             {draftAssessmentDisplay ? (

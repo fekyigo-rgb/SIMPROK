@@ -3,15 +3,16 @@ import { PrismaService } from '../prisma/prisma.service';
 import { parseDateOnlyUtc } from '../common/date-only.util';
 import { WORKING_DRAFT_STRUCTURE_NAME } from '../project/rab-lifecycle-policy.service';
 import { ProjectAhspService } from './project-ahsp.service';
-import { explicitAhspSourceProof } from './rab-auto-first-source-reference';
+import { exactUncodedFirstCandidateProven, exactUncodedWorkFact, normalizedExactUncodedWorkFact, explicitAhspSourceProof } from './rab-auto-first-source-reference';
 import { createHash } from 'crypto';
 
 /**
- * RAB-AUTO-05: first association ONLY from a human-approved BOQ source's
- * EXPLICIT "Kode AHSP" column, with exact full description, eligible current
- * formula, Unit Kernel/classification recommendation, and ONE selected
- * project price region. Reuse the existing official selectForBoqItem writer;
- * no source reference => NO autonomous first identity.
+ * RAB-AUTO-05/06: one existing first-association orchestrator. The approved
+ * BOQ may provide an explicit AHSP code, OR an uncoded complete work fact
+ * may have exactly one eligible, identically worded AHSP with canonical
+ * preferred classification and Unit Kernel proof. This is a narrowly bounded
+ * automatic policy, not a similarity-score or cross-category guess.
+ * Every selection is re-proven in the existing transactional writer.
  */
 @Injectable()
 export class RabAutoFirstBindService {
@@ -89,6 +90,7 @@ export class RabAutoFirstBindService {
         select: {
           id: true,
           name: true,
+          unit: true,
           sourceAhspCode: true,
           updatedAt: true,
           ahspVersionId: true,
@@ -116,13 +118,6 @@ export class RabAutoFirstBindService {
         results.push({ boqItemId: row.id, kind: 'ALREADY_DECIDED' });
         continue;
       }
-      if (!row.sourceAhspCode) {
-        results.push({
-          boqItemId: row.id,
-          kind: 'EXPLICIT_SOURCE_REFERENCE_MISSING',
-        });
-        continue;
-      }
       if (!sourceApproval || row.updatedAt > sourceApproval.usedAt) {
         results.push({
           boqItemId: row.id,
@@ -134,10 +129,11 @@ export class RabAutoFirstBindService {
         results.push({ boqItemId: row.id, kind: 'PRICE_REGION_NOT_UNIQUE' });
         continue;
       }
-      if (
-        row.sourceAhspCode.trim().length < 2 ||
-        row.sourceAhspCode.trim().length > 120
-      ) {
+      const uncoded = !row.sourceAhspCode;
+      const searchTerm = uncoded
+        ? normalizedExactUncodedWorkFact(row.name)
+        : row.sourceAhspCode!.trim();
+      if (searchTerm.length < 2 || searchTerm.length > (uncoded ? 1000 : 120)) {
         results.push({
           boqItemId: row.id,
           kind: 'SOURCE_REFERENCE_NOT_SEARCHABLE',
@@ -146,12 +142,16 @@ export class RabAutoFirstBindService {
       }
 
       try {
-        const catalog = await this.ahsp.searchEligibleVersions(
-          input.workspaceId,
-          input.businessPricingAsOfDate,
-          { projectId: input.projectId, boqItemId: row.id },
-          { q: row.sourceAhspCode, page: '1', limit: '50' },
-        );
+        const catalog = uncoded
+          ? await this.ahsp.searchExactUncodedEligibleVersions(
+              input.workspaceId, input.businessPricingAsOfDate,
+              input.projectId, { name: row.name, unit: row.unit },
+            )
+          : await this.ahsp.searchEligibleVersions(
+              input.workspaceId, input.businessPricingAsOfDate,
+              { projectId: input.projectId, boqItemId: row.id },
+              { q: searchTerm, page: '1', limit: '50' },
+            );
         if (catalog.hasNext) {
           results.push({
             boqItemId: row.id,
@@ -159,16 +159,34 @@ export class RabAutoFirstBindService {
           });
           continue;
         }
+        // Whole-catalog ambiguity is decided BEFORE preferences/units.
+        // A different category or method condition cannot hide a competing
+        // AHSP with the exact same work description.
+        const exactWork = uncoded
+          ? catalog.items.filter((candidate) =>
+              exactUncodedWorkFact(row, candidate.ahsp))
+          : [];
+        if (uncoded && exactWork.length !== 1) {
+          results.push({
+            boqItemId: row.id,
+            kind: exactWork.length > 1
+              ? 'UNCODED_EXACT_WORK_AMBIGUOUS'
+              : 'UNCODED_EXACT_WORK_NOT_PROVEN',
+          });
+          continue;
+        }
         const matches = catalog.items.filter((candidate) =>
-          explicitAhspSourceProof(row, candidate.ahsp),
+          uncoded
+            ? exactUncodedFirstCandidateProven(row, candidate)
+            : explicitAhspSourceProof(row, candidate.ahsp),
         );
         if (matches.length !== 1) {
           results.push({
             boqItemId: row.id,
             kind:
               matches.length > 1
-                ? 'AMBIGUOUS_REFERENCED_AHSP'
-                : 'REFERENCE_NOT_PROVEN',
+                ? (uncoded ? 'UNCODED_EXACT_WORK_AMBIGUOUS' : 'AMBIGUOUS_REFERENCED_AHSP')
+                : (uncoded ? 'UNCODED_EXACT_WORK_NOT_PROVEN' : 'REFERENCE_NOT_PROVEN'),
           });
           continue;
         }
@@ -187,7 +205,7 @@ export class RabAutoFirstBindService {
           continue;
         }
         const idempotencyKey =
-          'rab-auto-05-' +
+          (uncoded ? 'rab-auto-06-' : 'rab-auto-05-') +
           createHash('sha256')
             .update(
               [
@@ -196,7 +214,7 @@ export class RabAutoFirstBindService {
                 chosen.id,
                 input.businessPricingAsOfDate,
                 uniqueRegionId,
-                row.sourceAhspCode,
+                row.sourceAhspCode ?? 'UNCODED_EXACT_WORK',
               ].join('|'),
             )
             .digest('hex');
@@ -209,11 +227,15 @@ export class RabAutoFirstBindService {
           referenceRegionId: uniqueRegionId,
           businessPricingAsOfDate: input.businessPricingAsOfDate,
           idempotencyKey,
-          firstSourceAhspCode: row.sourceAhspCode,
+          ...(uncoded
+            ? { firstUncodedExactWork: true as const }
+            : { firstSourceAhspCode: row.sourceAhspCode! }),
         });
         results.push({
           boqItemId: row.id,
-          kind: 'FIRST_ASSOCIATION_PROVEN_AND_LINKED',
+          kind: uncoded
+            ? 'FIRST_UNCODED_EXACT_WORK_LINKED'
+            : 'FIRST_ASSOCIATION_PROVEN_AND_LINKED',
         });
       } catch {
         results.push({ boqItemId: row.id, kind: 'BIND_REVALIDATION_REQUIRED' });
@@ -230,7 +252,8 @@ export class RabAutoFirstBindService {
       results,
       summary,
       automaticBindingPerformed: results.some(
-        (r) => r.kind === 'FIRST_ASSOCIATION_PROVEN_AND_LINKED',
+        (r) => r.kind === 'FIRST_ASSOCIATION_PROVEN_AND_LINKED' ||
+          r.kind === 'FIRST_UNCODED_EXACT_WORK_LINKED',
       ),
       rabApproved: false,
       rabLocked: false,
